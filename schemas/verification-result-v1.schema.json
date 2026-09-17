@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cofy-x/axrun/schemas/verification-result-v1.schema.json",
+  "title": "VerificationResult v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resolved", "score", "verifier", "details"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "resolved": { "type": "boolean" },
+    "score": { "type": "number" },
+    "verifier": { "type": "string", "minLength": 1 },
+    "details": { "type": "object" }
+  }
+}
