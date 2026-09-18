@@ -15,16 +15,16 @@ resolution-markers = [
 
 [[package]]
 name = "axern-sdk"
-version = "0.8.1"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2b/d7/f3ec82de749592a20936fd0b6fb3dd62d0e0997d3a762a54a4d2301b7e1b/axern_sdk-0.8.1.tar.gz", hash = "sha256:2d7fb0cdbc75f6f7b3663ebc751fb0c397d6d78ad974e846f87feb1f1d211578", size = 124142, upload-time = "2026-09-17T19:08:46.4Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6f/40/c7b0aadffa53f818cd10ee0447bbd82fdcc4c79cbac57875e8de7a740408/axern_sdk-0.9.1.tar.gz", hash = "sha256:8343f97ca22bbb91192693cbe1c9e9cc6cf73a418b4a1ed1f5466c9c6050cf7b", size = 124059, upload-time = "2026-09-18T14:42:34.37Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/33/d8a3e6d6c11738db8d5470b11c3621458903ac9af706e8ef2acb5010aaa4/axern_sdk-0.8.1-py3-none-any.whl", hash = "sha256:bd71f480a7dce8885a035b58de8e75eca8eb02ea897e215203e9588fbe78d842", size = 160678, upload-time = "2026-09-17T19:08:45.359Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/f7/9d6d66891ea5d9d7133aad1c74be2a7b996425da389a4a241a22812c00aa/axern_sdk-0.9.1-py3-none-any.whl", hash = "sha256:c38c54426b46c59215af1e999fd1bce129257dd4a1860ac9fa362639856bb0a9", size = 160598, upload-time = "2026-09-18T14:42:33.115Z" },
 ]
 
 [[package]]
@@ -43,7 +43,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "axern-sdk", specifier = "==0.8.1" }]
+requires-dist = [{ name = "axern-sdk", specifier = "==0.9.1" }]
 
 [package.metadata.requires-dev]
 dev = [

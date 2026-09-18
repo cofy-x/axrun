@@ -112,7 +112,7 @@ An unresolved result is a valid `failed` verdict. Transport errors, missing outp
 
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.8.1`; it does not use an Axern source checkout or private generated modules.
+Axrun pins the released `axern-sdk==0.9.1`; it does not use an Axern source checkout or private generated modules.
 
 ```bash
 uv sync --all-groups
