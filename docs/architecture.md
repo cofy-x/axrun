@@ -113,3 +113,25 @@ Episode schemas and StagePlans contain no provider credential or Tunnel token fi
 The backend persists the Run ID, waits for the unique Allocation, persists that Allocation ID, starts the proxy and connector, and performs Allocation-originated `/healthz` and protocol-owned model preflights before writing the input-ready marker. Setup failure cancels the unreleased Run. Normal completion and all post-release exits revoke the Tunnel and stop the proxy without treating Tunnel closure itself as Run cancellation. The short-lived connector token is never persisted, so a caller restart cannot silently reconstruct live model access or create a replacement inference Run; recovery must inspect the original Run and require an explicit operator decision if it is still live.
 
 Model failures use a deliberately narrow diagnostic path rather than a telemetry subsystem. The proxy distinguishes `proxy_protocol_rejected`, `proxy_upstream_error`, and `upstream_response`; the lifecycle distinguishes `tunnel_health_failed` and `tunnel_model_preflight_failed`. A failed Axrun record may retain only method, protocol, allowed path/query, status, byte counts, latency, opaque model ID, numeric usage summary, and stable reason code. Headers, bodies, credentials, and Tunnel tokens are rejected by the durable diagnostic allowlist. Successful request summaries remain process-local.
+
+## Runtime progress boundary
+
+Claude's Allocation-local supervisor is the only component that reads native `stream-json`
+stdout. It feeds a stateful normalizer one complete JSON line at a time, appends validated
+canonical events to the declared trajectory file, atomically refreshes derived usage, and writes a
+small heartbeat at `/run/axrun/progress.json`. The native stream is an undeclared temporary file.
+Batch and online normalization share the same state machine, so final sealed trajectory semantics
+do not depend on observation.
+
+After model preflight, a caller-side `StageProgressObserver` polls that file through the public
+Axern SDK and combines it with the in-memory `ModelProxy` snapshot. It persists only the closed,
+bounded `axrun.progress@1` schema and updates `EpisodeRecord` with its canonical path and monotonic
+revision. The schema contains identities, counters, safe event/tool labels, heartbeat age, request
+metadata, numeric usage, and a stable state reason. It cannot contain prompts, messages, tool
+arguments or results, thinking, signatures, headers, bodies, credentials, or Tunnel tokens.
+
+Progress is a non-authoritative operational view. It never enters sealed output, CandidateBundle,
+TrajectoryBundle, or verification. Run completion stops the observer before Tunnel cleanup;
+cleanup is idempotent. Invalid observed progress terminalizes the episode as an explicit
+infrastructure failure. Successful publication still requires sealed-output length and SHA-256
+verification before any immutable bundle is created.

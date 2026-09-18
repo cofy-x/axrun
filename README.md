@@ -107,6 +107,15 @@ does not inspect ModelProxy bodies, reconstruct Claude Code's hidden system prom
 prompt is visible. Raw thinking text and signatures are excluded by default; only bounded
 reasoning metadata such as occurrence or an explicitly supplied token count is durable.
 
+During live Claude inference, an Axrun-owned supervisor consumes complete native JSONL events
+incrementally and writes through the same canonical trajectory state machine used by batch
+normalization. The raw stream remains Allocation-local under `/run` and is neither declared nor
+downloaded. A separate `axrun.progress@1` snapshot exposes only counts, canonical event kind, a
+bounded tool name, byte counts, heartbeat state, and the caller-side ModelProxy's safe request
+summary. `status` and `inspect` can read this local snapshot while inference is running. Progress
+is diagnostic and non-authoritative: only sealed outputs that pass independent length and SHA-256
+verification may produce CandidateBundle and TrajectoryBundle.
+
 The verifier writes `/outputs/verification.json` containing at least:
 
 ```json
@@ -149,6 +158,11 @@ references, while `export` writes CandidateBundle, optional TrajectoryBundle, an
 VerificationResult as separate outputs. Stage Run IDs are stored immediately after creation.
 `recover` and `wait` query only those public Run IDs; they never create another Run for an in-flight
 stage. A different specification digest cannot reuse an episode ID.
+
+For a running Claude stage, `execution.json` stores only the canonical local progress path and its
+latest revision. The closed progress record excludes prompts, message content, tool arguments and
+results, model bodies and headers, credentials, and Tunnel tokens. Malformed progress is an
+infrastructure diagnostic and never a benchmark `failed` verdict.
 
 The local lock covers state transitions and the bounded cancel control call, not the lifetime of a remote Run. Consequently another process can inspect or cancel a running episode. Once `completed`, `failed`, or `cancelled` is committed, late stage results cannot replace it.
 
