@@ -11,11 +11,15 @@ Axrun is caller-side orchestration. Axern remains the sole owner of Environment,
 | Run specification, lifecycle and terminal exit | Axern | Run |
 | Concrete sandbox identity | Axern | Allocation |
 | Inference workspace | Axern runtime | allocation-local filesystem |
-| Accepted patch, trajectory and log | Axrun | content-verified CandidateBundle |
+| Accepted candidate patch | Axrun | content-verified CandidateBundle |
+| Canonical trajectory and usage | Axrun | content-verified TrajectoryBundle |
 | Benchmark grading semantics | verifier image | verifier command |
 | Accepted verdict and score | Axrun | content-addressed VerificationResult |
 
-The execution record stores only the specification digest, public Run/Allocation references, phase, artifact references and diagnosis. Allocation status is queried from Axern and is never copied into a second local state machine.
+The execution record stores only the specification digest, public Run/Allocation references,
+phase, CandidateBundle and TrajectoryBundle manifest references/digests, result reference, and
+diagnosis. It never embeds trajectory events. Allocation status is queried from Axern and is never
+copied into a second local state machine.
 
 ## State machine
 
@@ -32,9 +36,38 @@ The file lock protects short local transitions. It is not held while waiting for
 
 ## Output and isolation boundary
 
-Inference declares an adapter-specific bounded output set. Code-task adapters include a candidate patch; live Claude additionally declares trajectory, harness log, and usage outputs. Axrun accepts files only through Axern's sealed-output API and independently rechecks the downloaded byte length and SHA-256. It copies the accepted bytes into a temporary CandidateBundle directory, fsyncs the manifest, and atomically renames the directory.
+Inference declares an adapter-specific bounded output set. Code-task adapters include a candidate
+patch; live Claude additionally declares canonical trajectory, harness log, and usage outputs.
+Claude's native stream-json is temporary Allocation state and is normalized before sealing. Axrun
+accepts declared files only through Axern's sealed-output API and independently rechecks downloaded
+length and SHA-256.
+
+Candidate and trajectory publication are distinct. CandidateBundle contains only files needed to
+grade the candidate. TrajectoryBundle contains strict `axrun.trajectory@1` JSONL and usage, copies
+them into a temporary directory, validates every event and relationship, fsyncs files and manifest,
+and atomically publishes by canonical digest. Static inference produces no fake empty trajectory.
 
 Verification gets a fresh Run/Allocation rooted in the same immutable task image contract and receives only the CandidateBundle payload plus the Axrun-owned verifier entrypoint. It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its default network policy is deny-all. The verifier output must name the exact CandidateBundle digest before Axrun publishes the result.
+
+## Trajectory boundary
+
+`axrun.trajectory@1` is harness- and provider-neutral. Every JSONL line has a closed top-level
+shape, continuous sequence, deterministic event ID, closed kind and actor, optional UTC timestamp,
+opaque model ID, explicit turn/earlier-parent relationship, and kind-specific validated data. V1
+supports session start, context, user/assistant messages, tool calls/results, reasoning metadata,
+usage, final result, and error. Unknown versions, fields, kinds, forward parents, duplicate IDs,
+broken tool relationships, and size-limit violations fail closed.
+
+Claude Code 2.1.205 has the first concrete adapter. It preserves visible text and tool ordering,
+maps the Axrun task prompt to reproducible context, and records exposed runtime identity, model,
+tools, permission mode, and whether skills/MCP are enabled. Claude-specific UUIDs and provider
+payload fields do not enter the common contract. Hidden system prompts are not inferred from model
+traffic. Raw thinking and signatures are discarded; a thinking block becomes only
+`reasoning_metadata`. Future harnesses require their own explicit native-to-canonical adapter.
+
+ModelProxy summaries are a separate failure-diagnostic contract. ModelProxy never contributes
+request/response bodies, system prompts, tool payloads, or reasoning to a successful agent
+trajectory.
 
 ## Dataset boundary
 

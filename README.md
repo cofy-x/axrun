@@ -5,7 +5,8 @@ Axrun is a thin, recoverable episode runner built on the released [Axern](https:
 ```text
 ResolvedEpisode
   -> inference Run / Allocation
-  -> sealed, digest-verified CandidateBundle
+  -> sealed canonical trajectory + patch
+  -> immutable TrajectoryBundle + CandidateBundle
   -> fresh verification Run / Allocation
   -> sealed VerificationResult
 ```
@@ -60,7 +61,7 @@ packaged grader; it has deny-all networking and no inference mount, process, Tun
 
 ## Supported harness paths
 
-The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits `candidate.patch`, redacted `trajectory.jsonl`, `harness.log`, and `usage.json` as bounded declared outputs. It uses the same synthetic seed and fresh no-network verifier as the static patch qualification path. Resolve a live synthetic episode with:
+The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits `candidate.patch`, canonical `trajectory.jsonl`, `harness.log`, and `usage.json` as bounded declared outputs. Claude's native stream-json remains an Allocation-local temporary file. A Claude-specific adapter maps it into the strict provider-neutral `axrun.trajectory@1` contract before sealing. It uses the same synthetic seed and fresh no-network verifier as the static patch qualification path. Resolve a live synthetic episode with:
 
 ```bash
 uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
@@ -87,6 +88,19 @@ MODEL_API_KEY=... uv run axrun \
 Model IDs are opaque strings. The primary model and four Claude model-selection aliases are recorded explicitly so internal model selection cannot silently change providers or tiers. When an alias is omitted, the resolver materializes the primary model into that field in canonical `spec.json`; StagePlan construction requires and consumes those resolved values without applying another hidden default. Effort and auto-compact settings are optional, validated runtime configuration.
 
 The credential is read only from the selected caller environment variable when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret `ANTHROPIC_AUTH_TOKEN` sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential as `x-api-key`.
+
+Canonical trajectories and candidate code have separate ownership. `CandidateBundle v1` contains
+only verifier-required files; Claude currently contributes only `candidate.patch`.
+`TrajectoryBundle v1` contains canonical `trajectory.jsonl` plus its derived `usage.json`, with an
+independent content-addressed manifest. Static patch episodes have no TrajectoryBundle. The fresh
+verifier never receives trajectory, usage, harness logs, ModelProxy summaries, or the inference
+workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
+
+The task prompt is recorded as canonical context with `axrun_task_prompt` provenance, content, and
+SHA-256. A system message is recorded only when the harness explicitly exposes its content. Axrun
+does not inspect ModelProxy bodies, reconstruct Claude Code's hidden system prompt, or claim that
+prompt is visible. Raw thinking text and signatures are excluded by default; only bounded
+reasoning metadata such as occurrence or an explicitly supplied token count is durable.
 
 The verifier writes `/outputs/verification.json` containing at least:
 
@@ -123,7 +137,13 @@ Provider credentials belong to the caller process and are not accepted by `Resol
 
 ## Persistence, recovery, and cancellation
 
-Each episode has an immutable normalized `spec.json` and a small `execution.json`. Candidate and result manifests are atomically published and digest checked. Stage Run IDs are stored immediately after creation. `recover` and `wait` query only those public Run IDs; they never create another Run for an in-flight stage. A different specification digest cannot reuse an episode ID.
+Each episode has an immutable normalized `spec.json` and a small `execution.json`. Candidate,
+trajectory, and result manifests are atomically published and digest checked. The execution record
+stores only trajectory manifest path and digest, never the trajectory body. `inspect` exposes those
+references, while `export` writes CandidateBundle, optional TrajectoryBundle, and
+VerificationResult as separate outputs. Stage Run IDs are stored immediately after creation.
+`recover` and `wait` query only those public Run IDs; they never create another Run for an in-flight
+stage. A different specification digest cannot reuse an episode ID.
 
 The local lock covers state transitions and the bounded cancel control call, not the lifetime of a remote Run. Consequently another process can inspect or cancel a running episode. Once `completed`, `failed`, or `cancelled` is committed, late stage results cannot replace it.
 
@@ -140,7 +160,14 @@ uv run pytest
 uv build
 ```
 
-The test suite covers the canonical v1 domain contract, one-pass synthetic resolution, the task-image workspace contract, dual-platform Claude rootfs source contract, real gold/known-bad patch application in fresh simulated image workspaces, atomic publication, integrity checks, recovery without duplicate Runs, fresh verification identity, bounded output capture, and deterministic cancellation races. Live Axern image-mount truth paths, a model endpoint, and benchmark verifier E2E remain explicit deployment acceptance tests rather than claims made from source tests.
+The test suite covers the canonical episode and trajectory v1 contracts, Claude native-event
+mapping, raw-thinking exclusion, trajectory size bounds, independent CandidateBundle and
+TrajectoryBundle atomic publication, one-pass dataset resolution, task-image workspace contracts,
+dual-platform Claude rootfs source contracts, real gold/known-bad patch application in fresh
+simulated image workspaces, recovery without duplicate Runs, fresh verification identity, bounded
+output capture, and deterministic cancellation races. Live Axern image-mount truth paths, a model
+endpoint, and benchmark verifier E2E remain explicit deployment acceptance tests rather than
+claims made from source tests.
 
 ## License
 
