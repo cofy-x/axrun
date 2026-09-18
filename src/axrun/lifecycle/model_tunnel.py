@@ -104,7 +104,7 @@ class ModelTunnelLifecycle:
         bound_addr = str(session.bound_addr or f"127.0.0.1:{session.remote_port}")
         deadline = time.monotonic() + self._ready_timeout_seconds
         health_command = [
-            "python3",
+            "/usr/bin/python3",
             "-c",
             (
                 "import sys,urllib.request; "
@@ -135,7 +135,7 @@ class ModelTunnelLifecycle:
         body_path = "/run/axrun/model-preflight-body"
         allocation.write_file(body_path, preflight.body)
         command = [
-            "python3",
+            "/usr/bin/python3",
             "-c",
             (
                 "import json,pathlib,sys,urllib.request; "
