@@ -30,6 +30,7 @@ _PATCH = "/outputs/candidate.patch"
 _TRAJECTORY = "/outputs/trajectory.jsonl"
 _LOG = "/outputs/harness.log"
 _USAGE = "/outputs/usage.json"
+_PROGRESS = "/run/axrun/progress.json"
 _DIGEST_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 _CONFIG_KEYS = frozenset(
     {
@@ -112,10 +113,21 @@ class ClaudeCodeHarness:
             raise ContractError("Claude Code working_directory must be an absolute path")
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
+        runtime_supervisor = package_root / "fixtures" / "claude" / "runtime_supervisor.py"
+        progress_schema = package_root / "progress" / "schema.py"
+        errors = package_root / "errors.py"
         trajectory_schema = package_root / "trajectories" / "schema.py"
         trajectory_policy = package_root / "trajectories" / "policy.py"
         trajectory_adapter = package_root / "trajectories" / "adapters" / "claude_code.py"
-        for source in (runtime_init, trajectory_schema, trajectory_policy, trajectory_adapter):
+        for source in (
+            runtime_init,
+            runtime_supervisor,
+            progress_schema,
+            errors,
+            trajectory_schema,
+            trajectory_policy,
+            trajectory_adapter,
+        ):
             if not source.is_file():
                 raise ContractError(f"packaged Claude trajectory runtime is missing: {source.name}")
         command = " ".join(
@@ -128,6 +140,22 @@ class ClaudeCodeHarness:
                 "--dangerously-skip-permissions",
             )
         )
+        supervisor = " ".join(
+            (
+                "PYTHONPATH=/opt/axrun",
+                "/usr/bin/python3",
+                "/opt/axrun/axrun/fixtures/claude/runtime_supervisor.py",
+                "--prompt /inputs/prompt.txt",
+                "--native /run/axrun/claude-raw.jsonl",
+                f"--trajectory {_TRAJECTORY}",
+                f"--usage {_USAGE}",
+                f"--progress {_PROGRESS}",
+                f"--harness-log {_LOG}",
+                "--redact-value axrun-local-tunnel",
+                "--",
+                command,
+            )
+        )
         script = "\n".join(
             (
                 "set -eu",
@@ -135,22 +163,12 @@ class ClaudeCodeHarness:
                 f'test "$(git rev-parse HEAD)" = {shlex.quote(episode.base_commit)}',
                 'test -z "$(git status --porcelain --untracked-files=all)"',
                 "set +e",
-                f"{command} < /inputs/prompt.txt > /run/axrun/claude-raw.jsonl 2> {_LOG}",
+                supervisor,
                 "agent_rc=$?",
                 "set -e",
                 canonical_patch_export(episode.base_commit, _PATCH),
                 'test "$patch_rc" -eq 0 || exit 125',
-                "set +e",
-                "PYTHONPATH=/opt/axrun /usr/bin/python3 \\",
-                "  /opt/axrun/axrun/trajectories/adapters/claude_code.py \\",
-                "  --input /run/axrun/claude-raw.jsonl \\",
-                "  --prompt /inputs/prompt.txt \\",
-                f"  --trajectory {_TRAJECTORY} --usage {_USAGE} \\",
-                "  --redact-value axrun-local-tunnel \\",
-                '  --agent-exit-code "$agent_rc"',
-                "normalizer_rc=$?",
-                "set -e",
-                'exit "$normalizer_rc"',
+                'exit "$agent_rc"',
             )
         )
         env = {
@@ -182,8 +200,17 @@ class ClaudeCodeHarness:
             inputs=(
                 InputFile(episode.prompt_file, "/inputs/prompt.txt"),
                 InputFile(str(runtime_init), "/opt/axrun/axrun/__init__.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/fixtures/__init__.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/fixtures/claude/__init__.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/progress/__init__.py"),
                 InputFile(str(runtime_init), "/opt/axrun/axrun/trajectories/__init__.py"),
                 InputFile(str(runtime_init), "/opt/axrun/axrun/trajectories/adapters/__init__.py"),
+                InputFile(
+                    str(runtime_supervisor),
+                    "/opt/axrun/axrun/fixtures/claude/runtime_supervisor.py",
+                ),
+                InputFile(str(progress_schema), "/opt/axrun/axrun/progress/schema.py"),
+                InputFile(str(errors), "/opt/axrun/axrun/errors.py"),
                 InputFile(str(trajectory_schema), "/opt/axrun/axrun/trajectories/schema.py"),
                 InputFile(str(trajectory_policy), "/opt/axrun/axrun/trajectories/policy.py"),
                 InputFile(

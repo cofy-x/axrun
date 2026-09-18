@@ -47,8 +47,10 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
     assert "PYTHONPATH=/opt/axrun /usr/bin/python3" in plan.argv[2]
-    assert '--agent-exit-code "$agent_rc"' in plan.argv[2]
-    assert 'exit "$normalizer_rc"' in plan.argv[2]
+    assert "/opt/axrun/axrun/fixtures/claude/runtime_supervisor.py" in plan.argv[2]
+    assert "--progress /run/axrun/progress.json" in plan.argv[2]
+    assert "--native /run/axrun/claude-raw.jsonl" in plan.argv[2]
+    assert 'exit "$agent_rc"' in plan.argv[2]
     assert plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
     assert "ANTHROPIC_API_KEY" not in plan.env
     assert plan.env["ANTHROPIC_AUTH_TOKEN"] == "axrun-local-tunnel"
@@ -69,6 +71,9 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
         "/outputs/harness.log",
         "/outputs/usage.json",
     ]
+    assert "/run/axrun/progress.json" not in [item.path for item in plan.outputs]
+    assert "/run/axrun/claude-raw.jsonl" not in [item.path for item in plan.outputs]
+    assert any(item.target == "/opt/axrun/axrun/errors.py" for item in plan.inputs)
     artifacts = []
     for index, output in enumerate(plan.outputs):
         path = tmp_path / str(index)
