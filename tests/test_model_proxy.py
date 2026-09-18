@@ -97,6 +97,11 @@ def test_model_proxy_health_is_local_and_credentials_are_not_observable() -> Non
     assert proxy.summaries[0].model == "test"
     assert proxy.summaries[0].usage == {"input_tokens": 3, "output_tokens": 2}
     assert proxy.summaries[0].reason_code == "upstream_response"
+    snapshot = proxy.snapshot()
+    assert snapshot.request_count == 1 and snapshot.requests_in_flight == 0
+    assert snapshot.last_summary == proxy.summaries[0]
+    assert credential not in repr(snapshot)
+    assert "sandbox-value" not in repr(snapshot)
 
 
 def test_anthropic_proxy_forwards_only_closed_beta_query_paths() -> None:

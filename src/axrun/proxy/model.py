@@ -6,11 +6,17 @@ import http.client
 import threading
 import time
 from contextlib import suppress
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from axrun.errors import ContractError, InfrastructureError
-from axrun.proxy.base import ModelPreflight, ModelProtocol, ModelRequestSummary
+from axrun.proxy.base import (
+    ModelPreflight,
+    ModelProtocol,
+    ModelProxySnapshot,
+    ModelRequestSummary,
+)
 
 _RESPONSE_BLOCKED_HEADERS = {
     "connection",
@@ -64,6 +70,8 @@ class ModelProxy:
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._summaries: list[ModelRequestSummary] = []
+        self._requests_in_flight = 0
+        self._last_activity_at = ""
         self._summary_lock = threading.Lock()
         self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
 
@@ -92,6 +100,15 @@ class ModelProxy:
         with self._summary_lock:
             return self._summaries[-1] if self._summaries else None
 
+    def snapshot(self) -> ModelProxySnapshot:
+        with self._summary_lock:
+            return ModelProxySnapshot(
+                request_count=len(self._summaries),
+                requests_in_flight=self._requests_in_flight,
+                last_activity_at=self._last_activity_at,
+                last_summary=self._summaries[-1] if self._summaries else None,
+            )
+
     def preflight(self, model: str) -> ModelPreflight:
         return self._protocol.preflight(model)
 
@@ -119,9 +136,11 @@ class ModelProxy:
                 if not proxy._request_slots.acquire(blocking=False):
                     self.send_error(503)
                     return
+                proxy._request_started()
                 try:
                     proxy._proxy(self)
                 finally:
+                    proxy._request_finished()
                     proxy._request_slots.release()
 
             def log_message(self, format: str, *args: object) -> None:
@@ -264,3 +283,18 @@ class ModelProxy:
     def _record_summary(self, summary: ModelRequestSummary) -> None:
         with self._summary_lock:
             self._summaries.append(summary)
+            self._last_activity_at = _now()
+
+    def _request_started(self) -> None:
+        with self._summary_lock:
+            self._requests_in_flight += 1
+            self._last_activity_at = _now()
+
+    def _request_finished(self) -> None:
+        with self._summary_lock:
+            self._requests_in_flight -= 1
+            self._last_activity_at = _now()
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()

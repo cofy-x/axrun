@@ -327,6 +327,9 @@ class EpisodeRunner:
             if isinstance(exc, DiagnosedInfrastructureError):
                 record.diagnostic_code = exc.diagnostic_code
                 record.message = _safe_failure_message(exc.details, fallback=str(exc))
+                if exc.diagnostic_code == "progress_observer_failed":
+                    record.phase = EpisodePhase.FAILED
+                    record.completed_at = _now()
             elif isinstance(exc, ContractError) or not self._has_recoverable_identity(record):
                 record.phase = EpisodePhase.FAILED
                 record.diagnostic_code = "AXRUN_STAGE_FAILED"

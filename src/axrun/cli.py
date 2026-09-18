@@ -25,7 +25,9 @@ from axrun.axern_backend import AxernBackend
 from axrun.datasets import SweBenchVerifiedResolver, SyntheticCodeTaskResolver
 from axrun.errors import AxrunError, ContractError
 from axrun.harnesses import ClaudeCodeHarness
+from axrun.lifecycle.base import CompositePreStartLifecycle, PreStartLifecycle
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
+from axrun.lifecycle.stage_progress import StageProgressObserver
 from axrun.models import (
     EpisodePhase,
     HarnessSpec,
@@ -33,6 +35,7 @@ from axrun.models import (
     canonical_json,
     resolved_episode_from_dict,
 )
+from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
 from axrun.runner import EpisodeRunner
@@ -110,8 +113,11 @@ def _runner(args: argparse.Namespace, client: Any) -> EpisodeRunner:
 
 
 def _model_lifecycle(
-    args: argparse.Namespace, client: Any, episode: ResolvedEpisode
-) -> ModelTunnelLifecycle | None:
+    args: argparse.Namespace,
+    client: Any,
+    episode: ResolvedEpisode,
+    store: EpisodeStore,
+) -> PreStartLifecycle | None:
     if episode.harness.identity != "claude-code":
         return None
     upstream_url = args.model_upstream_url or os.environ.get("AXRUN_MODEL_UPSTREAM_URL", "")
@@ -130,7 +136,13 @@ def _model_lifecycle(
     model = episode.harness.config.get("model")
     if not isinstance(model, str) or not model:
         raise ContractError("Claude Code requires a non-empty model")
-    return ModelTunnelLifecycle(client=client, proxy=proxy, model=model)
+    tunnel = ModelTunnelLifecycle(client=client, proxy=proxy, model=model)
+    observer = StageProgressObserver(
+        episode_id=episode.episode_id,
+        store=store,
+        proxy=proxy,
+    )
+    return CompositePreStartLifecycle(tunnel, observer)
 
 
 def _print(value: Any) -> None:
@@ -150,11 +162,24 @@ def _status(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         "trajectory_digest": record.trajectory_digest,
         "diagnostic_code": record.diagnostic_code,
         "message": record.message,
+        "progress_revision": record.progress_revision,
     }
+    progress = _load_progress(store, record.episode_id, record.progress_path)
+    if progress is not None:
+        value["progress"] = progress.as_dict()
     if record.phase == EpisodePhase.COMPLETED:
         result = store.load_result(record.verification_result, record.verification_result_digest)
         value.update(verdict=result.verdict, score=result.score)
     return value
+
+
+def _load_progress(store: EpisodeStore, episode_id: str, recorded_path: str):
+    if not recorded_path:
+        return None
+    progress_store = ProgressStore(store.root)
+    if Path(recorded_path) != progress_store.path_for(episode_id):
+        raise ContractError("episode progress path is not canonical")
+    return progress_store.load(episode_id)
 
 
 def _export(store: EpisodeStore, episode_id: str, destination: Path) -> Path:
@@ -360,7 +385,11 @@ def main(argv: list[str] | None = None) -> int:
             record = store.load(args.episode_id)
             if record is None:
                 raise ContractError(f"episode record does not exist: {args.episode_id}")
-            _print(record.as_dict())
+            value = record.as_dict()
+            progress = _load_progress(store, record.episode_id, record.progress_path)
+            if progress is not None:
+                value["progress"] = progress.as_dict()
+            _print(value)
             return 0
         if args.command == "export":
             _print({"path": str(_export(store, args.episode_id, args.destination))})
@@ -376,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
                     inference=inference,
                     verifier=verifier,
                     trajectory=_trajectory_adapter(episode),
-                    inference_lifecycle=_model_lifecycle(args, client, episode),
+                    inference_lifecycle=_model_lifecycle(args, client, episode, store),
                 )
             elif args.command == "cancel":
                 _print(runner.cancel(args.episode_id).as_dict())

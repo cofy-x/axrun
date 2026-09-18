@@ -68,6 +68,8 @@ class EpisodeStore:
             candidate_digest=str(raw.get("candidate_digest", "")),
             trajectory_manifest=str(raw.get("trajectory_manifest", "")),
             trajectory_digest=str(raw.get("trajectory_digest", "")),
+            progress_path=str(raw.get("progress_path", "")),
+            progress_revision=int(raw.get("progress_revision", 0)),
             verification=_optional_execution(raw.get("verification")),
             verification_result=str(raw.get("verification_result", "")),
             verification_result_digest=str(raw.get("verification_result_digest", "")),

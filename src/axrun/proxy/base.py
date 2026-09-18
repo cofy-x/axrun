@@ -57,6 +57,8 @@ class ModelProxyInstance(Protocol):
 
     def stop(self) -> None: ...
 
+    def snapshot(self) -> ModelProxySnapshot: ...
+
     @property
     def last_summary(self) -> ModelRequestSummary | None: ...
 
@@ -87,3 +89,11 @@ class ModelRequestSummary:
             "usage": dict(self.usage),
             "reason_code": self.reason_code,
         }
+
+
+@dataclass(frozen=True)
+class ModelProxySnapshot:
+    request_count: int
+    requests_in_flight: int
+    last_activity_at: str
+    last_summary: ModelRequestSummary | None

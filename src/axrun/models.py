@@ -284,6 +284,8 @@ class EpisodeRecord:
     candidate_digest: str = ""
     trajectory_manifest: str = ""
     trajectory_digest: str = ""
+    progress_path: str = ""
+    progress_revision: int = 0
     verification: ExecutionRef | None = None
     verification_result: str = ""
     verification_result_digest: str = ""

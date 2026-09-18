@@ -495,6 +495,33 @@ def test_prestart_model_failure_persists_stable_diagnosis_without_secret(
     assert "credential" not in record.message and "token" not in record.message
 
 
+def test_progress_observer_failure_is_terminal_infrastructure_not_verdict(
+    tmp_path: Path,
+) -> None:
+    class BrokenObserver:
+        def start(self, execution, allocation) -> None:
+            return None
+
+        def close(self) -> None:
+            raise DiagnosedInfrastructureError(
+                "progress_observer_failed", {"reason_code": "invalid_progress_contract"}
+            )
+
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(DiagnosedInfrastructureError):
+        runner.run(
+            episode(tmp_path, "observer-failed"),
+            inference=Inference(),
+            verifier=Verifier(),
+            inference_lifecycle=BrokenObserver(),
+        )
+    record = runner.inspect("observer-failed")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.diagnostic_code == "progress_observer_failed"
+    assert record.verification is None and record.verification_result == ""
+
+
 def test_terminal_success_with_missing_declared_output_fails_contract(tmp_path: Path) -> None:
     class MissingOutputBackend(FakeBackend):
         def _result(self, plan, artifact_dir, ref):
