@@ -1,50 +1,70 @@
 # Axrun
 
-Axrun is a thin, recoverable runner for agent evaluation on [Axern](https://github.com/cofy-x/axern). It keeps agent and benchmark concerns outside the execution platform while using Axern for isolated, allocation-scoped execution.
-
-## Execution model
+Axrun is a thin, recoverable episode runner built on the released [Axern](https://github.com/cofy-x/axern) Python SDK. Axern owns isolated execution; Axrun owns the caller-side sequence:
 
 ```text
 ResolvedEpisode
-  -> inference Environment / Run / Allocation
-  -> sealed and digest-verified CandidateBundle
-  -> fresh verification Environment / Run / Allocation
+  -> inference Run / Allocation
+  -> sealed, digest-verified CandidateBundle
+  -> fresh verification Run / Allocation
   -> sealed VerificationResult
-  -> caller-owned durable publication
 ```
 
-Axrun intentionally does not provide a scheduler, model registry, dataset service, general workflow engine, or second sandbox lifecycle. It persists only public Axern resource identities and caller-owned artifact metadata.
+Axrun does not provide a scheduler, sandbox runtime, agent registry, provider marketplace, dataset service, or workflow server. Its durable records contain public Environment, Run and Allocation IDs only—never Node IDs, runtime IDs, leases, credentials or private protocol state.
 
-## Initial adapters
+## First supported path
 
-- `ClaudeCodeMountAdapter` runs a pinned Claude Code OCI rootfs at `/__claude_code` and exports a canonical Git patch plus structured trajectory and result files.
-- `MiniSweAgentAdapter` is a small official mini-swe-agent conformance path proving that the runner is not coupled to Claude Code.
-- `SweBenchVerifierAdapter` applies a CandidateBundle in a fresh verifier Allocation and invokes a pinned, image-owned SWE-bench verifier entrypoint.
+The initial path uses the official `mini-swe-agent` 2.4.6 CLI contract and one image-owned verifier command. A `ResolvedEpisode` selects two pre-created Axern Environments, pins the harness and verifier commands, and may set explicit CPU, memory and ephemeral-storage requests and limits for each stage. Axrun uploads the prompt, starts the inference Run, consumes bounded retained stdout/stderr, downloads declared outputs, verifies their size and SHA-256, and publishes an immutable CandidateBundle. It then uploads only the candidate patch into a new verification Run with deny-all networking.
 
-The Claude adapter follows the proven isolation boundary from `swe-cc-mount`, but Axrun does not copy its Agent Service, Kafka, Akernel, generation, proxy-ledger, or reward lifecycle.
+The verifier writes `/outputs/verification.json` containing at least:
 
-## Current SDK requirement
+```json
+{"candidate_digest":"<sha256>","resolved":true,"score":1.0}
+```
 
-Axrun depends only on the released `axern-sdk`. Claude rootfs mounts and secret projections require the SDK's public `create_run()` surface to accept `image_mounts`, `secret_env`, and `secret_files`. Axrun checks this capability explicitly and fails before creating a Run when the installed SDK does not expose it; it never imports internal generated protobuf modules as a workaround.
+An unresolved result is a valid `failed` verdict. Transport errors, missing outputs, non-zero verifier exit, and digest mismatches are infrastructure failures and never become a score.
 
-## Development
+## Install and CLI
+
+Axrun pins the released `axern-sdk==0.8.1`; it does not use an Axern source checkout or private generated modules.
 
 ```bash
-uv sync --all-groups
+uv sync --all-groups --extra harness
+uv run axrun validate episode.json
+uv run axrun --context-file ~/.config/axern/config.json run episode.json
+uv run axrun status EPISODE_ID
+uv run axrun --context-file ~/.config/axern/config.json wait EPISODE_ID
+uv run axrun --context-file ~/.config/axern/config.json cancel EPISODE_ID
+uv run axrun inspect EPISODE_ID
+uv run axrun export EPISODE_ID ./exported-result
+```
+
+Without `--context-file`, remote commands use the explicit Axern SDK environment configuration. `status`, `inspect`, `validate`, and `export` are local and do not open an SDK channel.
+
+## Credentials and network access
+
+Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. A future live model path must expose a caller-owned loopback model endpoint through an allocation-scoped Axern Tunnel with bounded TTL. That path is not implemented or claimed by this release. The current deterministic architecture smoke therefore does not validate live model inference or Tunnel revocation.
+
+## Persistence, recovery, and cancellation
+
+Each episode has an immutable normalized `spec.json` and a small `execution.json`. Candidate and result manifests are atomically published and digest checked. Stage Run IDs are stored immediately after creation. `recover` and `wait` query only those public Run IDs; they never create another Run for an in-flight stage. A different specification digest cannot reuse an episode ID.
+
+The local lock covers state transitions and the bounded cancel control call, not the lifetime of a remote Run. Consequently another process can inspect or cancel a running episode. Once `completed`, `failed`, or `cancelled` is committed, late stage results cannot replace it.
+
+Axrun cancellation requests cancellation of the active Axern Run; it does not treat a dropped stdout connection as workload cancellation. Axern retains ownership of Run termination and Allocation cleanup.
+
+## Development and verified boundary
+
+```bash
+uv lock --check
+uv run ruff format --check .
 uv run ruff check .
 uv run pyright
 uv run pytest
+uv build
 ```
 
-The initial test suite uses an in-memory execution backend and does not require an Axern deployment or model credential. Live acceptance will be added against a released SDK and a dedicated Axern environment after the public mount and Secret parameters are available.
-
-## Security boundary
-
-- Inference receives only the task input and a short-lived model credential.
-- Verification receives only the immutable CandidateBundle and trusted verifier configuration.
-- Verification has no Claude mount, model credential, inference tunnel, or inference filesystem.
-- Candidate and result files are accepted only after Axern sealed-output digest verification.
-- Infrastructure failure is distinct from a valid unresolved benchmark result.
+The test suite covers domain contracts, atomic publication, integrity checks, recovery without duplicate Runs, fresh verification identity, bounded output capture, and deterministic cancellation races. The optional harness dependency validates that the official mini-swe-agent CLI can be installed and started. A live Axern + model endpoint + benchmark verifier E2E remains an explicit deployment acceptance test, not a claim made from fake tests.
 
 ## License
 

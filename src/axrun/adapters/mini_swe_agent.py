@@ -13,7 +13,6 @@ from axrun.models import (
     OutputFormat,
     OutputSpec,
     ResolvedEpisode,
-    SecretEnvSpec,
     StagePlan,
     StageResult,
 )
@@ -25,10 +24,8 @@ _LOG = "/outputs/mini-swe-agent.log"
 
 @dataclass(frozen=True, slots=True)
 class MiniSweAgentAdapter:
-    model_secret_id: str
-    model_secret_key: str = "api_key"
-    model_secret_env: str = "ANTHROPIC_API_KEY"
     command: tuple[str, ...] = ("mini",)
+    version: str = "2.4.6"
     timeout_seconds: int = 7200
     name: str = "mini-swe-agent"
 
@@ -57,9 +54,7 @@ class MiniSweAgentAdapter:
                 OutputSpec(_TRAJECTORY, OutputFormat.FILE, "application/json"),
                 OutputSpec(_LOG, OutputFormat.FILE, "text/plain"),
             ),
-            secret_env=(
-                SecretEnvSpec(self.model_secret_env, self.model_secret_id, self.model_secret_key),
-            ),
+            resources=episode.inference_resources,
             timeout_seconds=self.timeout_seconds,
             labels={"axrun.stage": "inference", "axrun.agent": self.name},
         )
@@ -72,4 +67,6 @@ class MiniSweAgentAdapter:
             result,
             destination=destination,
             required_paths=(_PATCH, _TRAJECTORY, _LOG),
+            harness=self.name,
+            harness_version=self.version,
         )

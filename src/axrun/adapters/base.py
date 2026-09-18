@@ -15,7 +15,8 @@ from axrun.models import (
 
 
 class InferenceAdapter(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def plan(self, episode: ResolvedEpisode) -> StagePlan: ...
 
@@ -25,7 +26,8 @@ class InferenceAdapter(Protocol):
 
 
 class VerifierAdapter(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def plan(self, episode: ResolvedEpisode, candidate: CandidateBundle) -> StagePlan: ...
 

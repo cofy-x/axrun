@@ -1,9 +1,10 @@
-"""SWE-bench verification in a fresh Axern Allocation."""
+"""Image-owned verifier command executed in a fresh Axern Allocation."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from axrun.errors import ContractError, InfrastructureError
@@ -23,19 +24,16 @@ _LOG = "/outputs/verifier.log"
 
 
 @dataclass(frozen=True, slots=True)
-class SweBenchVerifierAdapter:
-    entrypoint: str = "/opt/axrun/run-swebench-verifier"
+class CommandVerifierAdapter:
+    command: tuple[str, ...] = ("/opt/axrun/run-verifier",)
+    version: str = "1"
     timeout_seconds: int = 7200
     network_policy: str = "deny_all"
-    name: str = "swebench"
+    name: str = "command-verifier"
 
     def plan(self, episode: ResolvedEpisode, candidate: CandidateBundle) -> StagePlan:
         patch = next(
-            (
-                artifact
-                for artifact in candidate.artifacts
-                if artifact.name.endswith("candidate.patch")
-            ),
+            (item for item in candidate.files if item.declared_path.endswith("candidate.patch")),
             None,
         )
         if patch is None:
@@ -43,10 +41,10 @@ class SweBenchVerifierAdapter:
         return StagePlan(
             environment_id=episode.verification_environment_id,
             argv=(
-                self.entrypoint,
+                *self.command,
                 "--base-commit",
                 episode.base_commit,
-                "--patch",
+                "--candidate",
                 "/inputs/candidate.patch",
                 "--result",
                 _RESULT,
@@ -54,33 +52,59 @@ class SweBenchVerifierAdapter:
                 _LOG,
             ),
             cwd="/workspace",
-            inputs=(InputFile(patch.path, "/inputs/candidate.patch", patch.sha256),),
+            inputs=(
+                InputFile(
+                    str(Path(candidate.root) / patch.bundle_path),
+                    "/inputs/candidate.patch",
+                    patch.sha256,
+                ),
+            ),
+            env={"AXRUN_CANDIDATE_DIGEST": candidate.digest},
             outputs=(
                 OutputSpec(_RESULT, OutputFormat.FILE, "application/json"),
                 OutputSpec(_LOG, OutputFormat.FILE, "text/plain"),
             ),
+            resources=episode.verification_resources,
             network_policy=self.network_policy,
             timeout_seconds=self.timeout_seconds,
             labels={"axrun.stage": "verification", "axrun.verifier": self.name},
         )
 
     def parse_result(self, result: StageResult) -> VerificationResult:
-        artifact = result.artifact_for_path(_RESULT)
         if result.exit_code != 0:
             raise InfrastructureError(
-                f"SWE-bench verifier failed with exit code {result.exit_code}: "
-                f"{result.diagnostic_code}"
+                f"verifier failed with exit code {result.exit_code}: {result.diagnostic_code}"
             )
-        raw = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
+        artifact = result.artifact_for_path(_RESULT)
+        try:
+            raw = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ContractError("verification result is not valid JSON") from exc
         if not isinstance(raw.get("resolved"), bool):
             raise ContractError("verification result must contain boolean resolved")
         score = raw.get("score", 1.0 if raw["resolved"] else 0.0)
         if not isinstance(score, int | float):
             raise ContractError("verification result score must be numeric")
+        completed_at = datetime.now(UTC).isoformat()
+        contract_fields = {
+            "resolved",
+            "score",
+            "candidate_digest",
+            "diagnostic_code",
+            "started_at",
+            "completed_at",
+        }
         return VerificationResult(
             schema_version=1,
-            resolved=raw["resolved"],
-            score=float(score),
+            candidate_digest=str(raw.get("candidate_digest", "")),
             verifier=self.name,
-            details={key: value for key, value in raw.items() if key not in {"resolved", "score"}},
+            verifier_version=self.version,
+            verdict="passed" if raw["resolved"] else "failed",
+            diagnostic_code=str(raw.get("diagnostic_code", "")),
+            verifier_exit_code=result.exit_code,
+            output_digest=artifact.sha256,
+            started_at=str(raw.get("started_at", completed_at)),
+            completed_at=str(raw.get("completed_at", completed_at)),
+            score=float(score),
+            details={key: value for key, value in raw.items() if key not in contract_fields},
         )

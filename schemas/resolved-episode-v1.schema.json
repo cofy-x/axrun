@@ -4,16 +4,7 @@
   "title": "ResolvedEpisode v1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "episode_id",
-    "task_id",
-    "task_digest",
-    "base_commit",
-    "prompt_file",
-    "inference_environment_id",
-    "verification_environment_id"
-  ],
+  "required": ["schema_version", "episode_id", "task_id", "task_digest", "base_commit", "prompt_file", "inference_environment_id", "verification_environment_id"],
   "properties": {
     "schema_version": { "const": 1 },
     "episode_id": { "type": "string", "minLength": 1 },
@@ -23,10 +14,22 @@
     "prompt_file": { "type": "string", "minLength": 1 },
     "inference_environment_id": { "type": "string", "minLength": 1 },
     "verification_environment_id": { "type": "string", "minLength": 1 },
-    "metadata": {
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "default": {}
+    "harness": { "$ref": "#/$defs/harness" },
+    "verifier": { "$ref": "#/$defs/verifier" },
+    "inference_resources": { "$ref": "#/$defs/resources" },
+    "verification_resources": { "$ref": "#/$defs/resources" },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} }
+  },
+  "$defs": {
+    "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "harness": { "type": "object", "additionalProperties": false, "properties": { "command": { "$ref": "#/$defs/command" }, "version": { "type": "string", "minLength": 1 }, "timeout_seconds": { "type": "integer", "minimum": 1 } } },
+    "verifier": { "type": "object", "additionalProperties": false, "properties": { "command": { "$ref": "#/$defs/command" }, "identity": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "timeout_seconds": { "type": "integer", "minimum": 1 } } },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "request_cpu": { "type": "string" }, "request_memory": { "type": "string" }, "request_ephemeral_storage": { "type": "string" },
+        "limit_cpu": { "type": "string" }, "limit_memory": { "type": "string" }, "limit_ephemeral_storage": { "type": "string" }
+      }
     }
   }
 }
