@@ -44,6 +44,10 @@ class ClaudeCodeHarness:
         config = episode.harness.config
         image = _required_string(config, "mount_image")
         model = _required_string(config, "model")
+        default_opus_model = _optional_string(config, "default_opus_model", model)
+        default_sonnet_model = _optional_string(config, "default_sonnet_model", model)
+        default_haiku_model = _optional_string(config, "default_haiku_model", model)
+        subagent_model = _optional_string(config, "subagent_model", model)
         if not _DIGEST_IMAGE.fullmatch(image):
             raise ContractError("Claude Code mount_image must use an OCI sha256 digest")
         max_turns = config.get("max_turns", 40)
@@ -85,6 +89,35 @@ class ClaudeCodeHarness:
                 'exit "$agent_rc"',
             )
         )
+        env = {
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{_REMOTE_PORT}",
+            "ANTHROPIC_AUTH_TOKEN": "axrun-local-tunnel",
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": default_opus_model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": default_sonnet_model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": default_haiku_model,
+            "CLAUDE_CODE_SUBAGENT_MODEL": subagent_model,
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
+            "CLAUDE_CODE_MAX_RETRIES": "0",
+            "HOME": "/run/axrun/claude-home",
+            "IS_SANDBOX": "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        effort_level = config.get("effort_level")
+        if effort_level is not None:
+            if effort_level not in {"low", "medium", "high", "max"}:
+                raise ContractError("Claude Code effort_level must be low, medium, high, or max")
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = effort_level
+        auto_compact_window = config.get("auto_compact_window")
+        if auto_compact_window is not None:
+            if (
+                not isinstance(auto_compact_window, int)
+                or isinstance(auto_compact_window, bool)
+                or auto_compact_window <= 0
+            ):
+                raise ContractError("Claude Code auto_compact_window must be a positive integer")
+            env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(auto_compact_window)
         return StagePlan(
             environment_id=episode.inference_environment_id,
             argv=("/bin/sh", "-lc", script),
@@ -99,17 +132,7 @@ class ClaudeCodeHarness:
                 OutputSpec(_LOG, media_type="text/plain", max_bytes=16 << 20),
                 OutputSpec(_USAGE, media_type="application/json", max_bytes=1 << 20),
             ),
-            env={
-                "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{_REMOTE_PORT}",
-                "ANTHROPIC_API_KEY": "axrun-local-tunnel",
-                "ANTHROPIC_MODEL": model,
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
-                "CLAUDE_CODE_MAX_RETRIES": "0",
-                "HOME": "/run/axrun/claude-home",
-                "IS_SANDBOX": "1",
-                "GIT_CONFIG_NOSYSTEM": "1",
-            },
+            env=env,
             image_mounts=(ImageMountSpec(image=image, target=_MOUNT),),
             resources=episode.inference_resources,
             network_policy="deny_all",
@@ -136,6 +159,13 @@ class ClaudeCodeHarness:
 
 def _required_string(config: dict[str, Any], key: str) -> str:
     value = config.get(key)
+    if not isinstance(value, str) or not value:
+        raise ContractError(f"Claude Code {key} must be a non-empty string")
+    return value
+
+
+def _optional_string(config: dict[str, Any], key: str, default: str) -> str:
+    value = config.get(key, default)
     if not isinstance(value, str) or not value:
         raise ContractError(f"Claude Code {key} must be a non-empty string")
     return value

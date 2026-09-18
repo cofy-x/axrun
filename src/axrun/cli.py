@@ -101,11 +101,12 @@ def _model_lifecycle(
     if episode.harness.identity != "claude-code":
         return None
     upstream_url = args.model_upstream_url or os.environ.get("AXRUN_MODEL_UPSTREAM_URL", "")
-    credential = os.environ.get("AXRUN_MODEL_CREDENTIAL", "")
+    credential_env = args.model_credential_env
+    credential = os.environ.get(credential_env, "")
     if not upstream_url or not credential:
         raise ContractError(
             "Claude Code requires --model-upstream-url (or AXRUN_MODEL_UPSTREAM_URL) "
-            "and AXRUN_MODEL_CREDENTIAL"
+            f"and a credential in {credential_env}"
         )
     proxy = ModelProxy(
         upstream_url=upstream_url,
@@ -180,6 +181,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--context", default="")
     parser.add_argument("--namespace", default="default")
     parser.add_argument("--model-upstream-url", default="")
+    parser.add_argument("--model-credential-env", default="AXRUN_MODEL_CREDENTIAL")
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="validate a ResolvedEpisode JSON file")
     validate.add_argument("episode", type=Path)
@@ -194,6 +196,14 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("--candidate-file", default="")
     resolve.add_argument("--claude-mount-image", default="")
     resolve.add_argument("--model", default="")
+    resolve.add_argument("--claude-default-opus-model", default="")
+    resolve.add_argument("--claude-default-sonnet-model", default="")
+    resolve.add_argument("--claude-default-haiku-model", default="")
+    resolve.add_argument("--claude-subagent-model", default="")
+    resolve.add_argument(
+        "--claude-effort-level", choices=("low", "medium", "high", "max"), default=""
+    )
+    resolve.add_argument("--claude-auto-compact-window", type=int, default=0)
     resolve.add_argument("--max-turns", type=int, default=40)
     resolve.add_argument("--inference-environment", required=True)
     resolve.add_argument("--verification-environment", required=True)
@@ -234,14 +244,26 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 if not args.claude_mount_image or not args.model:
                     raise ContractError("claude-code requires --claude-mount-image and --model")
+                config: dict[str, Any] = {
+                    "mount_image": args.claude_mount_image,
+                    "model": args.model,
+                    "max_turns": args.max_turns,
+                }
+                for argument, key in (
+                    (args.claude_default_opus_model, "default_opus_model"),
+                    (args.claude_default_sonnet_model, "default_sonnet_model"),
+                    (args.claude_default_haiku_model, "default_haiku_model"),
+                    (args.claude_subagent_model, "subagent_model"),
+                    (args.claude_effort_level, "effort_level"),
+                ):
+                    if argument:
+                        config[key] = argument
+                if args.claude_auto_compact_window:
+                    config["auto_compact_window"] = args.claude_auto_compact_window
                 harness = HarnessSpec(
                     identity="claude-code",
                     version="2.1.205",
-                    config={
-                        "mount_image": args.claude_mount_image,
-                        "model": args.model,
-                        "max_turns": args.max_turns,
-                    },
+                    config=config,
                 )
             episode = SyntheticCodeTaskResolver().resolve(
                 cast(dict[str, Any], raw_value),

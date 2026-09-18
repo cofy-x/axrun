@@ -43,16 +43,25 @@ uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
   --harness claude-code \
   --claude-mount-image REGISTRY/claude-code@sha256:DIGEST \
   --model MODEL_ID \
+  --claude-default-opus-model OPUS_MODEL_ID \
+  --claude-default-sonnet-model SONNET_MODEL_ID \
+  --claude-default-haiku-model HAIKU_MODEL_ID \
+  --claude-subagent-model SUBAGENT_MODEL_ID \
+  --claude-effort-level max \
+  --claude-auto-compact-window TOKEN_COUNT \
   --inference-environment ENVIRONMENT_ID \
   --verification-environment ENVIRONMENT_ID \
   --output /tmp/synthetic-claude.json
 
-AXRUN_MODEL_CREDENTIAL=... uv run axrun \
+MODEL_API_KEY=... uv run axrun \
   --model-upstream-url https://api.anthropic.com \
+  --model-credential-env MODEL_API_KEY \
   --context-file ~/.config/axern/config.json run /tmp/synthetic-claude.json
 ```
 
-The credential is read only from the caller environment when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret local sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential.
+Model IDs are opaque strings. The primary model and four Claude model-selection aliases are recorded explicitly so internal model selection cannot silently change providers or tiers; omitted aliases default to the primary model. Effort and auto-compact settings are optional, validated runtime configuration.
+
+The credential is read only from the selected caller environment variable when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret `ANTHROPIC_AUTH_TOKEN` sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential as `x-api-key`.
 
 The verifier writes `/outputs/verification.json` containing at least:
 
@@ -85,7 +94,7 @@ Without `--context-file`, remote commands use the explicit Axern SDK environment
 
 ## Credentials and network access
 
-Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. One short-lived `ModelProxy` is created per inference stage. Its Anthropic protocol adapter exposes only the required message paths from a bounded loopback listener, strips sandbox authentication headers, and injects the real credential only on the caller-side upstream hop. `ModelTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz` from inside that Allocation, and only then releases the staged process. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
+Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. One short-lived `ModelProxy` is created per inference stage. Its Anthropic protocol adapter exposes only `/v1/messages` and `/v1/messages/count_tokens`, with either no query or exactly `beta=true`, from a bounded loopback listener. Unknown paths, queries, and fragments fail closed. The adapter strips sandbox authentication headers and injects the real credential only on the caller-side upstream hop. Safe in-memory request summaries contain metadata and a stable reason code but no headers or bodies, distinguishing local protocol rejection from an upstream response. `ModelTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz` from inside that Allocation, and only then releases the staged process. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
 
 ## Persistence, recovery, and cancellation
 

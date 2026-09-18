@@ -27,7 +27,11 @@ def _episode() -> ResolvedEpisode:
             version="2.1.205",
             config={
                 "mount_image": f"registry.invalid/axrun/claude@sha256:{'a' * 64}",
-                "model": "test-model",
+                "model": "test-model[1m]",
+                "default_haiku_model": "test-model",
+                "subagent_model": "test-model",
+                "effort_level": "max",
+                "auto_compact_window": 786432,
                 "max_turns": 7,
             },
         ),
@@ -40,6 +44,16 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
     assert plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
+    assert "ANTHROPIC_API_KEY" not in plan.env
+    assert plan.env["ANTHROPIC_AUTH_TOKEN"] == "axrun-local-tunnel"
+    assert plan.env["ANTHROPIC_MODEL"] == "test-model[1m]"
+    assert plan.env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "test-model[1m]"
+    assert plan.env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "test-model[1m]"
+    assert plan.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "test-model"
+    assert plan.env["CLAUDE_CODE_SUBAGENT_MODEL"] == "test-model"
+    assert plan.env["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+    assert plan.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "786432"
+    assert "DEEPSEEK_API_KEY" not in repr(plan)
     assert plan.network_policy == "deny_all"
     assert "credential-must-stay-in-memory" not in repr(plan)
     assert "/__claude_code/usr/local/bin/claude" in plan.argv[-1]
