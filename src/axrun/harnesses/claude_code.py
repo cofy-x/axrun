@@ -140,7 +140,7 @@ class ClaudeCodeHarness:
                 "set -e",
                 canonical_patch_export(episode.base_commit, _PATCH),
                 'test "$patch_rc" -eq 0 || exit 125',
-                "PYTHONPATH=/opt/axrun python3 \\",
+                "PYTHONPATH=/opt/axrun /usr/bin/python3 \\",
                 "  /opt/axrun/axrun/trajectories/adapters/claude_code.py \\",
                 "  --input /run/axrun/claude-raw.jsonl \\",
                 "  --prompt /inputs/prompt.txt \\",

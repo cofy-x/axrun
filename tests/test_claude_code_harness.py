@@ -46,6 +46,7 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     plan = ClaudeCodeHarness().plan(episode)
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
+    assert "PYTHONPATH=/opt/axrun /usr/bin/python3" in plan.argv[2]
     assert plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
     assert "ANTHROPIC_API_KEY" not in plan.env
     assert plan.env["ANTHROPIC_AUTH_TOKEN"] == "axrun-local-tunnel"

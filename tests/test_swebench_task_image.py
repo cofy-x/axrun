@@ -35,6 +35,7 @@ def test_arm64_task_image_is_fixed_fail_closed_and_registry_neutral() -> None:
     }
     assert all(value in dockerfile for value in required)
     assert "ubuntu:22.04@sha256:" in dockerfile
+    assert "        python3 \\" in dockerfile
     assert "MINICONDA_SHA256=" in dockerfile
     assert "--require-hashes" in dockerfile
     assert "--only-binary=:all:" in dockerfile

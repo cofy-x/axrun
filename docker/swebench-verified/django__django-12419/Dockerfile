@@ -27,6 +27,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${APT_MIRROR}|g" /etc/apt/sou
         libmemcached-dev \
         libtiff-dev \
         locales \
+        python3 \
         tzdata \
         wget \
         zlib1g-dev \

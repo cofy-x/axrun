@@ -12,6 +12,7 @@ observable task ABI:
 - clean `/testbed` Git workspace;
 - base commit: `7fa1a93c6c8109010a6ff3f604fda83b604e0e97`;
 - Python 3.6 / Django 3.1 test environment;
+- system Python 3 for Axrun-owned harness control code, isolated from the test environment;
 - official row-owned test patch, evaluation script, and F2P/P2P grading remain outside the image.
 
 The official cached environment file is not reused because it contains `linux-64` package names
