@@ -26,4 +26,4 @@ Create the Axern Environment from the canonical digest returned by the import, n
 
 The Dockerfile supports `linux/amd64` and `linux/arm64`; publish a multi-platform index or import the matching single-platform build. Both inference and verification Environments must be created from the imported or registry-resolved digest of this same image. Each stage still gets a fresh Run and Allocation. Claude Code is not installed in this task image; its independently built rootfs is attached read-only at `/__claude_code` only for the Claude inference Run.
 
-The deterministic gold and known-bad paths run on either supported task-image platform. Claude Code `2.1.205` remains a separate `linux/amd64`-only mount, so the Claude path requires the amd64 task-image variant and an amd64 Axern node.
+The deterministic gold and known-bad paths run on either supported task-image platform. Claude Code `2.1.205` remains a separate mount with matching `linux/amd64` and `linux/arm64` rootfs variants. Production and benchmark acceptance use amd64; arm64 is available for local source-cluster development. The task image, Claude rootfs, and Axern node must use the same platform.
