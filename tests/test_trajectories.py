@@ -20,6 +20,7 @@ from axrun.models import (
 )
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 from axrun.trajectories.adapters.claude_code import (
+    ClaudeTrajectoryNormalizer,
     claude_stage_exit_code,
     normalize_claude_stream,
 )
@@ -304,8 +305,36 @@ def test_claude_2_1_205_compatibility_fixture_matches_golden_bytes(
     assert outputs[0] == outputs[1]
     assert outputs[0][0] == (FIXTURES / f"{case_name}.canonical.jsonl").read_bytes()
     assert outputs[0][1] == (FIXTURES / f"{case_name}.usage.json").read_bytes()
+    incremental = ClaudeTrajectoryNormalizer(
+        (FIXTURES / f"{case_name}.prompt.txt").read_text(),
+        secrets=(SECRET_MARKER,),
+    )
+    incremental_bytes = bytearray()
+    with (FIXTURES / f"{case_name}.native.jsonl").open("rb") as stream:
+        for native_line in stream:
+            for event in incremental.feed_native_line(native_line):
+                incremental_bytes.extend(
+                    json.dumps(
+                        event.as_dict(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode()
+                    + b"\n"
+                )
+    incremental.finalize()
+    assert bytes(incremental_bytes) == outputs[0][0]
+    assert incremental.usage_bytes == outputs[0][1]
     for marker in (THINKING_MARKER, SIGNATURE_MARKER, SECRET_MARKER):
         assert marker.encode() not in outputs[0][0]
+
+
+def test_incremental_normalizer_does_not_accept_partial_json_line() -> None:
+    normalizer = ClaudeTrajectoryNormalizer("task")
+    with pytest.raises(TrajectoryContractError, match="invalid JSON"):
+        normalizer.feed_native_line(b'{"type":"system"')
+    assert normalizer.native_event_count == 0
+    assert normalizer.canonical_event_count == 0
 
 
 def test_claude_stage_exit_classification_is_fail_closed(tmp_path: Path) -> None:

@@ -128,6 +128,168 @@ class _Emitter:
         self.emit("usage", "runtime", normalized, parent_event_id=parent, model=model)
 
 
+class ClaudeTrajectoryNormalizer:
+    """Stateful Claude 2.1.205 native-to-canonical normalizer."""
+
+    def __init__(
+        self,
+        prompt: str,
+        *,
+        secrets: tuple[str, ...] = (),
+        limits: TrajectoryLimits = _DEFAULT_LIMITS,
+    ) -> None:
+        self._prompt = prompt
+        self._limits = limits
+        self._emitter = _Emitter(limits=limits, secrets=secrets)
+        self._saw_session = False
+        self._native_bytes = 0
+        self._native_events = 0
+        self._canonical_bytes = 0
+        self._finalized = False
+
+    @property
+    def native_event_count(self) -> int:
+        return self._native_events
+
+    @property
+    def canonical_event_count(self) -> int:
+        return len(self._emitter.events)
+
+    @property
+    def canonical_bytes(self) -> int:
+        return self._canonical_bytes
+
+    @property
+    def usage_bytes(self) -> bytes:
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "observations": self._emitter.usage_count,
+                    **self._emitter.aggregate,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode()
+
+    def feed_native_line(self, raw_line: bytes) -> tuple[TrajectoryEvent, ...]:
+        if self._finalized:
+            raise TrajectoryContractError("Claude trajectory is already finalized")
+        self._native_bytes += len(raw_line)
+        if self._native_bytes > self._limits.native_input_bytes:
+            raise ValueError("Claude native trajectory exceeds input bound")
+        if len(raw_line) > self._limits.native_line_bytes:
+            raise ValueError("Claude native trajectory line exceeds bound")
+        try:
+            value: object = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            raise TrajectoryContractError(
+                f"Claude native trajectory line {self._native_events + 1} is invalid JSON"
+            ) from exc
+        if not isinstance(value, dict):
+            raise TrajectoryContractError("Claude native trajectory event must be an object")
+        return self.feed_native_event(cast(dict[str, object], value))
+
+    def feed_native_event(self, native: dict[str, object]) -> tuple[TrajectoryEvent, ...]:
+        if self._finalized:
+            raise TrajectoryContractError("Claude trajectory is already finalized")
+        start = len(self._emitter.events)
+        native_type = native.get("type")
+        if native_type == "system" and native.get("subtype") == "init":
+            if self._saw_session or self._emitter.events:
+                raise TrajectoryContractError("Claude init must be the first native event")
+            session_data = {
+                "harness": "claude-code",
+                "harness_version": "2.1.205",
+                "runtime_version": _string(native.get("claude_code_version"), "unknown"),
+                "permission_mode": _optional_string(native.get("permissionMode")),
+                "tools": _strings(native.get("tools")),
+                "mcp_enabled": bool(_items(native.get("mcp_servers"))),
+                "skills_enabled": bool(_items(native.get("skills"))),
+            }
+            self._emitter.emit(
+                "session_start",
+                "runtime",
+                session_data,
+                model=_optional_string(native.get("model")),
+            )
+            self._emitter.emit(
+                "context",
+                "user",
+                {
+                    "provenance": "axrun_task_prompt",
+                    "content": self._prompt,
+                    "content_sha256": hashlib.sha256(self._prompt.encode()).hexdigest(),
+                },
+            )
+            self._saw_session = True
+        elif native_type == "assistant":
+            _map_assistant(native, self._emitter)
+        elif native_type == "user":
+            _map_user(native, self._emitter)
+        elif native_type == "result":
+            _map_result(native, self._emitter)
+        elif native_type in {"error", "api_error"}:
+            self._emitter.emit(
+                "error",
+                "runtime",
+                {
+                    "code": _string(native.get("subtype"), "claude_error"),
+                    "message": _string(native.get("error"), "Claude Code reported an error"),
+                },
+                timestamp=_optional_string(native.get("timestamp")),
+            )
+        elif native_type == "thinking_tokens":
+            tokens = native.get("thinking_tokens")
+            self._emitter.emit(
+                "reasoning_metadata",
+                "assistant",
+                {
+                    "occurred": True,
+                    "thinking_tokens": tokens
+                    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0
+                    else 0,
+                },
+                model=_optional_string(native.get("model")),
+            )
+        elif native_type == "stream_event":
+            _map_stream_event(native, self._emitter)
+        elif native_type == "system":
+            text = native.get("message", native.get("text"))
+            if isinstance(text, str) and text:
+                self._emitter.emit(
+                    "context",
+                    "runtime",
+                    {
+                        "provenance": "harness_exposed",
+                        "content": text,
+                        "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    },
+                    timestamp=_optional_string(native.get("timestamp")),
+                )
+        else:
+            raise TrajectoryContractError(f"unsupported Claude native event type: {native_type}")
+        self._native_events += 1
+        emitted = tuple(self._emitter.events[start:])
+        added_bytes = sum(len(canonical_event_bytes(event)) + 1 for event in emitted)
+        self._canonical_bytes += added_bytes
+        if self._canonical_bytes > self._limits.canonical_total_bytes:
+            raise ValueError("canonical trajectory exceeds total size bound")
+        return emitted
+
+    def finalize(self) -> tuple[TrajectoryEvent, ...]:
+        if self._finalized:
+            return tuple(self._emitter.events)
+        if not self._saw_session:
+            raise TrajectoryContractError("Claude native trajectory is missing system/init")
+        events = tuple(self._emitter.events)
+        validate_trajectory(events)
+        self._finalized = True
+        return events
+
+
 def normalize_claude_stream(
     native_path: Path,
     prompt_path: Path,
@@ -137,123 +299,18 @@ def normalize_claude_stream(
     secrets: tuple[str, ...] = (),
     limits: TrajectoryLimits = _DEFAULT_LIMITS,
 ) -> tuple[TrajectoryEvent, ...]:
-    if native_path.stat().st_size > limits.native_input_bytes:
-        raise ValueError("Claude native trajectory exceeds input bound")
-    prompt = prompt_path.read_text(encoding="utf-8")
-    emitter = _Emitter(limits=limits, secrets=secrets)
-    saw_session = False
+    normalizer = ClaudeTrajectoryNormalizer(
+        prompt_path.read_text(encoding="utf-8"), secrets=secrets, limits=limits
+    )
     with native_path.open("rb") as source:
-        for line_number, raw_line in enumerate(source, 1):
-            if len(raw_line) > limits.native_line_bytes:
-                raise ValueError("Claude native trajectory line exceeds bound")
-            try:
-                value: object = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                raise TrajectoryContractError(
-                    f"Claude native trajectory line {line_number} is invalid JSON"
-                ) from exc
-            if not isinstance(value, dict):
-                raise TrajectoryContractError("Claude native trajectory event must be an object")
-            native = cast(dict[str, object], value)
-            native_type = native.get("type")
-            if native_type == "system" and native.get("subtype") == "init":
-                if saw_session or emitter.events:
-                    raise TrajectoryContractError("Claude init must be the first native event")
-                session_data = {
-                    "harness": "claude-code",
-                    "harness_version": "2.1.205",
-                    "runtime_version": _string(native.get("claude_code_version"), "unknown"),
-                    "permission_mode": _optional_string(native.get("permissionMode")),
-                    "tools": _strings(native.get("tools")),
-                    "mcp_enabled": bool(_items(native.get("mcp_servers"))),
-                    "skills_enabled": bool(_items(native.get("skills"))),
-                }
-                emitter.emit(
-                    "session_start",
-                    "runtime",
-                    session_data,
-                    model=_optional_string(native.get("model")),
-                )
-                emitter.emit(
-                    "context",
-                    "user",
-                    {
-                        "provenance": "axrun_task_prompt",
-                        "content": prompt,
-                        "content_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                    },
-                )
-                saw_session = True
-            elif native_type == "assistant":
-                _map_assistant(native, emitter)
-            elif native_type == "user":
-                _map_user(native, emitter)
-            elif native_type == "result":
-                _map_result(native, emitter)
-            elif native_type in {"error", "api_error"}:
-                emitter.emit(
-                    "error",
-                    "runtime",
-                    {
-                        "code": _string(native.get("subtype"), "claude_error"),
-                        "message": _string(native.get("error"), "Claude Code reported an error"),
-                    },
-                    timestamp=_optional_string(native.get("timestamp")),
-                )
-            elif native_type == "thinking_tokens":
-                tokens = native.get("thinking_tokens")
-                emitter.emit(
-                    "reasoning_metadata",
-                    "assistant",
-                    {
-                        "occurred": True,
-                        "thinking_tokens": tokens
-                        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0
-                        else 0,
-                    },
-                    model=_optional_string(native.get("model")),
-                )
-            elif native_type == "stream_event":
-                _map_stream_event(native, emitter)
-            elif native_type == "system":
-                text = native.get("message", native.get("text"))
-                if isinstance(text, str) and text:
-                    emitter.emit(
-                        "context",
-                        "runtime",
-                        {
-                            "provenance": "harness_exposed",
-                            "content": text,
-                            "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                        },
-                        timestamp=_optional_string(native.get("timestamp")),
-                    )
-            else:
-                raise TrajectoryContractError(
-                    f"unsupported Claude native event type: {native_type}"
-                )
-    if not saw_session:
-        raise TrajectoryContractError("Claude native trajectory is missing system/init")
-    events = tuple(emitter.events)
-    validate_trajectory(events)
+        for raw_line in source:
+            normalizer.feed_native_line(raw_line)
+    events = normalizer.finalize()
     trajectory_path.parent.mkdir(parents=True, exist_ok=True)
-    total = 0
     with trajectory_path.open("wb") as target:
         for event in events:
-            payload = canonical_event_bytes(event) + b"\n"
-            total += len(payload)
-            if total > limits.canonical_total_bytes:
-                raise ValueError("canonical trajectory exceeds total size bound")
-            target.write(payload)
-    usage_path.write_text(
-        json.dumps(
-            {"schema_version": 1, "observations": emitter.usage_count, **emitter.aggregate},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+            target.write(canonical_event_bytes(event) + b"\n")
+    usage_path.write_bytes(normalizer.usage_bytes)
     return events
 
 
