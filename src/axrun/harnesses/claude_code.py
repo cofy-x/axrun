@@ -6,7 +6,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from axrun.adapters._candidate import persist_candidate
 from axrun.adapters._git import canonical_patch_export
@@ -53,7 +53,6 @@ class ClaudeCodeHarness:
             or not 1 <= max_turns <= 200
         ):
             raise ContractError("Claude Code max_turns must be an integer from 1 to 200")
-        seed_files = _seed_inputs(config.get("seed_files"))
         normalizer = Path(__file__).parents[1] / "fixtures" / "claude" / "normalize_output.py"
         if not normalizer.is_file():
             raise ContractError("packaged Claude output normalizer is missing")
@@ -71,15 +70,8 @@ class ClaudeCodeHarness:
             (
                 "set -eu",
                 "mkdir -p /outputs /run/axrun/claude-home",
-                "git init -q",
-                "git add -A -- .",
-                "GIT_AUTHOR_NAME='Axrun Synthetic' GIT_AUTHOR_EMAIL='synthetic@axrun.invalid' \\",
-                "GIT_COMMITTER_NAME='Axrun Synthetic' \\",
-                "GIT_COMMITTER_EMAIL='synthetic@axrun.invalid' \\",
-                "GIT_AUTHOR_DATE='2000-01-01T00:00:00+00:00' \\",
-                "GIT_COMMITTER_DATE='2000-01-01T00:00:00+00:00' \\",
-                "  git commit -q -m 'synthetic base'",
                 f'test "$(git rev-parse HEAD)" = {shlex.quote(episode.base_commit)}',
+                'test -z "$(git status --porcelain --untracked-files=all)"',
                 "set +e",
                 f"{command} < /inputs/prompt.txt > /run/axrun/claude-raw.jsonl 2> {_LOG}",
                 "agent_rc=$?",
@@ -100,7 +92,6 @@ class ClaudeCodeHarness:
             inputs=(
                 InputFile(episode.prompt_file, "/inputs/prompt.txt"),
                 InputFile(str(normalizer), "/opt/axrun/normalize-claude-output.py"),
-                *seed_files,
             ),
             outputs=(
                 OutputSpec(_PATCH, media_type="text/x-diff", max_bytes=16 << 20),
@@ -148,18 +139,3 @@ def _required_string(config: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ContractError(f"Claude Code {key} must be a non-empty string")
     return value
-
-
-def _seed_inputs(value: object) -> tuple[InputFile, ...]:
-    if not isinstance(value, list) or not value:
-        raise ContractError("Claude Code seed_files must be a non-empty array")
-    result: list[InputFile] = []
-    for raw in cast(list[object], value):
-        if not isinstance(raw, dict):
-            raise ContractError("Claude Code seed file has an invalid shape")
-        item = cast(dict[str, Any], raw)
-        source, target, digest = (item.get(key) for key in ("source", "target", "sha256"))
-        if not all(isinstance(part, str) and part for part in (source, target, digest)):
-            raise ContractError("Claude Code seed file is incomplete")
-        result.append(InputFile(cast(str, source), cast(str, target), cast(str, digest)))
-    return tuple(result)

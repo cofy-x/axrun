@@ -7,6 +7,7 @@ Axrun is caller-side orchestration. Axern remains the sole owner of Environment,
 | Fact | Owner | Durable location |
 | --- | --- | --- |
 | Canonical seed, harness and verifier selection | Axrun resolver/caller | immutable `spec.json` |
+| Task repository, tools and base commit | task OCI image | Axern Environment rootfs |
 | Run specification, lifecycle and terminal exit | Axern | Run |
 | Concrete sandbox identity | Axern | Allocation |
 | Inference workspace | Axern runtime | allocation-local filesystem |
@@ -33,13 +34,15 @@ The file lock protects short local transitions. It is not held while waiting for
 
 Inference declares an adapter-specific bounded output set. Code-task adapters include a candidate patch; live Claude additionally declares trajectory, harness log, and usage outputs. Axrun accepts files only through Axern's sealed-output API and independently rechecks the downloaded byte length and SHA-256. It copies the accepted bytes into a temporary CandidateBundle directory, fsyncs the manifest, and atomically renames the directory.
 
-Verification gets a new Environment/Run/Allocation and receives only the CandidateBundle payload plus the fixed verifier seed already represented by the canonical episode. It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its default network policy is deny-all. The verifier output must name the exact CandidateBundle digest before Axrun publishes the result.
+Verification gets a fresh Run/Allocation rooted in the same immutable task image contract and receives only the CandidateBundle payload plus the Axrun-owned verifier entrypoint. It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its default network policy is deny-all. The verifier output must name the exact CandidateBundle digest before Axrun publishes the result.
 
 ## Dataset boundary
 
-Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields. All harnesses, including mini-swe-agent and Claude Code, use the same adapter-neutral episode contract.
+Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields. Static qualification and Claude Code use the same adapter-neutral episode contract.
 
-The repository-owned synthetic resolver demonstrates this boundary without introducing a dataset service. Its deterministic inference adapter seals a chosen fixture patch. Its verifier receives the immutable seed files and CandidateBundle in a fresh Allocation, reconstructs the fixed Git base commit, applies the patch, runs an offline test contract, and returns either a valid passed or valid failed result.
+The repository-owned synthetic resolver demonstrates this boundary without introducing a dataset service. The raw row declares and content-checks the task-image build inputs; the resulting image owns the Git repository, required tools and fixed base commit. Its deterministic inference adapter seals a chosen fixture patch. Its verifier receives only the CandidateBundle and verifier entrypoint in a fresh Allocation rooted in that task image, checks the clean base commit, applies the patch, runs an offline test contract, and returns either a valid passed or valid failed result.
+
+The task image and harness image have separate ownership. An Environment is created from the task image. Claude inference additionally attaches the versioned Claude Code rootfs read-only at `/__claude_code`; static inference and verification do not. This keeps benchmark state in the task image and reusable harness tooling in the mount image.
 
 ## SDK boundary
 

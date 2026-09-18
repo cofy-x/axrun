@@ -40,28 +40,6 @@ def main() -> int:
     args.log.parent.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(UTC).isoformat()
     with args.log.open("w", encoding="utf-8") as log:
-        _run(["git", "init", "-q"], cwd=args.workspace, log=log, check=True)
-        _run(["git", "add", "-A", "--", "."], cwd=args.workspace, log=log, check=True)
-        commit_env = {
-            **os.environ,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_AUTHOR_NAME": "Axrun Synthetic",
-            "GIT_AUTHOR_EMAIL": "synthetic@axrun.invalid",
-            "GIT_COMMITTER_NAME": "Axrun Synthetic",
-            "GIT_COMMITTER_EMAIL": "synthetic@axrun.invalid",
-            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
-            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
-        }
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "synthetic base"],
-            cwd=args.workspace,
-            env=commit_env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=True,
-            timeout=60,
-        )
         actual_commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=args.workspace, text=True, timeout=10
         ).strip()
@@ -70,6 +48,15 @@ def main() -> int:
                 f"base commit mismatch: expected {args.base_commit}, got {actual_commit}",
                 file=log,
             )
+            return 2
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=args.workspace,
+            text=True,
+            timeout=10,
+        )
+        if status:
+            print("task image workspace is not clean", file=log)
             return 2
         patch_bytes = args.candidate.read_bytes()
         apply_result = None

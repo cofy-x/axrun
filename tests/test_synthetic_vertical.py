@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -82,15 +84,31 @@ class SyntheticVerticalBackend:
         assert plan.network_policy == "deny_all"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         workspace = artifact_dir / "fresh-workspace"
-        workspace.mkdir()
+        fixture_repository = (
+            Path(__file__).parents[1] / "fixtures" / "synthetic" / "code-task-v1" / "repository"
+        )
+        shutil.copytree(fixture_repository, workspace)
+        subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+        subprocess.run(["git", "add", "-A", "--", "."], cwd=workspace, check=True)
+        commit_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Axrun Synthetic",
+            "GIT_AUTHOR_EMAIL": "synthetic@axrun.invalid",
+            "GIT_COMMITTER_NAME": "Axrun Synthetic",
+            "GIT_COMMITTER_EMAIL": "synthetic@axrun.invalid",
+            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
+        }
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "synthetic base"],
+            cwd=workspace,
+            env=commit_env,
+            check=True,
+        )
         candidate: Path | None = None
         runner: Path | None = None
         for item in plan.inputs:
-            if item.target.startswith("/workspace/"):
-                destination = workspace / item.target.removeprefix("/workspace/")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(Path(item.source).read_bytes())
-            elif item.target == "/inputs/candidate.patch":
+            if item.target == "/inputs/candidate.patch":
                 candidate = Path(item.source)
             elif item.target == "/opt/axrun-synthetic/run_verifier.py":
                 runner = Path(item.source)
@@ -159,7 +177,11 @@ def _static_harness(candidate_file: str) -> HarnessSpec:
 
 @pytest.mark.parametrize(
     ("candidate_file", "expected_verdict", "expected_score"),
-    [("gold.patch", "passed", 1.0), ("known-bad.patch", "failed", 0.0)],
+    [
+        ("gold.patch", "passed", 1.0),
+        ("empty.patch", "failed", 0.0),
+        ("known-bad.patch", "failed", 0.0),
+    ],
 )
 def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
     tmp_path: Path,
@@ -195,6 +217,7 @@ def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
     verification_plan = backend.plans[1]
     assert verification_plan.secret_env == () and verification_plan.image_mounts == ()
     assert all("/inference/" not in item.source for item in verification_plan.inputs)
+    assert all(not item.target.startswith("/workspace/") for item in verification_plan.inputs)
 
 
 def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_digest(
@@ -232,7 +255,8 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
             harness=_static_harness("gold.patch"),
         )
     tampered = json.loads(json.dumps(row))
-    cast(dict[str, Any], cast(list[object], tampered["seed_files"])[0])["sha256"] = "0" * 64
+    task_image = cast(dict[str, Any], tampered["task_image"])
+    cast(dict[str, Any], cast(list[object], task_image["sources"])[0])["sha256"] = "0" * 64
     with pytest.raises(ContractError, match="digest mismatch"):
         resolver.resolve(
             cast(dict[str, Any], tampered),

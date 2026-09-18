@@ -36,7 +36,7 @@ class SyntheticCodeTaskResolver:
             "task_id",
             "base_commit",
             "problem_statement_file",
-            "seed_files",
+            "task_image",
         }
         unknown = set(row) - expected
         missing = expected - set(row)
@@ -54,26 +54,38 @@ class SyntheticCodeTaskResolver:
         task_id = _required_string(row, "task_id")
         base_commit = _required_string(row, "base_commit")
         prompt = _checked_file(source_dir, _required_string(row, "problem_statement_file"))
+        task_image = row["task_image"]
+        if not isinstance(task_image, dict):
+            raise ContractError("synthetic task_image has an invalid shape")
+        task_image_values = cast(dict[str, Any], task_image)
+        if set(task_image_values) != {
+            "dockerfile",
+            "platforms",
+            "reference",
+            "sources",
+        }:
+            raise ContractError("synthetic task_image has an invalid shape")
+        dockerfile = _checked_file(source_dir, _required_string(task_image_values, "dockerfile"))
+        if task_image_values["platforms"] != ["linux/amd64", "linux/arm64"]:
+            raise ContractError(
+                "synthetic task image platforms must be linux/amd64 and linux/arm64"
+            )
+        task_image_reference = _required_string(task_image_values, "reference")
         verifier = Path(__file__).parents[1] / "fixtures" / "synthetic" / "run_verifier.py"
         if not verifier.is_file():
             raise ContractError("packaged synthetic verifier is missing")
-        seed_files: object = row["seed_files"]
-        if not isinstance(seed_files, list) or not seed_files:
-            raise ContractError("synthetic seed_files must be a non-empty array")
-        resolved_files: list[dict[str, str]] = []
-        for index, raw_item in enumerate(cast(list[object], seed_files)):
+        sources: object = task_image_values["sources"]
+        if not isinstance(sources, list) or not sources:
+            raise ContractError("synthetic task image sources must be a non-empty array")
+        for index, raw_item in enumerate(cast(list[object], sources)):
             item = cast(dict[str, Any], raw_item) if isinstance(raw_item, dict) else None
-            if not isinstance(item, dict) or set(item) != {"source", "target", "sha256"}:
-                raise ContractError(f"synthetic seed_files[{index}] has an invalid shape")
-            source = _checked_file(source_dir, _required_string(item, "source"))
-            target = _required_string(item, "target")
+            if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+                raise ContractError(f"synthetic task image sources[{index}] has an invalid shape")
+            source = _checked_file(source_dir, _required_string(item, "path"))
             digest = _required_string(item, "sha256")
-            if not target.startswith("/workspace/") or ".." in Path(target).parts:
-                raise ContractError("synthetic seed target must be a safe /workspace path")
             if _sha256(source) != digest:
-                raise ContractError(f"synthetic seed digest mismatch: {item['source']}")
-            resolved_files.append({"source": str(source), "target": target, "sha256": digest})
-        resolved_harness = _resolve_harness(harness, source_dir, resolved_files)
+                raise ContractError(f"synthetic task image source digest mismatch: {item['path']}")
+        resolved_harness = _resolve_harness(harness, source_dir)
         return ResolvedEpisode(
             schema_version=1,
             episode_id=episode_id,
@@ -87,14 +99,13 @@ class SyntheticCodeTaskResolver:
             verifier=VerifierSpec(
                 identity="synthetic-code-task",
                 version="1",
-                config={
-                    "seed_files": resolved_files,
-                    "verifier_file": str(verifier),
-                },
+                config={"verifier_file": str(verifier)},
             ),
             metadata={
                 "dataset_identity": self.identity,
                 "dataset_version": self.version,
+                "task_image_dockerfile": str(dockerfile),
+                "task_image_reference": task_image_reference,
             },
         )
 
@@ -106,9 +117,7 @@ def _required_string(value: dict[str, Any], key: str) -> str:
     return result
 
 
-def _resolve_harness(
-    harness: HarnessSpec, source_dir: Path, seed_files: list[dict[str, str]]
-) -> HarnessSpec:
+def _resolve_harness(harness: HarnessSpec, source_dir: Path) -> HarnessSpec:
     config = dict(harness.config)
     if harness.identity == "static-patch":
         if set(config) != {"candidate_file"}:
@@ -121,7 +130,6 @@ def _resolve_harness(
             raise ContractError(f"unknown Claude Code config: {', '.join(sorted(unknown))}")
         _required_string(config, "mount_image")
         _required_string(config, "model")
-        config["seed_files"] = seed_files
     else:
         raise ContractError(f"unsupported synthetic harness: {harness.identity}")
     return HarnessSpec(

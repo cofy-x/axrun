@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 
 from axrun.adapters.command_verifier import CommandVerifierAdapter
 from axrun.errors import ContractError
@@ -36,8 +35,7 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
             raise ContractError("CandidateBundle does not contain candidate.patch")
         config = episode.verifier.config
         verifier_file = config.get("verifier_file")
-        seed_files_value = config.get("seed_files")
-        if not isinstance(verifier_file, str) or not isinstance(seed_files_value, list):
+        if not isinstance(verifier_file, str):
             raise ContractError("synthetic verifier config is incomplete")
         inputs = [
             InputFile(
@@ -47,16 +45,6 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
             ),
             InputFile(verifier_file, "/opt/axrun-synthetic/run_verifier.py"),
         ]
-        for raw in cast(list[object], seed_files_value):
-            if not isinstance(raw, dict):
-                raise ContractError("synthetic verifier seed file has an invalid shape")
-            item = cast(dict[str, Any], raw)
-            source = item.get("source")
-            target = item.get("target")
-            sha256 = item.get("sha256")
-            if not all(isinstance(value, str) and value for value in (source, target, sha256)):
-                raise ContractError("synthetic verifier seed file is incomplete")
-            inputs.append(InputFile(cast(str, source), cast(str, target), cast(str, sha256)))
         return StagePlan(
             environment_id=episode.verification_environment_id,
             argv=(
