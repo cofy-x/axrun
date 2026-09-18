@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from axrun.adapters._candidate import persist_candidate
+from axrun.errors import ContractError, InfrastructureError
 from axrun.models import (
     Artifact,
+    EpisodePhase,
     ExecutionRef,
     OutputSpec,
     ResolvedEpisode,
@@ -19,13 +25,15 @@ from axrun.store import EpisodeStore
 
 
 class FakeBackend:
-    def __init__(self) -> None:
-        self.executions = 0
+    def __init__(self, *, resolved: bool = True) -> None:
+        self.executions: list[ExecutionRef] = []
+        self.cancelled: list[str] = []
+        self.resolved = resolved
 
     def execute(self, plan, *, artifact_dir, on_bound):
-        self.executions += 1
-        stage = "inference" if self.executions == 1 else "verification"
-        ref = ExecutionRef(plan.environment_id, f"run-{stage}", f"alloc-{stage}")
+        index = len(self.executions) + 1
+        ref = ExecutionRef(plan.environment_id, f"run-{index}", f"alloc-{index}")
+        self.executions.append(ref)
         on_bound(ref)
         return self._result(plan, artifact_dir, ref)
 
@@ -35,7 +43,13 @@ class FakeBackend:
         for index, output in enumerate(plan.outputs):
             path = artifact_dir / f"{index}.out"
             payload = (
-                b'{"resolved":true,"score":1.0}'
+                json.dumps(
+                    {
+                        "resolved": self.resolved,
+                        "score": 1.0 if self.resolved else 0.0,
+                        "candidate_digest": plan.env.get("AXRUN_CANDIDATE_DIGEST", ""),
+                    }
+                ).encode()
                 if output.path.endswith("verification.json")
                 else b"candidate"
             )
@@ -53,6 +67,31 @@ class FakeBackend:
 
     def recover(self, execution, plan, *, artifact_dir):
         return self._result(plan, artifact_dir, execution)
+
+    def cancel(self, execution):
+        self.cancelled.append(execution.run_id)
+
+    def wait(self, execution, *, timeout=None):
+        return None
+
+
+class BlockingBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bound = threading.Event()
+        self.released = threading.Event()
+
+    def execute(self, plan, *, artifact_dir, on_bound):
+        ref = ExecutionRef(plan.environment_id, "run-blocked", "alloc-blocked")
+        self.executions.append(ref)
+        on_bound(ref)
+        self.bound.set()
+        assert self.released.wait(5)
+        return StageResult(ref, 1, "cancelled", ())
+
+    def cancel(self, execution):
+        super().cancel(execution)
+        self.released.set()
 
 
 class Inference:
@@ -72,6 +111,8 @@ class Inference:
             result,
             destination=destination,
             required_paths=("/outputs/candidate.patch",),
+            harness=self.name,
+            harness_version="1",
         )
 
 
@@ -84,55 +125,134 @@ class Verifier:
             ("verify",),
             "/workspace",
             (OutputSpec("/outputs/verification.json", media_type="application/json"),),
+            env={"AXRUN_CANDIDATE_DIGEST": candidate.digest},
         )
 
     def parse_result(self, result):
         raw = json.loads(Path(result.artifacts[0].path).read_text())
-        return VerificationResult(1, raw["resolved"], raw["score"], self.name)
-
-
-def test_runner_uses_two_allocations_and_persists_result(tmp_path) -> None:
-    prompt = tmp_path / "prompt.txt"
-    prompt.write_text("task", encoding="utf-8")
-    episode = ResolvedEpisode(1, "ep", "task", "digest", "a" * 40, str(prompt), "env-i", "env-v")
-    backend = FakeBackend()
-    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
-
-    result = runner.run(episode, inference=Inference(), verifier=Verifier())
-
-    assert result.resolved is True
-    assert backend.executions == 2
-    record = runner.store.load("ep")
-    assert record is not None
-    assert record.inference is not None and record.verification is not None
-    assert record.inference.allocation_id != record.verification.allocation_id
-    candidate = runner._load_candidate(record)
-    assert all("/candidates/ep/" in artifact.path for artifact in candidate.artifacts)
-
-
-def test_runner_recovers_terminal_inference_without_rerunning_it(tmp_path) -> None:
-    prompt = tmp_path / "prompt.txt"
-    prompt.write_text("task", encoding="utf-8")
-    episode = ResolvedEpisode(
-        1, "recover", "task", "digest", "a" * 40, str(prompt), "env-i", "env-v"
-    )
-    store = EpisodeStore(tmp_path / "state")
-    from axrun.models import EpisodePhase, EpisodeRecord
-
-    store.save(
-        EpisodeRecord(
-            schema_version=1,
-            episode=episode,
-            phase=EpisodePhase.INFERENCE_RUNNING,
-            inference=ExecutionRef("env-i", "run-inference", "alloc-inference"),
+        now = datetime.now(UTC).isoformat()
+        return VerificationResult(
+            1,
+            raw["candidate_digest"],
+            self.name,
+            "1",
+            "passed" if raw["resolved"] else "failed",
+            "",
+            result.exit_code,
+            result.artifacts[0].sha256,
+            now,
+            now,
+            float(raw["score"]),
         )
-    )
+
+
+def episode(tmp_path: Path, name: str = "ep") -> ResolvedEpisode:
+    prompt = tmp_path / f"{name}.txt"
+    prompt.write_text("task", encoding="utf-8")
+    return ResolvedEpisode(1, name, "task", "sha256:task", "a" * 40, str(prompt), "env-i", "env-v")
+
+
+def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: Path) -> None:
     backend = FakeBackend()
+    store = EpisodeStore(tmp_path / "state")
     runner = EpisodeRunner(backend=backend, store=store)
+    result = runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier())
+    record = runner.inspect("ep")
+    assert result.verdict == "passed" and record.phase == EpisodePhase.COMPLETED
+    assert record.inference is not None and record.verification is not None
+    assert record.inference.run_id != record.verification.run_id
+    assert f"/candidates/sha256/{record.candidate_digest}/" in record.candidate_manifest
+    assert f"/sha256/{record.verification_result_digest}/" in record.verification_result
+    assert runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier()) == result
+    assert len(backend.executions) == 2
 
-    result = runner.recover("recover", inference=Inference(), verifier=Verifier())
 
-    assert result.resolved is True
-    assert backend.executions == 1
-    record = store.load("recover")
-    assert record is not None and record.phase == EpisodePhase.COMPLETED
+def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:
+    value = episode(tmp_path, "recover")
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(value)
+    record.phase = EpisodePhase.INFERENCE_RUNNING
+    record.inference = ExecutionRef("env-i", "existing-run", "existing-allocation")
+    store.save(record)
+    backend = FakeBackend()
+    result = EpisodeRunner(backend=backend, store=store).recover(
+        "recover", inference=Inference(), verifier=Verifier()
+    )
+    assert result.verdict == "passed"
+    assert len(backend.executions) == 1
+    assert backend.executions[0].environment_id == "env-v"
+
+
+def test_failed_verdict_is_a_completed_business_result(tmp_path: Path) -> None:
+    runner = EpisodeRunner(
+        backend=FakeBackend(resolved=False), store=EpisodeStore(tmp_path / "state")
+    )
+    result = runner.run(episode(tmp_path, "unresolved"), inference=Inference(), verifier=Verifier())
+    assert result.verdict == "failed" and result.score == 0.0
+    assert runner.inspect("unresolved").phase == EpisodePhase.COMPLETED
+
+
+def test_verification_transport_failure_recovers_same_run(tmp_path: Path) -> None:
+    class PartitionOnceBackend(FakeBackend):
+        def execute(self, plan, *, artifact_dir, on_bound):
+            if len(self.executions) == 1:
+                ref = ExecutionRef(plan.environment_id, "run-verification", "alloc-verification")
+                self.executions.append(ref)
+                on_bound(ref)
+                raise ConnectionError("partition")
+            return super().execute(plan, artifact_dir=artifact_dir, on_bound=on_bound)
+
+    backend = PartitionOnceBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ConnectionError, match="partition"):
+        runner.run(episode(tmp_path, "partition"), inference=Inference(), verifier=Verifier())
+    before = runner.inspect("partition")
+    assert before.phase == EpisodePhase.VERIFICATION_RUNNING
+    assert before.verification is not None and before.verification.run_id == "run-verification"
+    result = runner.recover("partition", inference=Inference(), verifier=Verifier())
+    assert result.verdict == "passed"
+    assert [value.run_id for value in backend.executions] == ["run-1", "run-verification"]
+
+
+def test_cancel_is_not_blocked_by_remote_execution(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    errors: list[BaseException] = []
+
+    def execute() -> None:
+        try:
+            runner.run(episode(tmp_path, "cancel"), inference=Inference(), verifier=Verifier())
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert backend.bound.wait(5)
+    cancelled = runner.cancel("cancel")
+    thread.join(5)
+    assert not thread.is_alive()
+    assert cancelled.phase == EpisodePhase.CANCELLED
+    assert backend.cancelled == ["run-blocked"]
+    assert errors and runner.inspect("cancel").phase == EpisodePhase.CANCELLED
+
+
+def test_terminal_inference_failure_is_not_recoverable(tmp_path: Path) -> None:
+    class FailedBackend(FakeBackend):
+        def _result(self, plan, artifact_dir, ref):
+            return StageResult(ref, 17, "AGENT_FAILED", ())
+
+    runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(InfrastructureError, match="inference Run failed"):
+        runner.run(episode(tmp_path, "failed"), inference=Inference(), verifier=Verifier())
+    assert runner.inspect("failed").phase == EpisodePhase.FAILED
+
+
+def test_terminal_success_with_missing_declared_output_fails_contract(tmp_path: Path) -> None:
+    class MissingOutputBackend(FakeBackend):
+        def _result(self, plan, artifact_dir, ref):
+            return StageResult(ref, 0, "", ())
+
+    runner = EpisodeRunner(backend=MissingOutputBackend(), store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="required sealed output is missing"):
+        runner.run(episode(tmp_path, "missing"), inference=Inference(), verifier=Verifier())
+    assert runner.inspect("missing").phase == EpisodePhase.FAILED

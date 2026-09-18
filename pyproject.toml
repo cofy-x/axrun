@@ -7,7 +7,12 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "cofy-x" }]
 dependencies = [
-    "axern-sdk>=0.8.0,<0.9",
+    "axern-sdk==0.8.1",
+]
+
+[project.optional-dependencies]
+harness = [
+    "mini-swe-agent==2.4.6",
 ]
 
 [project.urls]

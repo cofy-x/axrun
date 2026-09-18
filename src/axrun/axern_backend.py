@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from axrun.errors import InfrastructureError, SdkCapabilityError
+from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
 from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
 
 
@@ -26,20 +25,6 @@ class AxernBackend:
         on_bound: Callable[[ExecutionRef], None],
     ) -> StageResult:
         sdk = _sdk_types()
-        create_parameters = inspect.signature(self.client.create_run).parameters
-        required = {
-            "image_mounts": bool(plan.image_mounts),
-            "secret_env": bool(plan.secret_env),
-        }
-        missing = sorted(
-            name for name, needed in required.items() if needed and name not in create_parameters
-        )
-        if missing:
-            raise SdkCapabilityError(
-                "installed axern-sdk create_run() lacks required public parameters: "
-                + ", ".join(missing)
-            )
-
         ready_marker = "/run/axrun/inputs-ready"
         wrapper = 'while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
         kwargs: dict[str, Any] = {
@@ -61,6 +46,12 @@ class AxernBackend:
                 for value in plan.outputs
             ],
             "labels": {"axrun.managed": "true", **plan.labels},
+            "request_cpu": plan.resources.request_cpu,
+            "request_memory": plan.resources.request_memory,
+            "request_ephemeral_storage": plan.resources.request_ephemeral_storage,
+            "limit_cpu": plan.resources.limit_cpu,
+            "limit_memory": plan.resources.limit_memory,
+            "limit_ephemeral_storage": plan.resources.limit_ephemeral_storage,
         }
         if plan.image_mounts:
             kwargs["image_mounts"] = [
@@ -92,17 +83,30 @@ class AxernBackend:
                 else:
                     allocation.write_file(item.target, source.read_bytes())
             allocation.write_file(ready_marker, b"ready\n")
-            terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
         except BaseException:
             self.client.cancel_run(run.id)
             raise
 
-        artifacts = self._download_outputs(run.id, plan, artifact_dir)
+        # Once the process is released, an ambiguous transport failure must be
+        # recovered by the persisted Run ID. It must not become an implicit
+        # cancellation merely because this client lost its connection.
+        stdout_path, stderr_path = self._capture_output(
+            run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
+        )
+        terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
+
+        artifacts = (
+            ()
+            if int(terminal.exit_code) != 0
+            else self._download_outputs(run.id, plan, artifact_dir)
+        )
         return StageResult(
             execution=execution,
             exit_code=int(terminal.exit_code),
             diagnostic_code=str(terminal.diagnostic_code),
             artifacts=artifacts,
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
         )
 
     def recover(
@@ -119,13 +123,53 @@ class AxernBackend:
             "RUN_STATUS_CANCELLED",
         }:
             return None
-        artifacts = self._download_outputs(run.id, plan, artifact_dir)
+        artifacts = (
+            () if int(run.exit_code) != 0 else self._download_outputs(run.id, plan, artifact_dir)
+        )
+        stdout_path, stderr_path = self._capture_output(
+            run.id, artifact_dir, follow=False, timeout=30.0
+        )
         return StageResult(
             execution=ExecutionRef(plan.environment_id, run.id, run.allocation_id),
             exit_code=int(run.exit_code),
             diagnostic_code=str(run.diagnostic_code),
             artifacts=artifacts,
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
         )
+
+    def cancel(self, execution: ExecutionRef) -> None:
+        run = self.client.get_run(execution.run_id)
+        if _status_name(run) not in _TERMINAL_STATUSES:
+            self.client.cancel_run(execution.run_id)
+
+    def wait(self, execution: ExecutionRef, *, timeout: float | None = None) -> None:
+        self.client.wait_run(execution.run_id, timeout=timeout)
+
+    def _capture_output(
+        self,
+        run_id: str,
+        artifact_dir: Path,
+        *,
+        follow: bool,
+        timeout: float,
+    ) -> tuple[Path, Path]:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = artifact_dir / "stdout.log"
+        stderr_path = artifact_dir / "stderr.log"
+        sizes = {stdout_path: 0, stderr_path: 0}
+        streams = {1: stdout_path, 2: stderr_path}
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            handles = {stdout_path: stdout, stderr_path: stderr}
+            for event in self.client.read_run_output(run_id, follow=follow, timeout=timeout):
+                destination = streams.get(int(event.stream))
+                if destination is None or not event.data:
+                    continue
+                remaining = (16 << 20) - sizes[destination]
+                if remaining > 0:
+                    handles[destination].write(bytes(event.data[:remaining]))
+                    sizes[destination] += min(len(event.data), remaining)
+        return stdout_path, stderr_path
 
     def _download_outputs(
         self, run_id: str, plan: StagePlan, artifact_dir: Path
@@ -148,12 +192,18 @@ class AxernBackend:
             sealed = by_path.get(expected.path)
             if sealed is None or sealed.status != "available":
                 reason = "missing" if sealed is None else f"{sealed.status}: {sealed.reason}"
-                raise InfrastructureError(
-                    f"declared output {expected.path} is unavailable: {reason}"
-                )
+                raise ContractError(f"declared output {expected.path} is unavailable: {reason}")
             destination = artifact_dir / f"{index:02d}-{Path(expected.path).name}"
             with destination.open("wb") as stream:
                 verified = self.client.download_sealed_output(run_id, sealed.output_id, stream)
+            if (
+                destination.stat().st_size != verified.size_bytes
+                or _sha256(destination) != verified.sha256
+            ):
+                destination.unlink(missing_ok=True)
+                raise InfrastructureError(
+                    f"downloaded output failed integrity check: {expected.path}"
+                )
             artifacts.append(
                 Artifact(
                     name=expected.path,
@@ -182,11 +232,7 @@ def _wait_running(client: Any, run_id: str, *, timeout_seconds: float) -> Any:
     for update in client.watch_run(run_id, after_version=run.version, timeout=timeout_seconds):
         if update.allocation_id and _status_name(update) == "RUN_STATUS_RUNNING":
             return update
-        if _status_name(update) in {
-            "RUN_STATUS_SUCCEEDED",
-            "RUN_STATUS_FAILED",
-            "RUN_STATUS_CANCELLED",
-        }:
+        if _status_name(update) in _TERMINAL_STATUSES:
             raise InfrastructureError("Run became terminal before its Allocation was usable")
         if time.monotonic() >= deadline:
             break
@@ -196,6 +242,13 @@ def _wait_running(client: Any, run_id: str, *, timeout_seconds: float) -> Any:
 def _status_name(run: Any) -> str:
     status_field = run.DESCRIPTOR.fields_by_name["status"]
     return str(status_field.enum_type.values_by_number[int(run.status)].name)
+
+
+_TERMINAL_STATUSES = {
+    "RUN_STATUS_SUCCEEDED",
+    "RUN_STATUS_FAILED",
+    "RUN_STATUS_CANCELLED",
+}
 
 
 def _manifest_retryable(exc: Exception) -> bool:

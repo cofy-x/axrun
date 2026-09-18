@@ -29,3 +29,11 @@ class ExecutionBackend(Protocol):
     ) -> StageResult | None:
         """Return a terminal result, None while still live, or raise on ambiguity."""
         ...
+
+    def cancel(self, execution: ExecutionRef) -> None:
+        """Cancel the authoritative Axern Run. Repeated cancellation is safe."""
+        ...
+
+    def wait(self, execution: ExecutionRef, *, timeout: float | None = None) -> None:
+        """Wait for the authoritative Axern Run to become terminal."""
+        ...

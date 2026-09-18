@@ -4,12 +4,13 @@
   "title": "VerificationResult v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resolved", "score", "verifier", "details"],
+  "required": ["schema_version", "candidate_digest", "verifier", "verifier_version", "verdict", "diagnostic_code", "verifier_exit_code", "output_digest", "started_at", "completed_at", "details"],
   "properties": {
     "schema_version": { "const": 1 },
-    "resolved": { "type": "boolean" },
-    "score": { "type": "number" },
-    "verifier": { "type": "string", "minLength": 1 },
-    "details": { "type": "object" }
+    "candidate_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "verifier": { "type": "string", "minLength": 1 }, "verifier_version": { "type": "string", "minLength": 1 },
+    "verdict": { "enum": ["passed", "failed"] }, "diagnostic_code": { "type": "string" }, "verifier_exit_code": { "type": "integer" },
+    "output_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "started_at": { "type": "string", "format": "date-time" }, "completed_at": { "type": "string", "format": "date-time" },
+    "score": { "type": ["number", "null"] }, "details": { "type": "object" }
   }
 }
