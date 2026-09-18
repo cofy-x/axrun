@@ -214,6 +214,11 @@ def _parser() -> argparse.ArgumentParser:
     swebench.add_argument("row", type=Path)
     swebench.add_argument("--episode-id", required=True)
     swebench.add_argument("--task-image", required=True)
+    swebench.add_argument(
+        "--task-platform",
+        choices=("linux/amd64", "linux/arm64"),
+        default="linux/amd64",
+    )
     swebench.add_argument("--assets-dir", type=Path, required=True)
     _add_claude_arguments(swebench)
     swebench.add_argument("--inference-environment", required=True)
@@ -324,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                 inference_environment_id=args.inference_environment,
                 verification_environment_id=args.verification_environment,
                 task_image=args.task_image,
+                task_platform=args.task_platform,
                 harness=_claude_harness(args, working_directory="/testbed"),
             )
             _write_episode(episode, args.output)

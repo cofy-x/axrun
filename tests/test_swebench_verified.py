@@ -19,6 +19,9 @@ from axrun.models import Artifact, ExecutionRef, HarnessSpec, StageResult
 
 _IMAGE_REPOSITORY = "docker.io/swebench/sweb.eval.x86_64.django_1776_django-12419"
 _TASK_IMAGE = f"{_IMAGE_REPOSITORY}@sha256:{'d' * 64}"
+_ARM64_TASK_IMAGE = (
+    f"index.docker.io/library/axrun-swebench-verified-django-12419@sha256:{'e' * 64}"
+)
 
 
 def _row(eval_script: str) -> dict[str, Any]:
@@ -84,6 +87,7 @@ def test_resolver_parses_exact_schema_once_and_materializes_stable_assets(
     assert first.seed_digest == second.seed_digest
     assert first.harness.config["working_directory"] == "/testbed"
     assert first.metadata["task_image"].endswith(f"@sha256:{'d' * 64}")
+    assert first.metadata["task_platform"] == "linux/amd64"
     assert Path(first.prompt_file).read_text() == row["problem_statement"]
     assert Path(first.verifier.config["eval_script_file"]).read_text() == row["eval_script"]
     serialized = json.dumps(asdict(first), sort_keys=True)
@@ -107,6 +111,32 @@ def test_resolver_parses_exact_schema_once_and_materializes_stable_assets(
         )
     with pytest.raises(ContractError, match="requires instance_id"):
         _resolve(tmp_path / "other", dict(row, instance_id="django__django-other"))
+
+
+def test_resolver_requires_explicit_platform_specific_task_image(tmp_path: Path) -> None:
+    row = _row("#!/bin/bash\necho offline\n")
+    episode = SweBenchVerifiedResolver().resolve(
+        row,
+        asset_dir=tmp_path / "assets",
+        episode_id="arm64-local",
+        inference_environment_id="env-i",
+        verification_environment_id="env-v",
+        task_image=_ARM64_TASK_IMAGE,
+        task_platform="linux/arm64",
+        harness=_harness(),
+    )
+    assert episode.metadata["task_platform"] == "linux/arm64"
+    assert episode.metadata["official_image"] == row["image"]
+    with pytest.raises(ContractError, match="linux/amd64 image contract"):
+        SweBenchVerifiedResolver().resolve(
+            row,
+            asset_dir=tmp_path / "wrong-assets",
+            episode_id="wrong-platform",
+            inference_environment_id="env-i",
+            verification_environment_id="env-v",
+            task_image=_ARM64_TASK_IMAGE,
+            harness=_harness(),
+        )
 
 
 def _candidate(tmp_path: Path, episode, payload: bytes = b""):

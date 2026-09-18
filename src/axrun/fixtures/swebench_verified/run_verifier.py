@@ -1,19 +1,19 @@
-"""Self-contained offline verifier for the minimal Django Verified vertical."""
+"""Self-contained Python 3.6-compatible verifier for the Django vertical."""
 
-from __future__ import annotations
+# ruff: noqa: UP006, UP017, UP021, UP035 -- this file executes under Python 3.6.
 
 import argparse
 import hashlib
 import json
 import os
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
+from typing import Any, Dict, List, cast
 
 
-def _django_statuses(log: str) -> dict[str, str]:
-    statuses: dict[str, str] = {}
+def _django_statuses(log: str) -> Dict[str, str]:
+    statuses: Dict[str, str] = {}
     previous = ""
     for raw_line in log.splitlines():
         line = raw_line.strip()
@@ -38,14 +38,14 @@ def _django_statuses(log: str) -> dict[str, str]:
     return statuses
 
 
-def _tests(value: str) -> list[str]:
-    parsed: object = json.loads(value)
+def _tests(value: str) -> List[str]:
+    parsed: Any = json.loads(value)
     if not isinstance(parsed, list):
         raise ValueError("test selection must be a JSON string array")
-    items = cast(list[object], parsed)
+    items = cast(List[object], parsed)
     if any(not isinstance(item, str) for item in items):
         raise ValueError("test selection must be a JSON string array")
-    return list(cast(list[str], items))
+    return cast(List[str], items)
 
 
 def main() -> int:
@@ -67,16 +67,19 @@ def main() -> int:
     pass_to_pass = _tests(args.pass_to_pass)
     args.result.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    started_at = datetime.now(UTC).isoformat()
+    started_at = datetime.now(timezone.utc).isoformat()
     actual_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=args.workspace, text=True, timeout=10
+        ["git", "rev-parse", "HEAD"],
+        cwd=args.workspace,
+        universal_newlines=True,
+        timeout=10,
     ).strip()
     if actual_commit != args.base_commit:
         return 2
     status = subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=args.workspace,
-        text=True,
+        universal_newlines=True,
         timeout=10,
     )
     if status:
@@ -89,7 +92,7 @@ def main() -> int:
                 env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1"},
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                text=True,
+                universal_newlines=True,
                 check=False,
                 timeout=60,
             )
@@ -101,7 +104,7 @@ def main() -> int:
             env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1"},
             stdout=log,
             stderr=subprocess.STDOUT,
-            text=True,
+            universal_newlines=True,
             check=False,
             timeout=7000,
         )
@@ -126,7 +129,7 @@ def main() -> int:
                 "score": 1.0 if resolved else 0.0,
                 "diagnostic_code": "" if resolved else "SWEBENCH_TESTS_FAILED",
                 "started_at": started_at,
-                "completed_at": datetime.now(UTC).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 "eval_exit_code": evaluation.returncode,
                 "output_digest": hashlib.sha256(log_bytes).hexdigest(),
             },

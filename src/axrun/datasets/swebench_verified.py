@@ -34,6 +34,10 @@ _SUPPORTED_INSTANCE = "django__django-12419"
 _SUPPORTED_REPO = "django/django"
 _SUPPORTED_BASE_COMMIT = "7fa1a93c6c8109010a6ff3f604fda83b604e0e97"
 _SUPPORTED_IMAGE = "swebench/sweb.eval.x86_64.django_1776_django-12419:latest"
+_SUPPORTED_TASK_IMAGE_NAMES = {
+    "linux/amd64": "swebench/sweb.eval.x86_64.django_1776_django-12419",
+    "linux/arm64": "library/axrun-swebench-verified-django-12419",
+}
 _SUPPORTED_LOG_PARSER = "parse_log_django"
 
 
@@ -50,6 +54,7 @@ class SweBenchVerifiedResolver:
         inference_environment_id: str,
         verification_environment_id: str,
         task_image: str,
+        task_platform: str = "linux/amd64",
         harness: HarnessSpec,
     ) -> ResolvedEpisode:
         if set(row) != _FIELDS:
@@ -90,8 +95,13 @@ class SweBenchVerifiedResolver:
                 )
         if not _digest_image(task_image):
             raise ContractError("SWE-bench task_image must use an OCI sha256 digest")
-        if _image_name(task_image) != _image_name(strings["image"]):
-            raise ContractError("SWE-bench task_image does not match the official row image")
+        expected_image_name = _SUPPORTED_TASK_IMAGE_NAMES.get(task_platform)
+        if expected_image_name is None:
+            raise ContractError("SWE-bench task_platform must be linux/amd64 or linux/arm64")
+        if _image_name(task_image) != expected_image_name:
+            raise ContractError(
+                f"SWE-bench task_image does not match the {task_platform} image contract"
+            )
         resolved_harness = resolve_claude_code_spec(harness)
         seed_digest = canonical_digest(
             {
@@ -134,6 +144,7 @@ class SweBenchVerifiedResolver:
                 "official_image": strings["image"],
                 "repo": strings["repo"],
                 "task_image": task_image,
+                "task_platform": task_platform,
                 "version": strings["version"],
             },
         )
@@ -171,7 +182,7 @@ def _image_name(value: str) -> str:
     tail = without_digest.rsplit("/", 1)[-1]
     if ":" in tail:
         without_digest = without_digest.rsplit(":", 1)[0]
-    return without_digest.removeprefix("docker.io/")
+    return without_digest.removeprefix("docker.io/").removeprefix("index.docker.io/")
 
 
 def _write_asset(path: Path, value: str) -> Path:
