@@ -47,6 +47,8 @@ The repository-owned synthetic resolver demonstrates this boundary without intro
 
 Axrun reuses one SDK client per CLI invocation. Connection loss after a Run ID is persisted is intentionally recoverable rather than hidden by creating a replacement Run.
 
-## Credential boundary and current limitation
+## Credential and pre-start boundary
 
-Episode schemas contain no provider credential fields. The intended live inference boundary is a caller-side model service exposed through an allocation-scoped, finite-lived Axern Tunnel, so the sandbox never receives the provider key. That Tunnel/model-gateway integration and its revocation E2E are not part of the current implementation. Until they exist, only deterministic harness execution—not live model inference—is validated end to end.
+Episode schemas and StagePlans contain no provider credential or Tunnel token fields. Live inference uses a caller-side, loopback-only model gateway exposed through one allocation-scoped, finite-lived Axern Tunnel, so the sandbox receives only its fixed local endpoint. This capability is a runtime lifecycle object and is never serialized.
+
+The backend persists the Run ID, waits for the unique Allocation, persists that Allocation ID, starts the gateway and connector, and performs an Allocation-originated `/healthz` preflight before writing the input-ready marker. Setup failure cancels the unreleased Run. Normal completion and all post-release exits revoke the Tunnel and stop the gateway without treating Tunnel closure itself as Run cancellation. The short-lived connector token is never persisted, so a caller restart cannot silently reconstruct live model access or create a replacement inference Run; recovery must inspect the original Run and require an explicit operator decision if it is still live.

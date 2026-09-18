@@ -32,11 +32,14 @@ class FakeBackend:
         self.cancelled: list[str] = []
         self.resolved = resolved
 
-    def execute(self, plan, *, artifact_dir, on_bound):
+    def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
         index = len(self.executions) + 1
         ref = ExecutionRef(plan.environment_id, f"run-{index}", f"alloc-{index}")
         self.executions.append(ref)
         on_bound(ref)
+        if lifecycle is not None:
+            lifecycle.start(ref, object())
+            lifecycle.close()
         return self._result(plan, artifact_dir, ref)
 
     def _result(self, plan, artifact_dir, ref):
@@ -83,10 +86,12 @@ class BlockingBackend(FakeBackend):
         self.bound = threading.Event()
         self.released = threading.Event()
 
-    def execute(self, plan, *, artifact_dir, on_bound):
+    def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
         ref = ExecutionRef(plan.environment_id, "run-blocked", "alloc-blocked")
         self.executions.append(ref)
         on_bound(ref)
+        if lifecycle is not None:
+            lifecycle.start(ref, object())
         self.bound.set()
         assert self.released.wait(5)
         return StageResult(ref, 1, "cancelled", ())
@@ -207,13 +212,15 @@ def test_failed_verdict_is_a_completed_business_result(tmp_path: Path) -> None:
 
 def test_verification_transport_failure_recovers_same_run(tmp_path: Path) -> None:
     class PartitionOnceBackend(FakeBackend):
-        def execute(self, plan, *, artifact_dir, on_bound):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
             if len(self.executions) == 1:
                 ref = ExecutionRef(plan.environment_id, "run-verification", "alloc-verification")
                 self.executions.append(ref)
                 on_bound(ref)
                 raise ConnectionError("partition")
-            return super().execute(plan, artifact_dir=artifact_dir, on_bound=on_bound)
+            return super().execute(
+                plan, artifact_dir=artifact_dir, on_bound=on_bound, lifecycle=lifecycle
+            )
 
     backend = PartitionOnceBackend()
     runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))

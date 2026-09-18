@@ -8,6 +8,7 @@ from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.backend import ExecutionBackend
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
+from axrun.lifecycle import PreStartLifecycle
 from axrun.models import (
     CandidateBundle,
     EpisodePhase,
@@ -33,6 +34,7 @@ class EpisodeRunner:
         *,
         inference: InferenceAdapter,
         verifier: VerifierAdapter,
+        inference_lifecycle: PreStartLifecycle | None = None,
     ) -> VerificationResult:
         with self.store.lock(episode.episode_id):
             record = self.store.initialize(episode)
@@ -53,6 +55,7 @@ class EpisodeRunner:
                 on_bound=lambda execution: self._bind(
                     episode.episode_id, EpisodePhase.INFERENCE_RUNNING, execution
                 ),
+                lifecycle=inference_lifecycle,
             )
             candidate = self._commit_candidate(episode, inference, stage)
             return self._start_verification(episode, candidate, verifier)
@@ -219,6 +222,7 @@ class EpisodeRunner:
                 on_bound=lambda execution: self._bind(
                     episode.episode_id, EpisodePhase.VERIFICATION_RUNNING, execution
                 ),
+                lifecycle=None,
             )
             return self._finish_verification(episode.episode_id, stage, adapter)
         except Exception as exc:

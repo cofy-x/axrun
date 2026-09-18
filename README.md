@@ -66,7 +66,7 @@ Without `--context-file`, remote commands use the explicit Axern SDK environment
 
 ## Credentials and network access
 
-Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. A future live model path must expose a caller-owned loopback model endpoint through an allocation-scoped Axern Tunnel with bounded TTL. That path is not implemented or claimed by this release. The current deterministic architecture smoke therefore does not validate live model inference or Tunnel revocation.
+Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. `ModelGateway` exposes only the required Anthropic-compatible message paths from a bounded loopback listener and injects the real credential only on the caller-side upstream hop. `AxernTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz` from inside that Allocation, and only then releases the staged process. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
 
 ## Persistence, recovery, and cancellation
 

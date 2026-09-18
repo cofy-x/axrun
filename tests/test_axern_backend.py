@@ -124,3 +124,93 @@ def test_transport_failure_after_launch_does_not_implicitly_cancel(
             on_bound=lambda _ref: None,
         )
     assert client.cancelled is False
+
+
+def test_prestart_runs_after_allocation_binding_and_before_release(
+    tmp_path: Path, monkeypatch
+) -> None:
+    events: list[str] = []
+
+    class Allocation:
+        def write_file(self, path, _value):
+            assert path == "/run/axrun/inputs-ready"
+            events.append("released")
+
+    class Lifecycle:
+        def start(self, execution, allocation):
+            assert execution.allocation_id == "alloc-1"
+            assert isinstance(allocation, Allocation)
+            events.append("prestart")
+
+        def close(self):
+            events.append("closed")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-1")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def wait_run(self, _run_id, timeout):
+            return SimpleNamespace(exit_code=0, diagnostic_code="")
+
+        def cancel_run(self, _run_id):
+            events.append("cancelled")
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(
+        backend_module,
+        "_wait_running",
+        lambda *_args, **_kwargs: SimpleNamespace(id="run-1", allocation_id="alloc-1"),
+    )
+    monkeypatch.setattr(
+        backend, "_capture_output", lambda *_args, **_kwargs: (tmp_path / "out", tmp_path / "err")
+    )
+    monkeypatch.setattr(backend, "_download_outputs", lambda *_args, **_kwargs: ())
+    backend.execute(
+        StagePlan("env", ("true",), "/workspace", ()),
+        artifact_dir=tmp_path,
+        on_bound=lambda ref: events.append(
+            "allocation-bound" if ref.allocation_id else "run-bound"
+        ),
+        lifecycle=Lifecycle(),
+    )
+    assert events == ["run-bound", "allocation-bound", "prestart", "released", "closed"]
+
+
+def test_prestart_failure_cancels_run_before_release(tmp_path: Path, monkeypatch) -> None:
+    events: list[str] = []
+
+    class Lifecycle:
+        def start(self, _execution, _allocation):
+            events.append("prestart")
+            raise RuntimeError("preflight failed")
+
+        def close(self):
+            events.append("closed")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-1")
+
+        def allocation(self, _allocation_id):
+            return object()
+
+        def cancel_run(self, run_id):
+            events.append(f"cancelled:{run_id}")
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(
+        backend_module,
+        "_wait_running",
+        lambda *_args, **_kwargs: SimpleNamespace(id="run-1", allocation_id="alloc-1"),
+    )
+    with __import__("pytest").raises(RuntimeError, match="preflight failed"):
+        backend.execute(
+            StagePlan("env", ("true",), "/workspace", ()),
+            artifact_dir=tmp_path,
+            on_bound=lambda _ref: None,
+            lifecycle=Lifecycle(),
+        )
+    assert events == ["prestart", "closed", "cancelled:run-1"]

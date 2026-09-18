@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
+from axrun.lifecycle import PreStartLifecycle
 from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
 
 
@@ -23,6 +24,7 @@ class AxernBackend:
         *,
         artifact_dir: Path,
         on_bound: Callable[[ExecutionRef], None],
+        lifecycle: PreStartLifecycle | None = None,
     ) -> StageResult:
         sdk = _sdk_types()
         ready_marker = "/run/axrun/inputs-ready"
@@ -73,7 +75,10 @@ class AxernBackend:
         execution = ExecutionRef(plan.environment_id, run.id, run.allocation_id)
         on_bound(execution)
         allocation = self.client.allocation(run.allocation_id)
+        released = False
         try:
+            if lifecycle is not None:
+                lifecycle.start(execution, allocation)
             for item in plan.inputs:
                 source = Path(item.source)
                 if item.sha256 and _sha256(source) != item.sha256:
@@ -83,31 +88,38 @@ class AxernBackend:
                 else:
                     allocation.write_file(item.target, source.read_bytes())
             allocation.write_file(ready_marker, b"ready\n")
+            released = True
         except BaseException:
-            self.client.cancel_run(run.id)
+            if lifecycle is not None:
+                lifecycle.close()
+            if not released:
+                self.client.cancel_run(run.id)
             raise
+        try:
+            # Once the process is released, an ambiguous transport failure must be
+            # recovered by the persisted Run ID. It must not become an implicit
+            # cancellation merely because this client lost its connection.
+            stdout_path, stderr_path = self._capture_output(
+                run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
+            )
+            terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
 
-        # Once the process is released, an ambiguous transport failure must be
-        # recovered by the persisted Run ID. It must not become an implicit
-        # cancellation merely because this client lost its connection.
-        stdout_path, stderr_path = self._capture_output(
-            run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
-        )
-        terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
-
-        artifacts = (
-            ()
-            if int(terminal.exit_code) != 0
-            else self._download_outputs(run.id, plan, artifact_dir)
-        )
-        return StageResult(
-            execution=execution,
-            exit_code=int(terminal.exit_code),
-            diagnostic_code=str(terminal.diagnostic_code),
-            artifacts=artifacts,
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-        )
+            artifacts = (
+                ()
+                if int(terminal.exit_code) != 0
+                else self._download_outputs(run.id, plan, artifact_dir)
+            )
+            return StageResult(
+                execution=execution,
+                exit_code=int(terminal.exit_code),
+                diagnostic_code=str(terminal.diagnostic_code),
+                artifacts=artifacts,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+            )
+        finally:
+            if lifecycle is not None:
+                lifecycle.close()
 
     def recover(
         self,

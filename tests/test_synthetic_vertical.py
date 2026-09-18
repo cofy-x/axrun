@@ -32,15 +32,22 @@ class SyntheticVerticalBackend:
         *,
         artifact_dir: Path,
         on_bound: Callable[[ExecutionRef], None],
+        lifecycle=None,
     ) -> StageResult:
         index = len(self.executions) + 1
         execution = ExecutionRef(plan.environment_id, f"run-{index}", f"allocation-{index}")
         self.executions.append(execution)
         self.plans.append(plan)
         on_bound(execution)
+        if lifecycle is not None:
+            lifecycle.start(execution, object())
         if plan.labels.get("axrun.stage") == "inference":
-            return self._inference(plan, artifact_dir, execution)
-        return self._verification(plan, artifact_dir, execution)
+            result = self._inference(plan, artifact_dir, execution)
+        else:
+            result = self._verification(plan, artifact_dir, execution)
+        if lifecycle is not None:
+            lifecycle.close()
+        return result
 
     def recover(
         self, execution: ExecutionRef, plan: StagePlan, *, artifact_dir: Path

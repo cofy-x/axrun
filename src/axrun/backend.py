@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from axrun.lifecycle import PreStartLifecycle
 from axrun.models import ExecutionRef, StagePlan, StageResult
 
 
@@ -16,6 +17,7 @@ class ExecutionBackend(Protocol):
         *,
         artifact_dir: Path,
         on_bound: Callable[[ExecutionRef], None],
+        lifecycle: PreStartLifecycle | None = None,
     ) -> StageResult:
         """Execute one immutable stage and download its sealed outputs."""
         ...
