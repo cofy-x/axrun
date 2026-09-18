@@ -10,13 +10,31 @@ import axrun.adapters._candidate as candidate_module
 from axrun.adapters import CommandVerifierAdapter, MiniSweAgentAdapter
 from axrun.adapters._candidate import load_candidate, persist_candidate
 from axrun.errors import ContractError
-from axrun.models import Artifact, ExecutionRef, ResolvedEpisode, StageResult
+from axrun.models import (
+    Artifact,
+    ExecutionRef,
+    HarnessSpec,
+    ResolvedEpisode,
+    StageResult,
+    VerifierSpec,
+)
 
 
 def episode(tmp_path: Path) -> ResolvedEpisode:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("fix it", encoding="utf-8")
-    return ResolvedEpisode(1, "ep", "task", "sha256:task", "a" * 40, str(prompt), "env-i", "env-v")
+    return ResolvedEpisode(
+        1,
+        "ep",
+        "task",
+        "b" * 64,
+        "a" * 40,
+        str(prompt),
+        "env-i",
+        "env-v",
+        HarnessSpec("mini-swe-agent", "2.4.6"),
+        VerifierSpec("command-verifier", "1"),
+    )
 
 
 def test_mini_swe_plan_uses_official_cli_and_declared_outputs(tmp_path: Path) -> None:

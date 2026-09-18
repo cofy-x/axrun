@@ -1,0 +1,8 @@
+diff --git a/calculator.py b/calculator.py
+index 383ff1c..29a5726 100644
+--- a/calculator.py
++++ b/calculator.py
+@@ -1,2 +1,2 @@
+ def add_one(value: int) -> int:
+-    return value
++    return value - 1

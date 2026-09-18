@@ -28,7 +28,11 @@ class EpisodeRunner:
         self.store = store
 
     def run(
-        self, episode: ResolvedEpisode, *, inference: InferenceAdapter, verifier: VerifierAdapter
+        self,
+        episode: ResolvedEpisode,
+        *,
+        inference: InferenceAdapter,
+        verifier: VerifierAdapter,
     ) -> VerificationResult:
         with self.store.lock(episode.episode_id):
             record = self.store.initialize(episode)

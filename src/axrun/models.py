@@ -75,26 +75,31 @@ class ResourceSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class MiniSweAgentSpec:
-    command: tuple[str, ...] = ("mini",)
-    version: str = "2.4.6"
+class HarnessSpec:
+    """Harness-neutral adapter selection."""
+
+    identity: str
+    version: str
     timeout_seconds: int = 7200
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def __post_init__(self) -> None:
-        if not self.command or not self.version or self.timeout_seconds <= 0:
-            raise ContractError("mini-swe-agent command and version are required")
+        if not self.identity or not self.version or self.timeout_seconds <= 0:
+            raise ContractError("harness identity, version, and timeout are required")
 
 
 @dataclass(frozen=True, slots=True)
 class VerifierSpec:
-    command: tuple[str, ...] = ("/opt/axrun/run-verifier",)
-    identity: str = "command-verifier"
-    version: str = "1"
+    """Verifier-neutral adapter selection."""
+
+    identity: str
+    version: str
     timeout_seconds: int = 7200
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def __post_init__(self) -> None:
-        if not self.command or not self.identity or not self.version or self.timeout_seconds <= 0:
-            raise ContractError("verifier command, identity, and version are required")
+        if not self.identity or not self.version or self.timeout_seconds <= 0:
+            raise ContractError("verifier identity, version, and timeout are required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,16 +129,18 @@ class StagePlan:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedEpisode:
+    """Harness-neutral canonical episode contract."""
+
     schema_version: int
     episode_id: str
     task_id: str
-    task_digest: str
+    seed_digest: str
     base_commit: str
     prompt_file: str
     inference_environment_id: str
     verification_environment_id: str
-    harness: MiniSweAgentSpec = field(default_factory=MiniSweAgentSpec)
-    verifier: VerifierSpec = field(default_factory=VerifierSpec)
+    harness: HarnessSpec
+    verifier: VerifierSpec
     inference_resources: ResourceSpec = field(default_factory=ResourceSpec)
     verification_resources: ResourceSpec = field(default_factory=ResourceSpec)
     metadata: dict[str, str] = field(default_factory=dict[str, str])
@@ -141,10 +148,14 @@ class ResolvedEpisode:
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ContractError(f"unsupported ResolvedEpisode schema {self.schema_version}")
-        if not self.episode_id or not self.task_id or not self.task_digest:
-            raise ContractError("episode_id, task_id, and task_digest are required")
+        if not self.episode_id or not self.task_id or not self.seed_digest:
+            raise ContractError("episode_id, task_id, and seed_digest are required")
         if any(value in self.episode_id for value in ("/", "\\", "..")):
             raise ContractError("episode_id must be a safe path component")
+        if len(self.seed_digest) != 64 or any(
+            value not in "0123456789abcdef" for value in self.seed_digest
+        ):
+            raise ContractError("seed_digest must be lowercase SHA-256 hexadecimal")
         if len(self.base_commit) not in {40, 64} or any(
             value not in "0123456789abcdefABCDEF" for value in self.base_commit
         ):
@@ -212,7 +223,7 @@ class CandidateBundle:
     schema_version: int
     episode_id: str
     task_id: str
-    task_digest: str
+    seed_digest: str
     base_commit: str
     inference_run_id: str
     harness: str
@@ -224,6 +235,10 @@ class CandidateBundle:
     def __post_init__(self) -> None:
         if self.schema_version != 1 or not self.files:
             raise ContractError("CandidateBundle v1 requires at least one file")
+        if len(self.seed_digest) != 64 or any(
+            value not in "0123456789abcdef" for value in self.seed_digest
+        ):
+            raise ContractError("CandidateBundle seed_digest must be lowercase SHA-256")
         if len(self.digest) != 64 or any(value not in "0123456789abcdef" for value in self.digest):
             raise ContractError("CandidateBundle digest must be lowercase hexadecimal")
 
@@ -285,11 +300,23 @@ def canonical_digest(value: Any) -> str:
 
 def resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     """Decode the versioned public JSON contract without accepting unknown fields."""
+    version = raw.get("schema_version")
+    if version == 1:
+        return _resolved_episode_from_dict(raw)
+    raise ContractError(f"unsupported ResolvedEpisode schema {version}")
+
+
+def episode_seed_digest(episode: ResolvedEpisode) -> str:
+    """Return the immutable canonical seed identity."""
+    return episode.seed_digest
+
+
+def _resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     expected = {
         "schema_version",
         "episode_id",
         "task_id",
-        "task_digest",
+        "seed_digest",
         "base_commit",
         "prompt_file",
         "inference_environment_id",
@@ -308,13 +335,17 @@ def resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     verifier = dict(values.pop("verifier", {}))
     inference_resources = dict(values.pop("inference_resources", {}))
     verification_resources = dict(values.pop("verification_resources", {}))
-    if "command" in harness:
-        harness["command"] = tuple(harness["command"])
-    if "command" in verifier:
-        verifier["command"] = tuple(verifier["command"])
+    verifier_config = verifier.get("config", {})
+    if not isinstance(verifier_config, dict):
+        raise ContractError("verifier config must be a JSON object")
+    verifier["config"] = verifier_config
+    config = harness.get("config", {})
+    if not isinstance(config, dict):
+        raise ContractError("harness config must be a JSON object")
+    harness["config"] = config
     return ResolvedEpisode(
         **values,
-        harness=MiniSweAgentSpec(**harness),
+        harness=HarnessSpec(**harness),
         verifier=VerifierSpec(**verifier),
         inference_resources=ResourceSpec(**inference_resources),
         verification_resources=ResourceSpec(**verification_resources),

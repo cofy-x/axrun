@@ -17,6 +17,7 @@ from axrun.models import (
     ResolvedEpisode,
     StageResult,
     canonical_digest,
+    episode_seed_digest,
 )
 
 
@@ -60,7 +61,7 @@ def persist_candidate(
             "schema_version": 1,
             "episode_id": episode.episode_id,
             "task_id": episode.task_id,
-            "task_digest": episode.task_digest,
+            "seed_digest": episode_seed_digest(episode),
             "base_commit": episode.base_commit,
             "inference_run_id": result.execution.run_id,
             "harness": harness,
@@ -73,7 +74,7 @@ def persist_candidate(
             schema_version=1,
             episode_id=episode.episode_id,
             task_id=episode.task_id,
-            task_digest=episode.task_digest,
+            seed_digest=episode_seed_digest(episode),
             base_commit=episode.base_commit,
             inference_run_id=result.execution.run_id,
             harness=harness,

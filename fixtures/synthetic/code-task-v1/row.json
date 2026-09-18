@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "dataset_identity": "axrun.synthetic.code-task",
+  "dataset_version": "1",
+  "task_id": "add-one",
+  "base_commit": "60dd887fd78561f03d8ca215e97de77048e93627",
+  "problem_statement_file": "problem.txt",
+  "seed_files": [
+    {
+      "source": "repository/calculator.py",
+      "target": "/workspace/calculator.py",
+      "sha256": "e920f1b66dc7e6fc5ac03d8f84b56ae2550301a59a1bcabde21a91e3e836d582"
+    },
+    {
+      "source": "repository/tests/test_calculator.py",
+      "target": "/workspace/tests/test_calculator.py",
+      "sha256": "76e59f3b61393da10283d1cfe6e7e06e9cf2ca5dab1555b04bb9cfd5bc484a6a"
+    }
+  ]
+}

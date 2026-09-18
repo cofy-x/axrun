@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from axrun.models import EpisodePhase, ExecutionRef, ResolvedEpisode
+from axrun.models import EpisodePhase, ExecutionRef, HarnessSpec, ResolvedEpisode, VerifierSpec
 from axrun.store import EpisodeStore
 
 
 def test_store_separates_immutable_spec_from_minimal_execution_record(tmp_path) -> None:
     episode = ResolvedEpisode(
-        1, "ep-1", "task-1", "sha256:task", "a" * 40, "prompt.txt", "env-i", "env-v"
+        1,
+        "ep-1",
+        "task-1",
+        "b" * 64,
+        "a" * 40,
+        "prompt.txt",
+        "env-i",
+        "env-v",
+        HarnessSpec("mini-swe-agent", "2.4.6"),
+        VerifierSpec("command-verifier", "1"),
     )
     store = EpisodeStore(tmp_path)
     record = store.initialize(episode)

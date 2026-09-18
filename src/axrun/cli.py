@@ -13,11 +13,23 @@ from typing import Any, cast
 
 from axern_sdk import AxernError
 
-from axrun.adapters import CommandVerifierAdapter, MiniSweAgentAdapter
+from axrun.adapters import (
+    CommandVerifierAdapter,
+    MiniSweAgentAdapter,
+    StaticPatchAdapter,
+    SyntheticVerifierAdapter,
+)
 from axrun.adapters._candidate import load_candidate
+from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.axern_backend import AxernBackend
+from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import AxrunError, ContractError
-from axrun.models import EpisodePhase, ResolvedEpisode, resolved_episode_from_dict
+from axrun.models import (
+    EpisodePhase,
+    ResolvedEpisode,
+    canonical_json,
+    resolved_episode_from_dict,
+)
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 
@@ -29,19 +41,45 @@ def _episode(path: Path) -> ResolvedEpisode:
     return resolved_episode_from_dict(cast(dict[str, Any], raw))
 
 
-def _adapters(episode: ResolvedEpisode) -> tuple[MiniSweAgentAdapter, CommandVerifierAdapter]:
-    return (
-        MiniSweAgentAdapter(
-            command=episode.harness.command,
+def _adapters(
+    episode: ResolvedEpisode,
+) -> tuple[InferenceAdapter, VerifierAdapter]:
+    if episode.harness.identity == "static-patch":
+        inference: InferenceAdapter = StaticPatchAdapter(version=episode.harness.version)
+    elif episode.harness.identity == "mini-swe-agent":
+        command_value: object = episode.harness.config.get("command", ["mini"])
+        if not _is_string_array(command_value):
+            raise ContractError("mini-swe-agent harness command must be a non-empty string array")
+        inference = MiniSweAgentAdapter(
+            command=tuple(cast(list[str], command_value)),
             version=episode.harness.version,
             timeout_seconds=episode.harness.timeout_seconds,
-        ),
-        CommandVerifierAdapter(
-            command=episode.verifier.command,
+        )
+    else:
+        raise ContractError(f"unsupported harness adapter: {episode.harness.identity}")
+    if episode.verifier.identity == "synthetic-code-task":
+        verifier: VerifierAdapter = SyntheticVerifierAdapter(
+            version=episode.verifier.version,
+            timeout_seconds=episode.verifier.timeout_seconds,
+        )
+    elif episode.verifier.identity == "command-verifier":
+        command_value = episode.verifier.config.get("command", ["/opt/axrun/run-verifier"])
+        if not _is_string_array(command_value):
+            raise ContractError("verifier command must be a non-empty string array")
+        verifier = CommandVerifierAdapter(
+            command=tuple(cast(list[str], command_value)),
             version=episode.verifier.version,
             timeout_seconds=episode.verifier.timeout_seconds,
             name=episode.verifier.identity,
-        ),
+        )
+    else:
+        raise ContractError(f"unsupported verifier adapter: {episode.verifier.identity}")
+    return inference, verifier
+
+
+def _is_string_array(value: object) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, str) and bool(item) for item in cast(list[object], value)
     )
 
 
@@ -127,6 +165,15 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="validate a ResolvedEpisode JSON file")
     validate.add_argument("episode", type=Path)
+    resolve = commands.add_parser(
+        "resolve-synthetic", help="resolve one explicit Axrun synthetic dataset row"
+    )
+    resolve.add_argument("row", type=Path)
+    resolve.add_argument("--episode-id", required=True)
+    resolve.add_argument("--candidate-file", required=True)
+    resolve.add_argument("--inference-environment", required=True)
+    resolve.add_argument("--verification-environment", required=True)
+    resolve.add_argument("--output", type=Path, required=True)
     run = commands.add_parser("run", help="execute inference and isolated verification")
     run.add_argument("episode", type=Path)
     for name in ("status", "inspect", "cancel"):
@@ -147,6 +194,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate":
             episode = _episode(args.episode)
             _print({"episode_id": episode.episode_id, "spec_digest": episode.digest})
+            return 0
+        if args.command == "resolve-synthetic":
+            raw_value: object = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("synthetic dataset row must be a JSON object")
+            episode = SyntheticCodeTaskResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                source_dir=args.row.parent,
+                episode_id=args.episode_id,
+                candidate_file=args.candidate_file,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(canonical_json(asdict(episode)) + b"\n")
+            _print(
+                {
+                    "episode_id": episode.episode_id,
+                    "seed_digest": episode.seed_digest,
+                    "output": str(args.output),
+                }
+            )
             return 0
         store = EpisodeStore(args.state_dir)
         if args.command == "status":

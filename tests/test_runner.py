@@ -14,11 +14,13 @@ from axrun.models import (
     Artifact,
     EpisodePhase,
     ExecutionRef,
+    HarnessSpec,
     OutputSpec,
     ResolvedEpisode,
     StagePlan,
     StageResult,
     VerificationResult,
+    VerifierSpec,
 )
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
@@ -149,7 +151,18 @@ class Verifier:
 def episode(tmp_path: Path, name: str = "ep") -> ResolvedEpisode:
     prompt = tmp_path / f"{name}.txt"
     prompt.write_text("task", encoding="utf-8")
-    return ResolvedEpisode(1, name, "task", "sha256:task", "a" * 40, str(prompt), "env-i", "env-v")
+    return ResolvedEpisode(
+        1,
+        name,
+        "task",
+        "b" * 64,
+        "a" * 40,
+        str(prompt),
+        "env-i",
+        "env-v",
+        HarnessSpec("fake", "1"),
+        VerifierSpec("fake-verifier", "1"),
+    )
 
 
 def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: Path) -> None:
