@@ -22,3 +22,8 @@ The checked-in `tests/fixtures/claude-code-2.1.205/` native streams and golden c
 the adapter compatibility boundary to Claude Code 2.1.205. They are artificial and contain no
 captured model traffic or credentials. A Claude Code upgrade must deliberately update the adapter,
 version, and fixtures; it must not silently change `axrun.trajectory@1` semantics.
+
+Claude's explicit `error_max_turns` result is a bounded agent-budget terminal state: the harness
+publishes the patch and canonical trajectory and lets the fresh verifier judge the candidate.
+Other non-zero Claude exits remain inference infrastructure failures. This is a closed subtype
+allowlist, not a general suppression of agent or provider errors.

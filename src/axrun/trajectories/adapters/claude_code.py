@@ -257,6 +257,26 @@ def normalize_claude_stream(
     return events
 
 
+def claude_stage_exit_code(native_path: Path, agent_exit_code: int) -> int:
+    """Classify the one bounded agent terminal state that still yields a candidate."""
+    if agent_exit_code == 0:
+        return 0
+    final: object = None
+    with native_path.open("rb") as source:
+        for raw_line in source:
+            if raw_line.strip():
+                final = json.loads(raw_line)
+    if isinstance(final, dict):
+        values = cast(dict[str, object], final)
+        if (
+            values.get("type") == "result"
+            and values.get("subtype") == "error_max_turns"
+            and values.get("is_error") is True
+        ):
+            return 0
+    return agent_exit_code if 1 <= agent_exit_code <= 255 else 1
+
+
 def _map_assistant(native: dict[str, object], emitter: _Emitter) -> None:
     message = native.get("message")
     if not isinstance(message, dict):
@@ -468,6 +488,7 @@ def main() -> int:
     parser.add_argument("--trajectory", type=Path, required=True)
     parser.add_argument("--usage", type=Path, required=True)
     parser.add_argument("--redact-value", action="append", default=[])
+    parser.add_argument("--agent-exit-code", type=int, default=0)
     args = parser.parse_args()
     normalize_claude_stream(
         args.input,
@@ -476,7 +497,7 @@ def main() -> int:
         args.usage,
         secrets=tuple(args.redact_value),
     )
-    return 0
+    return claude_stage_exit_code(args.input, args.agent_exit_code)
 
 
 if __name__ == "__main__":

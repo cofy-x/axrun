@@ -19,7 +19,10 @@ from axrun.models import (
     VerifierSpec,
 )
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
-from axrun.trajectories.adapters.claude_code import normalize_claude_stream
+from axrun.trajectories.adapters.claude_code import (
+    claude_stage_exit_code,
+    normalize_claude_stream,
+)
 from axrun.trajectories.bundle import (
     TrajectoryArtifact,
     load_trajectory_bundle,
@@ -303,6 +306,19 @@ def test_claude_2_1_205_compatibility_fixture_matches_golden_bytes(
     assert outputs[0][1] == (FIXTURES / f"{case_name}.usage.json").read_bytes()
     for marker in (THINKING_MARKER, SIGNATURE_MARKER, SECRET_MARKER):
         assert marker.encode() not in outputs[0][0]
+
+
+def test_claude_stage_exit_classification_is_fail_closed(tmp_path: Path) -> None:
+    assert claude_stage_exit_code(FIXTURES / "success.native.jsonl", 0) == 0
+    assert claude_stage_exit_code(FIXTURES / "error.native.jsonl", 1) == 0
+    rejected = tmp_path / "rejected.native.jsonl"
+    events = [
+        json.loads(line) for line in (FIXTURES / "error.native.jsonl").read_text().splitlines()
+    ]
+    events[-1]["subtype"] = "error_during_execution"
+    _write_native(rejected, events)
+    assert claude_stage_exit_code(rejected, 1) == 1
+    assert claude_stage_exit_code(rejected, 300) == 1
 
 
 def test_claude_native_invalid_json_and_unknown_event_fail_closed(tmp_path: Path) -> None:
