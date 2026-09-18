@@ -18,7 +18,7 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
 
 Axrun includes a small `axrun.synthetic.code-task@1` fixture for deterministic qualification. It is not a dataset registry or download service. The gold and known-bad candidates pass through the same immutable CandidateBundle and fresh verification Run boundary used by remote execution.
 
-The fixture seed is a repository-owned [task image](fixtures/synthetic/code-task-v1/README.md), not a set of files uploaded into an arbitrary Environment. Its Dockerfile installs Git and Python, creates `/workspace` as a clean repository, and asserts the exact base commit during the image build. Build and import the variant matching the Axern node, then create both selected Axern Environments from the imported digest. Inference and verification may reference the same immutable Environment definition; Axrun still creates an independent Run and Allocation for each stage. The task image supports amd64 and arm64; the separate Claude Code mount remains amd64-only.
+The fixture seed is a repository-owned [task image](fixtures/synthetic/code-task-v1/README.md), not a set of files uploaded into an arbitrary Environment. Its Dockerfile installs Git and Python, creates `/workspace` as a clean repository, and asserts the exact base commit during the image build. Build and import the variant matching the Axern node, then create both selected Axern Environments from the imported digest. Inference and verification may reference the same immutable Environment definition; Axrun still creates an independent Run and Allocation for each stage. The task image and the separate Claude Code rootfs both support amd64 and arm64.
 
 Resolve either candidate into canonical episode JSON with:
 
@@ -79,7 +79,7 @@ uv run axrun export EPISODE_ID ./exported-result
 
 ## Claude Code rootfs
 
-The repository-owned [Claude Code rootfs build](docker/claude-code-rootfs/README.md) fixes Claude Code `2.1.205`, runtime identity `2.1.205-20260812-234142`, Node.js `22.23.2`, and `linux/amd64`. It provides the canonical read-only mount `/__claude_code` and entry `/__claude_code/usr/local/bin/claude`, including its own glibc loader and libraries without a global `LD_LIBRARY_PATH`. It is an image mount layered onto the task-image Environment; it is not the task seed and does not own `/workspace`. A rebuilt or copied image must be imported or published and then selected by its resolved digest; this repository does not claim or embed a registry digest.
+The repository-owned [Claude Code rootfs build](docker/claude-code-rootfs/README.md) fixes Claude Code `2.1.205`, runtime identity `2.1.205-20260812-234142`, and Node.js `22.23.2`. The same Dockerfile builds amd64 and arm64 variants with the identical read-only mount `/__claude_code` and entry `/__claude_code/usr/local/bin/claude`, including their own platform glibc loader and libraries without a global `LD_LIBRARY_PATH`. It is an image mount layered onto the task-image Environment; it is not the task seed and does not own `/workspace`. The caller must select a digest matching the Environment platform. Production and benchmark acceptance remain amd64; arm64 is for local Axern source-cluster development. A rebuilt or copied image must be imported or published and then selected by its resolved digest; this repository does not claim or embed a registry digest.
 
 Without `--context-file`, remote commands use the explicit Axern SDK environment configuration. `status`, `inspect`, `validate`, and `export` are local and do not open an SDK channel.
 
@@ -106,7 +106,7 @@ uv run pytest
 uv build
 ```
 
-The test suite covers the canonical v1 domain contract, one-pass synthetic resolution, the task-image workspace contract, real gold/known-bad patch application in fresh simulated image workspaces, atomic publication, integrity checks, recovery without duplicate Runs, fresh verification identity, bounded output capture, and deterministic cancellation races. A live Linux/amd64 Axern synthetic run, read-only mount truth path, model endpoint, and benchmark verifier E2E remain explicit deployment acceptance tests rather than claims made from host tests.
+The test suite covers the canonical v1 domain contract, one-pass synthetic resolution, the task-image workspace contract, dual-platform Claude rootfs source contract, real gold/known-bad patch application in fresh simulated image workspaces, atomic publication, integrity checks, recovery without duplicate Runs, fresh verification identity, bounded output capture, and deterministic cancellation races. Live Axern image-mount truth paths, a model endpoint, and benchmark verifier E2E remain explicit deployment acceptance tests rather than claims made from source tests.
 
 ## License
 
