@@ -103,16 +103,12 @@ class AxernBackend:
                 run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
             )
             terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
-
-            artifacts = (
-                ()
-                if int(terminal.exit_code) != 0
-                else self._download_outputs(run.id, plan, artifact_dir)
-            )
+            exit_code = _effective_exit_code(terminal)
+            artifacts = () if exit_code != 0 else self._download_outputs(run.id, plan, artifact_dir)
             return StageResult(
                 execution=execution,
-                exit_code=int(terminal.exit_code),
-                diagnostic_code=str(terminal.diagnostic_code),
+                exit_code=exit_code,
+                diagnostic_code=_diagnostic_name(terminal),
                 artifacts=artifacts,
                 stdout_path=str(stdout_path),
                 stderr_path=str(stderr_path),
@@ -135,16 +131,15 @@ class AxernBackend:
             "RUN_STATUS_CANCELLED",
         }:
             return None
-        artifacts = (
-            () if int(run.exit_code) != 0 else self._download_outputs(run.id, plan, artifact_dir)
-        )
+        exit_code = _effective_exit_code(run)
+        artifacts = () if exit_code != 0 else self._download_outputs(run.id, plan, artifact_dir)
         stdout_path, stderr_path = self._capture_output(
             run.id, artifact_dir, follow=False, timeout=30.0
         )
         return StageResult(
             execution=ExecutionRef(plan.environment_id, run.id, run.allocation_id),
-            exit_code=int(run.exit_code),
-            diagnostic_code=str(run.diagnostic_code),
+            exit_code=exit_code,
+            diagnostic_code=_diagnostic_name(run),
             artifacts=artifacts,
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
@@ -258,6 +253,28 @@ def _wait_running(client: Any, run_id: str, *, timeout_seconds: float) -> Any:
 def _status_name(run: Any) -> str:
     status_field = run.DESCRIPTOR.fields_by_name["status"]
     return str(status_field.enum_type.values_by_number[int(run.status)].name)
+
+
+def _effective_exit_code(run: Any) -> int:
+    """Do not interpret an absent proto3 exit code as success on a failed Run."""
+    exit_code = int(run.exit_code)
+    try:
+        status = _status_name(run)
+    except AttributeError:
+        return exit_code
+    return 1 if status != "RUN_STATUS_SUCCEEDED" and exit_code == 0 else exit_code
+
+
+def _diagnostic_name(run: Any) -> str:
+    value = run.diagnostic_code
+    if isinstance(value, str):
+        return value
+    try:
+        field = run.DESCRIPTOR.fields_by_name["diagnostic_code"]
+        name = str(field.enum_type.values_by_number[int(value)].name)
+    except (AttributeError, KeyError):
+        return str(value)
+    return "" if name.endswith("_UNSPECIFIED") else name
 
 
 _TERMINAL_STATUSES = {

@@ -4,12 +4,13 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from axern_sdk import AxernClient
 
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
 from axrun.errors import ContractError
-from axrun.models import OutputSpec, ResourceSpec, StagePlan
+from axrun.models import ExecutionRef, OutputSpec, ResourceSpec, StagePlan
 
 
 def test_released_sdk_has_required_public_run_contract() -> None:
@@ -149,6 +150,35 @@ def test_transport_failure_after_launch_does_not_implicitly_cancel(
             on_bound=lambda _ref: None,
         )
     assert client.cancelled is False
+
+
+def test_recovery_normalizes_unset_exit_code_on_failed_run(tmp_path: Path, monkeypatch) -> None:
+    failed = SimpleNamespace(
+        id="run-failed",
+        allocation_id="alloc-failed",
+        exit_code=0,
+        diagnostic_code="WORKLOAD_DIAGNOSTIC_CODE_RUNTIME_START_ERROR",
+    )
+
+    class Client:
+        def get_run(self, _run_id):
+            return failed
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(backend_module, "_status_name", lambda _run: "RUN_STATUS_FAILED")
+    monkeypatch.setattr(
+        backend, "_download_outputs", lambda *_args, **_kwargs: pytest.fail("must not download")
+    )
+    monkeypatch.setattr(
+        backend, "_capture_output", lambda *_args, **_kwargs: (tmp_path / "out", tmp_path / "err")
+    )
+    result = backend.recover(
+        ExecutionRef("env", "run-failed", "alloc-failed"),
+        StagePlan("env", ("true",), "/workspace", (OutputSpec("/outputs/result"),)),
+        artifact_dir=tmp_path,
+    )
+    assert result is not None
+    assert result.exit_code == 1 and result.artifacts == ()
 
 
 def test_prestart_runs_after_allocation_binding_and_before_release(
