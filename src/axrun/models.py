@@ -282,6 +282,8 @@ class EpisodeRecord:
     inference: ExecutionRef | None = None
     candidate_manifest: str = ""
     candidate_digest: str = ""
+    trajectory_manifest: str = ""
+    trajectory_digest: str = ""
     verification: ExecutionRef | None = None
     verification_result: str = ""
     verification_result_digest: str = ""

@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from axrun.adapters._candidate import persist_candidate
+from axrun import cli
+from axrun.adapters._candidate import load_candidate, persist_candidate
 from axrun.errors import (
     ContractError,
     DiagnosedInfrastructureError,
@@ -29,6 +30,8 @@ from axrun.models import (
 )
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
+from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
+from axrun.trajectories.bundle import load_trajectory_bundle
 
 
 class FakeBackend:
@@ -36,8 +39,10 @@ class FakeBackend:
         self.executions: list[ExecutionRef] = []
         self.cancelled: list[str] = []
         self.resolved = resolved
+        self.plans: list[StagePlan] = []
 
     def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+        self.plans.append(plan)
         index = len(self.executions) + 1
         ref = ExecutionRef(plan.environment_id, f"run-{index}", f"alloc-{index}")
         self.executions.append(ref)
@@ -186,8 +191,101 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
     assert record.inference.run_id != record.verification.run_id
     assert f"/candidates/sha256/{record.candidate_digest}/" in record.candidate_manifest
     assert f"/sha256/{record.verification_result_digest}/" in record.verification_result
+    assert record.trajectory_manifest == "" and record.trajectory_digest == ""
     assert runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier()) == result
     assert len(backend.executions) == 2
+
+
+def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch(
+    tmp_path: Path,
+) -> None:
+    class TrajectoryInference(Inference):
+        def plan(self, episode):
+            return StagePlan(
+                episode.inference_environment_id,
+                ("agent",),
+                "/workspace",
+                (
+                    OutputSpec("/outputs/candidate.patch"),
+                    OutputSpec("/outputs/trajectory.jsonl", media_type="application/x-ndjson"),
+                    OutputSpec("/outputs/usage.json", media_type="application/json"),
+                ),
+            )
+
+    class TrajectoryBackend(FakeBackend):
+        def _result(self, plan, artifact_dir, ref):
+            if plan.labels.get("axrun.stage") == "verification" or plan.argv == ("verify",):
+                return super()._result(plan, artifact_dir, ref)
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            payloads = {
+                "/outputs/candidate.patch": b"patch",
+                "/outputs/trajectory.jsonl": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "sequence": 0,
+                        "event_id": "event-00000000",
+                        "timestamp": None,
+                        "kind": "session_start",
+                        "actor": "runtime",
+                        "turn_id": None,
+                        "parent_event_id": None,
+                        "model": "opaque-model",
+                        "data": {
+                            "harness": "claude-code",
+                            "harness_version": "2.1.205",
+                            "runtime_version": "2.1.205",
+                            "tools": [],
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n",
+                "/outputs/usage.json": (
+                    b'{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,'
+                    b'"input_tokens":0,"observations":0,"output_tokens":0,'
+                    b'"schema_version":1}\n'
+                ),
+            }
+            artifacts = []
+            for index, output in enumerate(plan.outputs):
+                path = artifact_dir / f"{index}.out"
+                payload = payloads[output.path]
+                path.write_bytes(payload)
+                artifacts.append(
+                    Artifact(
+                        output.path,
+                        str(path),
+                        len(payload),
+                        hashlib.sha256(payload).hexdigest(),
+                        output.media_type,
+                    )
+                )
+            return StageResult(ref, 0, "", tuple(artifacts))
+
+    backend = TrajectoryBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    result = runner.run(
+        episode(tmp_path, "with-trajectory"),
+        inference=TrajectoryInference(),
+        verifier=Verifier(),
+        trajectory=ClaudeCodeTrajectoryAdapter(),
+    )
+    assert result.verdict == "passed"
+    record = runner.inspect("with-trajectory")
+    bundle = load_trajectory_bundle(Path(record.trajectory_manifest))
+    assert bundle.digest == record.trajectory_digest and bundle.event_count == 1
+    candidate = load_candidate(Path(record.candidate_manifest))
+    assert [item.declared_path for item in candidate.files] == ["/outputs/candidate.patch"]
+    verification_plan = backend.plans[1]
+    assert "trajectory" not in repr(verification_plan)
+    assert "usage.json" not in repr(verification_plan)
+    exported = cli._export(store, "with-trajectory", tmp_path / "exported")
+    assert (exported / "candidate" / "candidate-manifest.json").is_file()
+    assert (exported / "trajectory" / "trajectory-manifest.json").is_file()
+    export_record = json.loads((exported / "export.json").read_text())
+    assert export_record["trajectory_digest"] == bundle.digest
 
 
 def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from axrun.adapters._candidate import load_candidate
-from axrun.adapters.base import InferenceAdapter, VerifierAdapter
+from axrun.adapters.base import InferenceAdapter, TrajectoryAdapter, VerifierAdapter
 from axrun.backend import ExecutionBackend
 from axrun.errors import (
     ContractError,
@@ -26,6 +26,7 @@ from axrun.models import (
     VerificationResult,
 )
 from axrun.store import EpisodeStore
+from axrun.trajectories.bundle import TrajectoryBundle
 
 
 class EpisodeRunner:
@@ -41,6 +42,7 @@ class EpisodeRunner:
         *,
         inference: InferenceAdapter,
         verifier: VerifierAdapter,
+        trajectory: TrajectoryAdapter | None = None,
         inference_lifecycle: PreStartLifecycle | None = None,
     ) -> VerificationResult:
         with self.store.lock(episode.episode_id):
@@ -64,14 +66,19 @@ class EpisodeRunner:
                 ),
                 lifecycle=inference_lifecycle,
             )
-            candidate = self._commit_candidate(episode, inference, stage)
+            candidate = self._commit_inference(episode, inference, trajectory, stage)
             return self._start_verification(episode, candidate, verifier)
         except Exception as exc:
             self._record_failure(episode.episode_id, exc)
             raise
 
     def recover(
-        self, episode_id: str, *, inference: InferenceAdapter, verifier: VerifierAdapter
+        self,
+        episode_id: str,
+        *,
+        inference: InferenceAdapter,
+        verifier: VerifierAdapter,
+        trajectory: TrajectoryAdapter | None = None,
     ) -> VerificationResult:
         with self.store.lock(episode_id):
             record = self._required_record(episode_id)
@@ -115,7 +122,7 @@ class EpisodeRunner:
                 )
             raise RecoveryRequiredError(f"{phase.value} Run is still active")
         if phase == EpisodePhase.INFERENCE_RUNNING:
-            candidate = self._commit_candidate(episode, inference, stage)
+            candidate = self._commit_inference(episode, inference, trajectory, stage)
             return self._start_verification(episode, candidate, verifier)
         return self._finish_verification(episode_id, stage, verifier)
 
@@ -125,6 +132,7 @@ class EpisodeRunner:
         *,
         inference: InferenceAdapter,
         verifier: VerifierAdapter,
+        trajectory: TrajectoryAdapter | None = None,
         timeout: float | None = None,
     ) -> VerificationResult:
         record = self._required_record(episode_id)
@@ -137,7 +145,9 @@ class EpisodeRunner:
         )
         if execution is not None:
             self.backend.wait(execution, timeout=timeout)
-        return self.recover(episode_id, inference=inference, verifier=verifier)
+        return self.recover(
+            episode_id, inference=inference, verifier=verifier, trajectory=trajectory
+        )
 
     def cancel(self, episode_id: str) -> EpisodeRecord:
         with self.store.lock(episode_id):
@@ -188,9 +198,15 @@ class EpisodeRunner:
             self.backend.cancel(execution)
         raise RecoveryRequiredError(f"episode no longer accepts {expected_phase.value} binding")
 
-    def _commit_candidate(
-        self, episode: ResolvedEpisode, adapter: InferenceAdapter, result: StageResult
+    def _commit_inference(
+        self,
+        episode: ResolvedEpisode,
+        adapter: InferenceAdapter,
+        trajectory_adapter: TrajectoryAdapter | None,
+        result: StageResult,
     ) -> CandidateBundle:
+        if bool(getattr(adapter, "requires_trajectory", False)) and trajectory_adapter is None:
+            raise ContractError("inference adapter requires a canonical trajectory adapter")
         if result.exit_code != 0:
             with self.store.lock(episode.episode_id):
                 record = self._required_record(episode.episode_id)
@@ -214,12 +230,22 @@ class EpisodeRunner:
             )
         candidate_dir = self.store.root / "candidates"
         candidate = adapter.build_candidate(episode, result, destination=candidate_dir)
+        trajectory: TrajectoryBundle | None = None
+        if trajectory_adapter is not None:
+            trajectory = trajectory_adapter.build_bundle(
+                episode,
+                result,
+                destination=self.store.root / "trajectories",
+            )
         with self.store.lock(episode.episode_id):
             record = self._required_record(episode.episode_id)
             self._require_execution(record, EpisodePhase.INFERENCE_RUNNING, result.execution)
             record.inference = result.execution
             record.candidate_manifest = str(Path(candidate.root) / "candidate-manifest.json")
             record.candidate_digest = candidate.digest
+            if trajectory is not None:
+                record.trajectory_manifest = str(Path(trajectory.root) / "trajectory-manifest.json")
+                record.trajectory_digest = trajectory.digest
             record.phase = EpisodePhase.CANDIDATE_READY
             record.diagnostic_code = ""
             record.message = ""

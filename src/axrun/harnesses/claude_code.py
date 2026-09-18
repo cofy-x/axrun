@@ -91,6 +91,7 @@ class ClaudeCodeHarness:
     version: str = _VERSION
     name: str = "claude-code"
     requires_live_model_connection: bool = True
+    requires_trajectory: bool = True
 
     def plan(self, episode: ResolvedEpisode) -> StagePlan:
         if episode.harness.identity != self.name or episode.harness.version != self.version:
@@ -109,9 +110,14 @@ class ClaudeCodeHarness:
         working_directory = _required_string(config, "working_directory")
         if not working_directory.startswith("/"):
             raise ContractError("Claude Code working_directory must be an absolute path")
-        normalizer = Path(__file__).parents[1] / "fixtures" / "claude" / "normalize_output.py"
-        if not normalizer.is_file():
-            raise ContractError("packaged Claude output normalizer is missing")
+        package_root = Path(__file__).parents[1]
+        runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
+        trajectory_schema = package_root / "trajectories" / "schema.py"
+        trajectory_policy = package_root / "trajectories" / "policy.py"
+        trajectory_adapter = package_root / "trajectories" / "adapters" / "claude_code.py"
+        for source in (runtime_init, trajectory_schema, trajectory_policy, trajectory_adapter):
+            if not source.is_file():
+                raise ContractError(f"packaged Claude trajectory runtime is missing: {source.name}")
         command = " ".join(
             (
                 shlex.quote(_CLAUDE),
@@ -134,8 +140,10 @@ class ClaudeCodeHarness:
                 "set -e",
                 canonical_patch_export(episode.base_commit, _PATCH),
                 'test "$patch_rc" -eq 0 || exit 125',
-                "python3 /opt/axrun/normalize-claude-output.py \\",
+                "PYTHONPATH=/opt/axrun python3 \\",
+                "  /opt/axrun/axrun/trajectories/adapters/claude_code.py \\",
                 "  --input /run/axrun/claude-raw.jsonl \\",
+                "  --prompt /inputs/prompt.txt \\",
                 f"  --trajectory {_TRAJECTORY} --usage {_USAGE} \\",
                 "  --redact-value axrun-local-tunnel",
                 'exit "$agent_rc"',
@@ -169,7 +177,15 @@ class ClaudeCodeHarness:
             cwd=working_directory,
             inputs=(
                 InputFile(episode.prompt_file, "/inputs/prompt.txt"),
-                InputFile(str(normalizer), "/opt/axrun/normalize-claude-output.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/__init__.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/trajectories/__init__.py"),
+                InputFile(str(runtime_init), "/opt/axrun/axrun/trajectories/adapters/__init__.py"),
+                InputFile(str(trajectory_schema), "/opt/axrun/axrun/trajectories/schema.py"),
+                InputFile(str(trajectory_policy), "/opt/axrun/axrun/trajectories/policy.py"),
+                InputFile(
+                    str(trajectory_adapter),
+                    "/opt/axrun/axrun/trajectories/adapters/claude_code.py",
+                ),
             ),
             outputs=(
                 OutputSpec(_PATCH, media_type="text/x-diff", max_bytes=16 << 20),
@@ -196,7 +212,7 @@ class ClaudeCodeHarness:
             episode,
             result,
             destination=destination,
-            required_paths=(_PATCH, _TRAJECTORY, _LOG, _USAGE),
+            required_paths=(_PATCH,),
             harness=self.name,
             harness_version=self.version,
         )

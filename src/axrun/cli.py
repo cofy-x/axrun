@@ -37,6 +37,8 @@ from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
+from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
+from axrun.trajectories.bundle import load_trajectory_bundle
 
 
 def _episode(path: Path) -> ResolvedEpisode:
@@ -84,6 +86,12 @@ def _is_string_array(value: object) -> bool:
     return isinstance(value, list) and all(
         isinstance(item, str) and bool(item) for item in cast(list[object], value)
     )
+
+
+def _trajectory_adapter(episode: ResolvedEpisode) -> ClaudeCodeTrajectoryAdapter | None:
+    if episode.harness.identity == "claude-code":
+        return ClaudeCodeTrajectoryAdapter(version=episode.harness.version)
+    return None
 
 
 def _client(args: argparse.Namespace) -> Any:
@@ -138,6 +146,8 @@ def _status(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         "phase": record.phase,
         "inference_run_id": record.inference.run_id if record.inference else "",
         "verification_run_id": record.verification.run_id if record.verification else "",
+        "trajectory_manifest": record.trajectory_manifest,
+        "trajectory_digest": record.trajectory_digest,
         "diagnostic_code": record.diagnostic_code,
         "message": record.message,
     }
@@ -154,6 +164,11 @@ def _export(store: EpisodeStore, episode_id: str, destination: Path) -> Path:
     if record.phase != EpisodePhase.COMPLETED:
         raise ContractError(f"episode is not complete: {record.phase.value}")
     candidate = load_candidate(Path(record.candidate_manifest))
+    trajectory = (
+        load_trajectory_bundle(Path(record.trajectory_manifest))
+        if record.trajectory_manifest
+        else None
+    )
     result = store.load_result(record.verification_result, record.verification_result_digest)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
@@ -161,6 +176,8 @@ def _export(store: EpisodeStore, episode_id: str, destination: Path) -> Path:
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
     try:
         shutil.copytree(Path(record.candidate_manifest).parent, temporary / "candidate")
+        if trajectory is not None:
+            shutil.copytree(Path(record.trajectory_manifest).parent, temporary / "trajectory")
         (temporary / "verification-result.json").write_text(
             json.dumps(asdict(result), sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
@@ -169,6 +186,7 @@ def _export(store: EpisodeStore, episode_id: str, destination: Path) -> Path:
                 {
                     "episode_id": episode_id,
                     "candidate_digest": candidate.digest,
+                    "trajectory_digest": trajectory.digest if trajectory is not None else "",
                     "verification_result_digest": record.verification_result_digest,
                 },
                 sort_keys=True,
@@ -357,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
                     episode,
                     inference=inference,
                     verifier=verifier,
+                    trajectory=_trajectory_adapter(episode),
                     inference_lifecycle=_model_lifecycle(args, client, episode),
                 )
             elif args.command == "cancel":
@@ -370,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
                         args.episode_id,
                         inference=inference,
                         verifier=verifier,
+                        trajectory=_trajectory_adapter(episode),
                         timeout=args.timeout,
                     )
                 else:

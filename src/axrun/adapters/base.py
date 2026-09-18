@@ -12,6 +12,7 @@ from axrun.models import (
     StageResult,
     VerificationResult,
 )
+from axrun.trajectories.bundle import TrajectoryBundle
 
 
 class InferenceAdapter(Protocol):
@@ -32,3 +33,9 @@ class VerifierAdapter(Protocol):
     def plan(self, episode: ResolvedEpisode, candidate: CandidateBundle) -> StagePlan: ...
 
     def parse_result(self, result: StageResult) -> VerificationResult: ...
+
+
+class TrajectoryAdapter(Protocol):
+    def build_bundle(
+        self, episode: ResolvedEpisode, result: StageResult, *, destination: Path
+    ) -> TrajectoryBundle: ...

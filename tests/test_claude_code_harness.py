@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -89,7 +87,8 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
         ),
         destination=tmp_path / "candidates",
     )
-    assert bundle.harness == "claude-code" and len(bundle.files) == 4
+    assert bundle.harness == "claude-code" and len(bundle.files) == 1
+    assert bundle.files[0].declared_path == "/outputs/candidate.patch"
 
 
 def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> None:
@@ -140,51 +139,3 @@ def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:
         harness=HarnessSpec("claude-code", "2.1.205", config=config),
     )
     assert ClaudeCodeHarness().plan(benchmark_episode).cwd == "/testbed"
-
-
-def test_claude_output_normalizer_redacts_auth_material_and_extracts_usage(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "raw.jsonl"
-    source.write_text(
-        json.dumps(
-            {
-                "type": "result",
-                "authorization": "Bearer secret",
-                "text": "contains local-placeholder",
-                "usage": {"input_tokens": 12, "output_tokens": 4},
-            }
-        )
-        + "\n"
-    )
-    trajectory = tmp_path / "trajectory.jsonl"
-    usage = tmp_path / "usage.json"
-    script = (
-        Path(__file__).parents[1] / "src" / "axrun" / "fixtures" / "claude" / "normalize_output.py"
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--input",
-            str(source),
-            "--trajectory",
-            str(trajectory),
-            "--usage",
-            str(usage),
-            "--redact-value",
-            "local-placeholder",
-        ],
-        check=True,
-    )
-    output = trajectory.read_text()
-    assert "Bearer secret" not in output and "local-placeholder" not in output
-    assert json.loads(output)["usage"] == {"input_tokens": 12, "output_tokens": 4}
-    assert json.loads(usage.read_text()) == {
-        "schema_version": 1,
-        "observations": 1,
-        "input_tokens": 12,
-        "output_tokens": 4,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-    }

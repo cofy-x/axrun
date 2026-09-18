@@ -66,6 +66,8 @@ class EpisodeStore:
             inference=_optional_execution(raw.get("inference")),
             candidate_manifest=str(raw.get("candidate_manifest", "")),
             candidate_digest=str(raw.get("candidate_digest", "")),
+            trajectory_manifest=str(raw.get("trajectory_manifest", "")),
+            trajectory_digest=str(raw.get("trajectory_digest", "")),
             verification=_optional_execution(raw.get("verification")),
             verification_result=str(raw.get("verification_result", "")),
             verification_result_digest=str(raw.get("verification_result_digest", "")),
