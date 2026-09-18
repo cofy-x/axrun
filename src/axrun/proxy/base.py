@@ -14,6 +14,14 @@ class ProtocolRequest:
     model: str
 
 
+@dataclass(frozen=True)
+class ModelPreflight:
+    path: str
+    headers: Mapping[str, str]
+    body: bytes
+    expected_status: int = 200
+
+
 class UsageCollector(Protocol):
     def feed(self, chunk: bytes) -> None: ...
 
@@ -36,10 +44,14 @@ class ModelProtocol(Protocol):
 
     def usage_collector(self, content_type: str) -> UsageCollector: ...
 
+    def preflight(self, model: str) -> ModelPreflight: ...
+
 
 class ModelProxyInstance(Protocol):
     @property
     def local_target(self) -> str: ...
+
+    def preflight(self, model: str) -> ModelPreflight: ...
 
     def start(self) -> None: ...
 

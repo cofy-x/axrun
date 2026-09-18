@@ -8,7 +8,7 @@ from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
 from axrun.errors import ContractError
-from axrun.proxy.base import ProtocolRequest, UsageCollector
+from axrun.proxy.base import ModelPreflight, ProtocolRequest, UsageCollector
 
 _PATHS: Final = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 _QUERIES: Final = frozenset({"", "beta=true"})
@@ -35,6 +35,28 @@ _USAGE_KEYS: Final = (
 
 class AnthropicProtocol:
     name = "anthropic"
+
+    def preflight(self, model: str) -> ModelPreflight:
+        if not model:
+            raise ContractError("Anthropic-compatible preflight requires a model")
+        body = json.dumps(
+            {
+                "model": model,
+                "max_tokens": 256,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "stream": False,
+            },
+            separators=(",", ":"),
+        ).encode()
+        return ModelPreflight(
+            path="/v1/messages",
+            headers={
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "x-api-key": "axrun-local-tunnel",
+            },
+            body=body,
+        )
 
     def prepare_request(
         self,

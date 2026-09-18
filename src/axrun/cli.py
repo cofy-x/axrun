@@ -113,7 +113,10 @@ def _model_lifecycle(
         credential=credential,
         protocol=AnthropicProtocol(),
     )
-    return ModelTunnelLifecycle(client=client, proxy=proxy)
+    model = episode.harness.config.get("model")
+    if not isinstance(model, str) or not model:
+        raise ContractError("Claude Code requires a non-empty model")
+    return ModelTunnelLifecycle(client=client, proxy=proxy, model=model)
 
 
 def _print(value: Any) -> None:

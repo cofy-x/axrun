@@ -7,6 +7,7 @@ import pytest
 from axrun.errors import InfrastructureError
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
 from axrun.models import ExecutionRef
+from axrun.proxy.base import ModelPreflight
 
 
 def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
@@ -21,6 +22,14 @@ def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
 
         def stop(self):
             events.append("proxy-stop")
+
+        def preflight(self, model):
+            events.append(("proxy-preflight", model))
+            return ModelPreflight(
+                path="/v1/messages",
+                headers={"content-type": "application/json"},
+                body=b'{"model":"test-model"}',
+            )
 
     class Client:
         def create_tunnel_session(self, **kwargs):
@@ -48,12 +57,16 @@ def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
             events.append(("connector-stop", timeout))
 
     class Allocation:
+        def write_file(self, path, body):
+            events.append(("preflight-body", path, body))
+
         def exec(self, command, **kwargs):
             events.append(("preflight", command, kwargs))
 
     lifecycle = ModelTunnelLifecycle(
         client=Client(),
         proxy=Proxy(),
+        model="test-model",
         connector_factory=Connector,
     )
     lifecycle.start(ExecutionRef("env", "run", "allocation-1"), Allocation())
@@ -65,9 +78,18 @@ def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
     assert events[2][0] == "connector"
     assert events[3] == "connector-start"
     assert events[4][0] == "preflight"
-    assert events[5][0] == "revoke"
-    assert events[6] == ("connector-stop", 5.0)
-    assert events[7:] == ["proxy-stop", "proxy-stop"]
+    assert events[5] == ("proxy-preflight", "test-model")
+    assert events[6] == (
+        "preflight-body",
+        "/run/axrun/model-preflight-body",
+        b'{"model":"test-model"}',
+    )
+    assert events[7][0] == "preflight"
+    assert "/v1/messages" in events[7][1]
+    assert b'{"model":"test-model"}' not in repr(events[7]).encode()
+    assert events[8][0] == "revoke"
+    assert events[9] == ("connector-stop", 5.0)
+    assert events[10:] == ["proxy-stop", "proxy-stop"]
     assert token not in repr(lifecycle)
 
 
@@ -82,6 +104,9 @@ def test_tunnel_lifecycle_does_not_echo_connector_token_on_failure() -> None:
 
         def stop(self):
             return None
+
+        def preflight(self, model):
+            raise AssertionError(f"unexpected preflight for {model}")
 
     class Client:
         def create_tunnel_session(self, **_kwargs):
@@ -99,7 +124,10 @@ def test_tunnel_lifecycle_does_not_echo_connector_token_on_failure() -> None:
         raise RuntimeError(f"bad connector token: {kwargs['client_token']}")
 
     lifecycle = ModelTunnelLifecycle(
-        client=Client(), proxy=Proxy(), connector_factory=broken_connector
+        client=Client(),
+        proxy=Proxy(),
+        model="test-model",
+        connector_factory=broken_connector,
     )
     with pytest.raises(InfrastructureError) as raised:
         lifecycle.start(ExecutionRef("env", "run", "allocation"), object())

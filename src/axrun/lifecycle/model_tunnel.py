@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -20,6 +21,7 @@ class ModelTunnelLifecycle:
         *,
         client: Any,
         proxy: ModelProxyInstance,
+        model: str,
         remote_port: int = 8765,
         ttl_seconds: float = 3600.0,
         ready_timeout_seconds: float = 60.0,
@@ -27,6 +29,7 @@ class ModelTunnelLifecycle:
     ) -> None:
         self._client = client
         self._proxy = proxy
+        self._model = model
         self._remote_port = remote_port
         self._ttl_seconds = ttl_seconds
         self._ready_timeout_seconds = ready_timeout_seconds
@@ -93,7 +96,7 @@ class ModelTunnelLifecycle:
     def _wait_for_preflight(self, allocation: Any, session: Any) -> None:
         bound_addr = str(session.bound_addr or f"127.0.0.1:{session.remote_port}")
         deadline = time.monotonic() + self._ready_timeout_seconds
-        command = [
+        health_command = [
             "python3",
             "-c",
             (
@@ -109,13 +112,45 @@ class ModelTunnelLifecycle:
                 raise InfrastructureError("model tunnel connector failed before preflight")
             try:
                 allocation.exec(
-                    command,
+                    health_command,
                     timeout_seconds=5,
                     check=True,
                     text=True,
                     rpc_timeout=10.0,
                 )
-                return
+                break
             except Exception:
                 time.sleep(0.25)
-        raise InfrastructureError("model tunnel did not pass Allocation preflight")
+        else:
+            raise InfrastructureError("model tunnel did not pass Allocation health preflight")
+
+        preflight = self._proxy.preflight(self._model)
+        body_path = "/run/axrun/model-preflight-body"
+        allocation.write_file(body_path, preflight.body)
+        command = [
+            "python3",
+            "-c",
+            (
+                "import json,pathlib,sys,urllib.request; "
+                "p=pathlib.Path(sys.argv[3]); data=p.read_bytes(); p.unlink(missing_ok=True); "
+                "r=urllib.request.urlopen(urllib.request.Request("
+                "'http://'+sys.argv[1]+sys.argv[2],data=data,"
+                "headers=json.loads(sys.argv[4]),method='POST'),timeout=30); "
+                "assert r.status==int(sys.argv[5]); r.read()"
+            ),
+            bound_addr,
+            preflight.path,
+            body_path,
+            json.dumps(dict(preflight.headers), sort_keys=True, separators=(",", ":")),
+            str(preflight.expected_status),
+        ]
+        try:
+            allocation.exec(
+                command,
+                timeout_seconds=35,
+                check=True,
+                text=True,
+                rpc_timeout=40.0,
+            )
+        except Exception as exc:
+            raise InfrastructureError("model tunnel did not pass model preflight") from exc

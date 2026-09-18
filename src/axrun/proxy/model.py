@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from axrun.errors import ContractError, InfrastructureError
-from axrun.proxy.base import ModelProtocol, ModelRequestSummary
+from axrun.proxy.base import ModelPreflight, ModelProtocol, ModelRequestSummary
 
 _RESPONSE_BLOCKED_HEADERS = {
     "connection",
@@ -86,6 +86,9 @@ class ModelProxy:
     def summaries(self) -> tuple[ModelRequestSummary, ...]:
         with self._summary_lock:
             return tuple(self._summaries)
+
+    def preflight(self, model: str) -> ModelPreflight:
+        return self._protocol.preflight(model)
 
     def start(self) -> None:
         if self._server is not None:

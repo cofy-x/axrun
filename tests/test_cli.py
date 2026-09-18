@@ -21,7 +21,9 @@ def test_model_credential_is_read_from_selected_caller_environment(
         model_credential_env="DEEPSEEK_API_KEY",
     )
     episode = SimpleNamespace(
-        harness=HarnessSpec(identity="claude-code", version="2.1.205", config={})
+        harness=HarnessSpec(
+            identity="claude-code", version="2.1.205", config={"model": "opaque-model"}
+        )
     )
 
     lifecycle = cli._model_lifecycle(  # pyright: ignore[reportPrivateUsage]
@@ -42,7 +44,9 @@ def test_missing_selected_model_credential_names_variable_not_value(
         model_credential_env="DEEPSEEK_API_KEY",
     )
     episode = SimpleNamespace(
-        harness=HarnessSpec(identity="claude-code", version="2.1.205", config={})
+        harness=HarnessSpec(
+            identity="claude-code", version="2.1.205", config={"model": "opaque-model"}
+        )
     )
 
     with pytest.raises(ContractError, match="credential in DEEPSEEK_API_KEY"):

@@ -46,6 +46,15 @@ def test_model_proxy_health_is_local_and_credentials_are_not_observable() -> Non
         protocol=AnthropicProtocol(),
     )
     proxy.start()
+    preflight = proxy.preflight("opaque[1m]")
+    assert preflight.path == "/v1/messages"
+    assert json.loads(preflight.body) == {
+        "model": "opaque[1m]",
+        "max_tokens": 256,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+        "stream": False,
+    }
+    assert preflight.headers["x-api-key"] == "axrun-local-tunnel"
     proxy_host, proxy_port = proxy.local_target.split(":")
     connection = http.client.HTTPConnection(proxy_host, int(proxy_port), timeout=2)
     try:
