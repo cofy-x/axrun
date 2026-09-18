@@ -3,13 +3,17 @@
   "dataset_identity": "axrun.synthetic.code-task",
   "dataset_version": "1",
   "task_id": "add-one",
-  "base_commit": "60dd887fd78561f03d8ca215e97de77048e93627",
+  "base_commit": "69b31ae17c45d731fd5b6fa43660c05aea4a9027",
   "problem_statement_file": "problem.txt",
   "task_image": {
     "dockerfile": "Dockerfile",
     "platforms": ["linux/amd64", "linux/arm64"],
     "reference": "axrun-synthetic-code-task:1",
     "sources": [
+      {
+        "path": "repository/.gitignore",
+        "sha256": "6feaded4e28ea86e001a6751b4e3d960e8b7c31b9616ff9936b79297086e809b"
+      },
       {
         "path": "repository/calculator.py",
         "sha256": "e920f1b66dc7e6fc5ac03d8f84b56ae2550301a59a1bcabde21a91e3e836d582"

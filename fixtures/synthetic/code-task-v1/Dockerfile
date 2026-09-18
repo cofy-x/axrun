@@ -29,6 +29,6 @@ RUN set -eux; \
     GIT_AUTHOR_DATE='2000-01-01T00:00:00+00:00' \
     GIT_COMMITTER_DATE='2000-01-01T00:00:00+00:00' \
       git commit -q -m 'synthetic base'; \
-    test "$(git rev-parse HEAD)" = 60dd887fd78561f03d8ca215e97de77048e93627
+    test "$(git rev-parse HEAD)" = 69b31ae17c45d731fd5b6fa43660c05aea4a9027
 
 WORKDIR /workspace

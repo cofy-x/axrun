@@ -7,6 +7,9 @@ The image owns:
 - Python 3 and Git;
 - the repository at `/workspace`;
 - the clean base commit declared by `row.json`.
+- the repository's own `.gitignore`, including Python bytecode and cache exclusions.
+
+Workspace ignore policy belongs to the immutable task seed. Harnesses continue to export every tracked or untracked change recognized by Git and do not embed language- or benchmark-specific artifact filters.
 
 Build the task image for the target Axern node. The mirror arguments are optional build-time transport choices and are not embedded as private infrastructure defaults:
 
