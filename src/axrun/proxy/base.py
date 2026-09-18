@@ -57,3 +57,4 @@ class ModelRequestSummary:
     latency_ms: int
     model: str
     usage: Mapping[str, int]
+    reason_code: str

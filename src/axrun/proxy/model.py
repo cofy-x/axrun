@@ -140,7 +140,6 @@ class ModelProxy:
         self._credential = ""
 
     def _proxy(self, handler: BaseHTTPRequestHandler) -> None:
-        path = urlsplit(handler.path).path
         raw_length = handler.headers.get("content-length")
         if raw_length is None:
             handler.send_error(411)
@@ -157,6 +156,7 @@ class ModelProxy:
         if len(body) != request_bytes:
             handler.send_error(400)
             return
+        started = time.monotonic()
         try:
             request = self._protocol.prepare_request(
                 method="POST",
@@ -167,6 +167,20 @@ class ModelProxy:
             )
         except ContractError:
             handler.send_error(404)
+            self._record_summary(
+                ModelRequestSummary(
+                    method="POST",
+                    protocol=self._protocol.name,
+                    path="",
+                    status=404,
+                    request_bytes=request_bytes,
+                    response_bytes=0,
+                    latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+                    model="",
+                    usage={},
+                    reason_code="proxy_protocol_rejected",
+                )
+            )
             return
         base_path = self._upstream.path.rstrip("/")
         upstream_path = (
@@ -186,8 +200,8 @@ class ModelProxy:
         response_bytes = 0
         status = 502
         headers_sent = False
-        started = time.monotonic()
         collector = self._protocol.usage_collector("")
+        reason_code = "proxy_upstream_error"
         try:
             connection.request("POST", upstream_path, body=body, headers=dict(request.headers))
             response = connection.getresponse()
@@ -195,6 +209,7 @@ class ModelProxy:
             if connection.sock is not None:
                 connection.sock.settimeout(self._read_timeout_seconds)
             status = response.status
+            reason_code = "upstream_response"
             content_length = response.getheader("content-length")
             if content_length is not None and int(content_length) > self._max_response_bytes:
                 raise InfrastructureError("model upstream response exceeds byte bound")
@@ -223,17 +238,21 @@ class ModelProxy:
                     handler.send_error(502)
         finally:
             connection.close()
-            with self._summary_lock:
-                self._summaries.append(
-                    ModelRequestSummary(
-                        method="POST",
-                        protocol=self._protocol.name,
-                        path=path,
-                        status=status,
-                        request_bytes=request_bytes,
-                        response_bytes=response_bytes,
-                        latency_ms=max(0, round((time.monotonic() - started) * 1000)),
-                        model=request.model,
-                        usage=collector.finish(),
-                    )
+            self._record_summary(
+                ModelRequestSummary(
+                    method="POST",
+                    protocol=self._protocol.name,
+                    path=request.upstream_path,
+                    status=status,
+                    request_bytes=request_bytes,
+                    response_bytes=response_bytes,
+                    latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+                    model=request.model,
+                    usage=collector.finish(),
+                    reason_code=reason_code,
                 )
+            )
+
+    def _record_summary(self, summary: ModelRequestSummary) -> None:
+        with self._summary_lock:
+            self._summaries.append(summary)

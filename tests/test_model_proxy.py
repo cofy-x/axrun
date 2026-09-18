@@ -56,7 +56,7 @@ def test_model_proxy_health_is_local_and_credentials_are_not_observable() -> Non
 
         connection.request(
             "POST",
-            "/v1/messages",
+            "/v1/messages?beta=true",
             body=b'{"model":"test"}',
             headers={
                 "content-type": "application/json",
@@ -76,13 +76,83 @@ def test_model_proxy_health_is_local_and_credentials_are_not_observable() -> Non
         upstream.server_close()
         thread.join(timeout=2)
 
-    assert upstream_requests == [("/v1/messages", credential, "", "", b'{"model":"test"}')]
+    assert upstream_requests == [
+        ("/v1/messages?beta=true", credential, "", "", b'{"model":"test"}')
+    ]
     assert credential not in repr(proxy)
     assert credential not in repr(proxy.summaries)
     assert "sandbox-value" not in repr(proxy.summaries)
     assert proxy.summaries[0].protocol == "anthropic"
     assert proxy.summaries[0].model == "test"
     assert proxy.summaries[0].usage == {"input_tokens": 3, "output_tokens": 2}
+    assert proxy.summaries[0].reason_code == "upstream_response"
+
+
+def test_anthropic_proxy_forwards_only_closed_beta_query_paths() -> None:
+    upstream_paths: list[str] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            upstream_paths.append(self.path)
+            length = int(self.headers["content-length"])
+            self.rfile.read(length)
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    host, port = upstream.server_address[:2]
+    proxy = ModelProxy(
+        upstream_url=f"http://{host}:{port}",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+    )
+    proxy.start()
+    proxy_host, proxy_port = proxy.local_target.split(":")
+    connection = http.client.HTTPConnection(proxy_host, int(proxy_port), timeout=2)
+    try:
+        allowed_paths = (
+            "/v1/messages",
+            "/v1/messages?beta=true",
+            "/v1/messages/count_tokens",
+            "/v1/messages/count_tokens?beta=true",
+        )
+        for path in allowed_paths:
+            connection.request("POST", path, body=b'{"model":"opaque[1m]"}')
+            response = connection.getresponse()
+            assert response.status == 200
+            response.read()
+        connection.request("POST", "/v1/messages?beta=false", body=b'{"secret":"body"}')
+        rejected = connection.getresponse()
+        assert rejected.status == 404
+        rejected.read()
+    finally:
+        connection.close()
+        proxy.stop()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=2)
+
+    assert upstream_paths == [
+        "/v1/messages",
+        "/v1/messages?beta=true",
+        "/v1/messages/count_tokens",
+        "/v1/messages/count_tokens?beta=true",
+    ]
+    assert [summary.path for summary in proxy.summaries[:4]] == upstream_paths
+    rejected_summary = proxy.summaries[4]
+    assert rejected_summary.reason_code == "proxy_protocol_rejected"
+    assert rejected_summary.status == 404 and rejected_summary.path == ""
+    assert "secret" not in repr(rejected_summary)
+    assert "caller-secret" not in repr(proxy.summaries)
 
 
 def test_model_proxy_rejects_oversized_request_without_upstream_call() -> None:

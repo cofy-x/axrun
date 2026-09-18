@@ -11,6 +11,7 @@ from axrun.errors import ContractError
 from axrun.proxy.base import ProtocolRequest, UsageCollector
 
 _PATHS: Final = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
+_QUERIES: Final = frozenset({"", "beta=true"})
 _HOP_BY_HOP: Final = frozenset(
     {
         "connection",
@@ -45,7 +46,12 @@ class AnthropicProtocol:
         credential: str,
     ) -> ProtocolRequest:
         parsed = urlsplit(path)
-        if method != "POST" or parsed.path not in _PATHS or parsed.query or parsed.fragment:
+        if (
+            method != "POST"
+            or parsed.path not in _PATHS
+            or parsed.query not in _QUERIES
+            or parsed.fragment
+        ):
             raise ContractError("unsupported Anthropic-compatible request path")
         headers = {
             key: value
@@ -62,7 +68,10 @@ class AnthropicProtocol:
                 model = raw_model if isinstance(raw_model, str) else ""
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
-        return ProtocolRequest(parsed.path, headers, model)
+        upstream_path = parsed.path
+        if parsed.query:
+            upstream_path = f"{upstream_path}?{parsed.query}"
+        return ProtocolRequest(upstream_path, headers, model)
 
     def usage_collector(self, content_type: str) -> UsageCollector:
         return _AnthropicUsageCollector(is_stream="text/event-stream" in content_type.lower())
