@@ -288,6 +288,34 @@ def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch
     assert export_record["trajectory_digest"] == bundle.digest
 
 
+def test_trajectory_contract_failure_is_infrastructure_failure_without_verification(
+    tmp_path: Path,
+) -> None:
+    class RequiredTrajectoryInference(Inference):
+        requires_trajectory = True
+
+    class RejectingTrajectoryAdapter:
+        def build_bundle(self, episode, result, *, destination):
+            raise ContractError("canonical trajectory rejected")
+
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="canonical trajectory rejected"):
+        runner.run(
+            episode(tmp_path, "trajectory-contract-failure"),
+            inference=RequiredTrajectoryInference(),
+            verifier=Verifier(),
+            trajectory=RejectingTrajectoryAdapter(),
+        )
+    record = runner.inspect("trajectory-contract-failure")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.diagnostic_code == "AXRUN_STAGE_FAILED"
+    assert record.candidate_manifest == "" and record.candidate_digest == ""
+    assert record.trajectory_manifest == "" and record.trajectory_digest == ""
+    assert record.verification is None and record.verification_result == ""
+    assert len(backend.executions) == 1
+
+
 def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:
     value = episode(tmp_path, "recover")
     store = EpisodeStore(tmp_path / "state")

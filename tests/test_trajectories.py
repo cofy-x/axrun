@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 import axrun.trajectories.bundle as bundle_module
-from axrun.errors import ContractError
+from axrun.errors import ContractError, InfrastructureError
 from axrun.models import (
     Artifact,
     ExecutionRef,
@@ -36,6 +36,7 @@ from axrun.trajectories.schema import (
 THINKING_MARKER = "RAW-THINKING-MARKER-MUST-DISAPPEAR"
 SIGNATURE_MARKER = "RAW-SIGNATURE-MARKER-MUST-DISAPPEAR"
 SECRET_MARKER = "CREDENTIAL-HEADER-MARKER-MUST-DISAPPEAR"
+FIXTURES = Path(__file__).parent / "fixtures" / "claude-code-2.1.205"
 
 
 def _native_events() -> list[dict[str, Any]]:
@@ -279,6 +280,103 @@ def test_claude_visible_user_message_and_failed_result_mapping(tmp_path: Path) -
     }
 
 
+@pytest.mark.parametrize("case_name", ["success", "error"])
+def test_claude_2_1_205_compatibility_fixture_matches_golden_bytes(
+    tmp_path: Path, case_name: str
+) -> None:
+    outputs: list[tuple[bytes, bytes]] = []
+    for iteration in range(2):
+        root = tmp_path / str(iteration)
+        root.mkdir()
+        trajectory = root / "trajectory.jsonl"
+        usage = root / "usage.json"
+        normalize_claude_stream(
+            FIXTURES / f"{case_name}.native.jsonl",
+            FIXTURES / f"{case_name}.prompt.txt",
+            trajectory,
+            usage,
+            secrets=(SECRET_MARKER,),
+        )
+        outputs.append((trajectory.read_bytes(), usage.read_bytes()))
+    assert outputs[0] == outputs[1]
+    assert outputs[0][0] == (FIXTURES / f"{case_name}.canonical.jsonl").read_bytes()
+    assert outputs[0][1] == (FIXTURES / f"{case_name}.usage.json").read_bytes()
+    for marker in (THINKING_MARKER, SIGNATURE_MARKER, SECRET_MARKER):
+        assert marker.encode() not in outputs[0][0]
+
+
+def test_claude_native_invalid_json_and_unknown_event_fail_closed(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("task")
+    for name, payload, message in (
+        ("invalid", b"{not-json}\n", "invalid JSON"),
+        (
+            "unknown",
+            b'{"type":"system","subtype":"init","claude_code_version":"2.1.205",'
+            b'"model":"opaque","tools":[]}\n{"type":"future_event"}\n',
+            "unsupported Claude native event type",
+        ),
+    ):
+        native = tmp_path / f"{name}.jsonl"
+        native.write_bytes(payload)
+        with pytest.raises(TrajectoryContractError, match=message):
+            normalize_claude_stream(
+                native,
+                prompt,
+                tmp_path / f"{name}.trajectory.jsonl",
+                tmp_path / f"{name}.usage.json",
+            )
+
+
+def test_relationship_and_context_failures_are_explicit(tmp_path: Path) -> None:
+    events, _, _, _ = _normalize(tmp_path / "canonical")
+    with pytest.raises(TrajectoryContractError, match="unknown trajectory actor"):
+        replace(events[1], actor="provider")
+    with pytest.raises(TrajectoryContractError, match="context content digest mismatch"):
+        replace(events[1], data={**events[1].data, "content_sha256": "0" * 64})
+    tool_result = next(event for event in events if event.kind == "tool_result")
+    missing_call = replace(
+        tool_result,
+        sequence=1,
+        event_id="event-00000001",
+        parent_event_id="event-00000000",
+    )
+    with pytest.raises(TrajectoryContractError, match="earlier tool_call"):
+        validate_trajectory((events[0], missing_call))
+
+    native = tmp_path / "missing-subagent.jsonl"
+    prompt = tmp_path / "missing-subagent-prompt.txt"
+    _write_native(
+        native,
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "claude_code_version": "2.1.205",
+                "model": "opaque",
+                "tools": [],
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "id": "subagent",
+                    "model": "opaque",
+                    "content": [{"type": "text", "text": "visible"}],
+                },
+                "parent_tool_use_id": "missing-call",
+            },
+        ],
+    )
+    prompt.write_text("task")
+    with pytest.raises(TrajectoryContractError, match="subagent parent"):
+        normalize_claude_stream(
+            native,
+            prompt,
+            tmp_path / "missing-subagent-trajectory.jsonl",
+            tmp_path / "missing-subagent-usage.json",
+        )
+
+
 def test_trajectory_limits_fail_closed(tmp_path: Path) -> None:
     base = TrajectoryLimits()
     with pytest.raises(ValueError, match="input bound"):
@@ -356,11 +454,101 @@ def test_trajectory_bundle_is_atomic_content_addressed_and_detects_tampering(
         ).digest
         == bundle.digest
     )
+    original_manifest = manifest.read_text()
+    manifest_value = json.loads(original_manifest)
+    manifest_value["harness_version"] = "tampered"
+    manifest.write_text(json.dumps(manifest_value))
+    with pytest.raises(ContractError, match="manifest digest mismatch"):
+        load_trajectory_bundle(manifest)
+    manifest.write_text(original_manifest)
     (Path(bundle.root) / "usage.json").write_text("{}\n")
     with pytest.raises(ContractError, match="integrity"):
         load_trajectory_bundle(manifest)
     with pytest.raises(ContractError, match="safe filename"):
         TrajectoryArtifact("../trajectory.jsonl", 1, "a" * 64)
+
+
+@pytest.mark.parametrize("missing_path", ["/outputs/trajectory.jsonl", "/outputs/usage.json"])
+def test_trajectory_bundle_requires_both_sealed_outputs(tmp_path: Path, missing_path: str) -> None:
+    _, trajectory, usage, _ = _normalize(tmp_path / "missing-output")
+    artifacts = [
+        _artifact("/outputs/trajectory.jsonl", trajectory, "application/x-ndjson"),
+        _artifact("/outputs/usage.json", usage, "application/json"),
+    ]
+    result = StageResult(
+        ExecutionRef("env-i", "run-missing", "alloc-missing"),
+        0,
+        "",
+        tuple(item for item in artifacts if item.name != missing_path),
+    )
+    with pytest.raises(ContractError, match="required sealed output is missing"):
+        persist_trajectory_bundle(
+            _episode(tmp_path),
+            result,
+            destination=tmp_path / "missing-bundles",
+            trajectory_path="/outputs/trajectory.jsonl",
+            usage_path="/outputs/usage.json",
+            harness="claude-code",
+            harness_version="2.1.205",
+        )
+
+
+def test_trajectory_bundle_rejects_sealed_metadata_mismatch_and_source_symlink(
+    tmp_path: Path,
+) -> None:
+    _, trajectory, usage, _ = _normalize(tmp_path / "sealed-integrity")
+    valid_usage = _artifact("/outputs/usage.json", usage, "application/json")
+    bad_trajectory = Artifact(
+        "/outputs/trajectory.jsonl",
+        str(trajectory),
+        trajectory.stat().st_size + 1,
+        "0" * 64,
+        "application/x-ndjson",
+    )
+    result = StageResult(
+        ExecutionRef("env-i", "run-mismatch", "alloc-mismatch"),
+        0,
+        "",
+        (bad_trajectory, valid_usage),
+    )
+    with pytest.raises(InfrastructureError, match="integrity verification failed"):
+        persist_trajectory_bundle(
+            _episode(tmp_path),
+            result,
+            destination=tmp_path / "mismatch-bundles",
+            trajectory_path="/outputs/trajectory.jsonl",
+            usage_path="/outputs/usage.json",
+            harness="claude-code",
+            harness_version="2.1.205",
+        )
+
+    link = tmp_path / "trajectory-link.jsonl"
+    link.symlink_to(trajectory)
+    symlink_result = StageResult(
+        ExecutionRef("env-i", "run-symlink", "alloc-symlink"),
+        0,
+        "",
+        (
+            Artifact(
+                "/outputs/trajectory.jsonl",
+                str(link),
+                trajectory.stat().st_size,
+                hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+                "application/x-ndjson",
+            ),
+            valid_usage,
+        ),
+    )
+    with pytest.raises(InfrastructureError, match="regular file"):
+        persist_trajectory_bundle(
+            _episode(tmp_path),
+            symlink_result,
+            destination=tmp_path / "symlink-bundles",
+            trajectory_path="/outputs/trajectory.jsonl",
+            usage_path="/outputs/usage.json",
+            harness="claude-code",
+            harness_version="2.1.205",
+        )
 
 
 def test_trajectory_bundle_rejects_symlink_manifest(tmp_path: Path) -> None:
@@ -402,6 +590,7 @@ def test_trajectory_bundle_crash_before_atomic_publish_leaves_no_manifest(
             harness_version="2.1.205",
         )
     assert not list(destination.glob("sha256/*/trajectory-manifest.json"))
+    assert not list(destination.glob("sha256/.trajectory.*"))
 
 
 def test_claude_trajectory_adapter_builds_bundle_from_sealed_outputs(tmp_path: Path) -> None:

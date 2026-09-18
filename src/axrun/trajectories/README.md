@@ -17,3 +17,8 @@ here.
 TrajectoryBundle is not a verifier input. It contains only `trajectory.jsonl`, `usage.json`, and a
 content-addressed manifest. CandidateBundle independently contains the code patch. The runner
 persists only each bundle's manifest path and digest, and export keeps the two directories separate.
+
+The checked-in `tests/fixtures/claude-code-2.1.205/` native streams and golden canonical files pin
+the adapter compatibility boundary to Claude Code 2.1.205. They are artificial and contain no
+captured model traffic or credentials. A Claude Code upgrade must deliberately update the adapter,
+version, and fixtures; it must not silently change `axrun.trajectory@1` semantics.
