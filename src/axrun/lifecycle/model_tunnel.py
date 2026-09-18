@@ -1,4 +1,4 @@
-"""Allocation-scoped Axern tunnel lifecycle for the caller-side model gateway."""
+"""Allocation-scoped Axern tunnel lifecycle for a caller-side model proxy."""
 
 from __future__ import annotations
 
@@ -8,25 +8,25 @@ from contextlib import suppress
 from typing import Any
 
 from axrun.errors import InfrastructureError
-from axrun.model_gateway import ModelGateway
 from axrun.models import ExecutionRef
+from axrun.proxy.base import ModelProxyInstance
 
 
-class AxernTunnelLifecycle:
+class ModelTunnelLifecycle:
     """Keep tunnel credentials ephemeral and release the stage only after preflight."""
 
     def __init__(
         self,
         *,
         client: Any,
-        gateway: ModelGateway,
+        proxy: ModelProxyInstance,
         remote_port: int = 8765,
         ttl_seconds: float = 3600.0,
         ready_timeout_seconds: float = 60.0,
         connector_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._client = client
-        self._gateway = gateway
+        self._proxy = proxy
         self._remote_port = remote_port
         self._ttl_seconds = ttl_seconds
         self._ready_timeout_seconds = ready_timeout_seconds
@@ -36,7 +36,7 @@ class AxernTunnelLifecycle:
 
     def __repr__(self) -> str:
         return (
-            f"AxernTunnelLifecycle(remote_port={self._remote_port}, "
+            f"ModelTunnelLifecycle(remote_port={self._remote_port}, "
             f"active={bool(self._session_id)})"
         )
 
@@ -45,7 +45,7 @@ class AxernTunnelLifecycle:
             raise InfrastructureError("Allocation identity must be persisted before tunnel setup")
         if self._connector is not None:
             raise InfrastructureError("tunnel lifecycle has already started")
-        self._gateway.start()
+        self._proxy.start()
         try:
             response = self._client.create_tunnel_session(
                 allocation_id=execution.allocation_id,
@@ -65,13 +65,15 @@ class AxernTunnelLifecycle:
                 client=self._client,
                 session=response.session,
                 client_token=response.client_token,
-                local_target=self._gateway.local_target,
+                local_target=self._proxy.local_target,
             )
             self._connector = connector
             connector.start()
             self._wait_for_preflight(allocation, response.session)
-        except BaseException:
+        except BaseException as exc:
             self.close()
+            if isinstance(exc, Exception):
+                raise InfrastructureError("model Tunnel setup or preflight failed") from None
             raise
 
     def close(self) -> None:
@@ -86,7 +88,7 @@ class AxernTunnelLifecycle:
         if connector is not None:
             with suppress(Exception):
                 connector.stop(timeout=5.0)
-        self._gateway.stop()
+        self._proxy.stop()
 
     def _wait_for_preflight(self, allocation: Any, session: Any) -> None:
         bound_addr = str(session.bound_addr or f"127.0.0.1:{session.remote_port}")

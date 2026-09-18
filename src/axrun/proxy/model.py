@@ -1,56 +1,46 @@
-"""Bounded loopback gateway for an Anthropic-compatible model endpoint."""
+"""Bounded, short-lived loopback proxy for one inference stage."""
 
 from __future__ import annotations
 
 import http.client
 import threading
-from collections.abc import Mapping
+import time
 from contextlib import suppress
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final
 from urllib.parse import urlsplit
 
 from axrun.errors import ContractError, InfrastructureError
+from axrun.proxy.base import ModelProtocol, ModelRequestSummary
 
-_HOP_BY_HOP: Final = frozenset(
-    {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    }
-)
-_SENSITIVE: Final = frozenset({"authorization", "cookie", "proxy-authorization", "x-api-key"})
-_MODEL_PATHS: Final = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
-
-
-@dataclass(frozen=True)
-class GatewayRequestSummary:
-    method: str
-    path: str
-    status: int
-    request_bytes: int
-    response_bytes: int
+_RESPONSE_BLOCKED_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "set-cookie",
+}
 
 
-class ModelGateway:
-    """A loopback-only proxy that injects the upstream credential in memory."""
+class ModelProxy:
+    """A loopback-only per-stage proxy that injects credentials in memory."""
 
     def __init__(
         self,
         *,
         upstream_url: str,
-        api_key: str,
+        credential: str,
+        protocol: ModelProtocol,
         connect_timeout_seconds: float = 10.0,
+        request_read_timeout_seconds: float = 10.0,
         read_timeout_seconds: float = 300.0,
         max_request_bytes: int = 16 << 20,
         max_response_bytes: int = 64 << 20,
-        upstream_headers: Mapping[str, str] | None = None,
+        max_concurrent_requests: int = 8,
     ) -> None:
         parsed = urlsplit(upstream_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -59,27 +49,28 @@ class ModelGateway:
             raise ContractError(
                 "model upstream URL must not contain credentials, query, or fragment"
             )
-        if not api_key:
-            raise ContractError("model gateway API key is required")
-        if min(max_request_bytes, max_response_bytes) <= 0:
-            raise ContractError("model gateway byte bounds must be positive")
+        if not credential:
+            raise ContractError("model proxy credential is required")
+        if min(max_request_bytes, max_response_bytes, max_concurrent_requests) <= 0:
+            raise ContractError("model proxy byte bounds must be positive")
         self._upstream = parsed
-        self._api_key = api_key
+        self._credential = credential
+        self._protocol = protocol
         self._connect_timeout_seconds = connect_timeout_seconds
+        self._request_read_timeout_seconds = request_read_timeout_seconds
         self._read_timeout_seconds = read_timeout_seconds
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
-        self._upstream_headers = dict(upstream_headers or {})
-        if any(key.lower() in _SENSITIVE for key in self._upstream_headers):
-            raise ContractError("upstream_headers must not contain credentials")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        self._summaries: list[GatewayRequestSummary] = []
+        self._summaries: list[ModelRequestSummary] = []
         self._summary_lock = threading.Lock()
+        self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
 
     def __repr__(self) -> str:
         return (
-            f"ModelGateway(upstream={self._upstream.scheme}://{self._upstream.hostname}, "
+            f"ModelProxy(protocol={self._protocol.name}, "
+            f"upstream={self._upstream.scheme}://{self._upstream.hostname}, "
             f"running={self._server is not None})"
         )
 
@@ -87,19 +78,19 @@ class ModelGateway:
     def local_target(self) -> str:
         server = self._server
         if server is None:
-            raise InfrastructureError("model gateway is not running")
+            raise InfrastructureError("model proxy is not running")
         host, port = server.server_address[:2]
         return f"{host}:{port}"
 
     @property
-    def summaries(self) -> tuple[GatewayRequestSummary, ...]:
+    def summaries(self) -> tuple[ModelRequestSummary, ...]:
         with self._summary_lock:
             return tuple(self._summaries)
 
     def start(self) -> None:
         if self._server is not None:
             return
-        gateway = self
+        proxy = self
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -116,7 +107,14 @@ class ModelGateway:
                 self.wfile.write(body)
 
             def do_POST(self) -> None:
-                gateway._proxy(self)
+                self.connection.settimeout(proxy._request_read_timeout_seconds)
+                if not proxy._request_slots.acquire(blocking=False):
+                    self.send_error(503)
+                    return
+                try:
+                    proxy._proxy(self)
+                finally:
+                    proxy._request_slots.release()
 
             def log_message(self, format: str, *args: object) -> None:
                 return
@@ -124,7 +122,7 @@ class ModelGateway:
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.daemon_threads = True
         thread = threading.Thread(
-            target=server.serve_forever, name="axrun-model-gateway", daemon=True
+            target=server.serve_forever, name="axrun-model-proxy", daemon=True
         )
         self._server = server
         self._thread = thread
@@ -139,13 +137,10 @@ class ModelGateway:
             server.server_close()
         if thread is not None:
             thread.join(timeout=5.0)
-        self._api_key = ""
+        self._credential = ""
 
     def _proxy(self, handler: BaseHTTPRequestHandler) -> None:
         path = urlsplit(handler.path).path
-        if path not in _MODEL_PATHS or handler.path != path:
-            handler.send_error(404)
-            return
         raw_length = handler.headers.get("content-length")
         if raw_length is None:
             handler.send_error(411)
@@ -159,16 +154,24 @@ class ModelGateway:
             handler.send_error(413)
             return
         body = handler.rfile.read(request_bytes)
-        headers = {
-            key: value
-            for key, value in handler.headers.items()
-            if key.lower() not in _HOP_BY_HOP | _SENSITIVE | {"host", "content-length"}
-        }
-        headers.update(self._upstream_headers)
-        headers["x-api-key"] = self._api_key
-        headers["content-length"] = str(len(body))
+        if len(body) != request_bytes:
+            handler.send_error(400)
+            return
+        try:
+            request = self._protocol.prepare_request(
+                method="POST",
+                path=handler.path,
+                incoming_headers=dict(handler.headers.items()),
+                body=body,
+                credential=self._credential,
+            )
+        except ContractError:
+            handler.send_error(404)
+            return
         base_path = self._upstream.path.rstrip("/")
-        upstream_path = f"{base_path}{path}" if base_path else path
+        upstream_path = (
+            f"{base_path}{request.upstream_path}" if base_path else request.upstream_path
+        )
         hostname = self._upstream.hostname
         assert hostname is not None
         port = self._upstream.port or (443 if self._upstream.scheme == "https" else 80)
@@ -183,9 +186,12 @@ class ModelGateway:
         response_bytes = 0
         status = 502
         headers_sent = False
+        started = time.monotonic()
+        collector = self._protocol.usage_collector("")
         try:
-            connection.request("POST", upstream_path, body=body, headers=headers)
+            connection.request("POST", upstream_path, body=body, headers=dict(request.headers))
             response = connection.getresponse()
+            collector = self._protocol.usage_collector(response.getheader("content-type", ""))
             if connection.sock is not None:
                 connection.sock.settimeout(self._read_timeout_seconds)
             status = response.status
@@ -194,7 +200,7 @@ class ModelGateway:
                 raise InfrastructureError("model upstream response exceeds byte bound")
             handler.send_response(response.status, response.reason)
             for key, value in response.getheaders():
-                if key.lower() not in _HOP_BY_HOP | {"content-length"}:
+                if key.lower() not in _RESPONSE_BLOCKED_HEADERS:
                     handler.send_header(key, value)
             if content_length is not None:
                 handler.send_header("content-length", content_length)
@@ -207,9 +213,10 @@ class ModelGateway:
                 response_bytes += len(chunk)
                 if response_bytes > self._max_response_bytes:
                     raise InfrastructureError("model upstream response exceeds byte bound")
+                collector.feed(chunk)
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
-        except (OSError, http.client.HTTPException, InfrastructureError):
+        except (OSError, ValueError, http.client.HTTPException, InfrastructureError):
             handler.close_connection = True
             if not handler.wfile.closed and not headers_sent:
                 with suppress(OSError):
@@ -218,11 +225,15 @@ class ModelGateway:
             connection.close()
             with self._summary_lock:
                 self._summaries.append(
-                    GatewayRequestSummary(
+                    ModelRequestSummary(
                         method="POST",
+                        protocol=self._protocol.name,
                         path=path,
                         status=status,
                         request_bytes=request_bytes,
                         response_bytes=response_bytes,
+                        latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+                        model=request.model,
+                        usage=collector.finish(),
                     )
                 )

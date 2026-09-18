@@ -12,6 +12,15 @@ Build locally with a disposable tag:
 docker buildx build --platform linux/amd64 --load -t axrun-claude-code:2.1.205 docker/claude-code-rootfs
 ```
 
+When the official origins are slow, an HTTPS mirror may transport the same fixed artifacts. The Node archive still must match its pinned SHA-256, and the installed Claude package version is verified:
+
+```bash
+docker buildx build --platform linux/amd64 --load \
+  --build-arg NODE_DIST_BASE_URL=https://npmmirror.com/mirrors/node \
+  --build-arg NPM_REGISTRY_URL=https://registry.npmmirror.com \
+  -t axrun-claude-code:2.1.205 docker/claude-code-rootfs
+```
+
 Run the static source verification before a build:
 
 ```bash

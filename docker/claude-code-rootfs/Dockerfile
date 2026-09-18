@@ -33,9 +33,14 @@ RUN apt-get update \
       xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
+ARG NODE_DIST_BASE_URL=https://nodejs.org/dist
+ARG NPM_REGISTRY_URL=https://registry.npmjs.org
+
 RUN set -eux; \
+    printf '%s\n' "$NODE_DIST_BASE_URL" | grep -Eq '^https://[^[:space:]]+$'; \
+    printf '%s\n' "$NPM_REGISTRY_URL" | grep -Eq '^https://[^[:space:]]+$'; \
     archive="node-v${NODE_VERSION}-linux-x64.tar.xz"; \
-    curl -fsSLo "/tmp/$archive" "https://nodejs.org/dist/v${NODE_VERSION}/$archive"; \
+    curl -fsSLo "/tmp/$archive" "${NODE_DIST_BASE_URL%/}/v${NODE_VERSION}/$archive"; \
     echo "$NODE_SHA256  /tmp/$archive" | sha256sum -c -; \
     mkdir -p /opt/claude-code/node; \
     tar -xJf "/tmp/$archive" --strip-components=1 -C /opt/claude-code/node; \
@@ -44,7 +49,7 @@ RUN set -eux; \
 ENV PATH=/opt/claude-code/node/bin:${PATH}
 
 RUN set -eux; \
-    npm install --global --prefix /opt/claude-code/npm "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
+    npm install --registry "$NPM_REGISTRY_URL" --global --prefix /opt/claude-code/npm "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
     package_dir=/opt/claude-code/npm/lib/node_modules/@anthropic-ai/claude-code; \
     test "$(node -p "require('${package_dir}/package.json').version")" = "$CLAUDE_CODE_VERSION"; \
     native_cli="$(find "$package_dir" -type f -path '*/claude-code-linux-x64/claude' -print -quit)"; \

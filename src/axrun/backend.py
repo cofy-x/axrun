@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from axrun.lifecycle import PreStartLifecycle
+from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import ExecutionRef, StagePlan, StageResult
 
 

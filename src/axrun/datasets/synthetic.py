@@ -25,9 +25,9 @@ class SyntheticCodeTaskResolver:
         *,
         source_dir: Path,
         episode_id: str,
-        candidate_file: str,
         inference_environment_id: str,
         verification_environment_id: str,
+        harness: HarnessSpec,
     ) -> ResolvedEpisode:
         expected = {
             "schema_version",
@@ -54,7 +54,6 @@ class SyntheticCodeTaskResolver:
         task_id = _required_string(row, "task_id")
         base_commit = _required_string(row, "base_commit")
         prompt = _checked_file(source_dir, _required_string(row, "problem_statement_file"))
-        candidate = _checked_file(source_dir, candidate_file)
         verifier = Path(__file__).parents[1] / "fixtures" / "synthetic" / "run_verifier.py"
         if not verifier.is_file():
             raise ContractError("packaged synthetic verifier is missing")
@@ -74,6 +73,7 @@ class SyntheticCodeTaskResolver:
             if _sha256(source) != digest:
                 raise ContractError(f"synthetic seed digest mismatch: {item['source']}")
             resolved_files.append({"source": str(source), "target": target, "sha256": digest})
+        resolved_harness = _resolve_harness(harness, source_dir, resolved_files)
         return ResolvedEpisode(
             schema_version=1,
             episode_id=episode_id,
@@ -83,11 +83,7 @@ class SyntheticCodeTaskResolver:
             prompt_file=str(prompt),
             inference_environment_id=inference_environment_id,
             verification_environment_id=verification_environment_id,
-            harness=HarnessSpec(
-                identity="static-patch",
-                version="1",
-                config={"candidate_file": str(candidate)},
-            ),
+            harness=resolved_harness,
             verifier=VerifierSpec(
                 identity="synthetic-code-task",
                 version="1",
@@ -108,6 +104,32 @@ def _required_string(value: dict[str, Any], key: str) -> str:
     if not isinstance(result, str) or not result:
         raise ContractError(f"synthetic field {key} must be a non-empty string")
     return result
+
+
+def _resolve_harness(
+    harness: HarnessSpec, source_dir: Path, seed_files: list[dict[str, str]]
+) -> HarnessSpec:
+    config = dict(harness.config)
+    if harness.identity == "static-patch":
+        if set(config) != {"candidate_file"}:
+            raise ContractError("static-patch config requires only candidate_file")
+        candidate = _checked_file(source_dir, _required_string(config, "candidate_file"))
+        config = {"candidate_file": str(candidate)}
+    elif harness.identity == "claude-code":
+        unknown = set(config) - {"mount_image", "model", "max_turns"}
+        if unknown:
+            raise ContractError(f"unknown Claude Code config: {', '.join(sorted(unknown))}")
+        _required_string(config, "mount_image")
+        _required_string(config, "model")
+        config["seed_files"] = seed_files
+    else:
+        raise ContractError(f"unsupported synthetic harness: {harness.identity}")
+    return HarnessSpec(
+        identity=harness.identity,
+        version=harness.version,
+        timeout_seconds=harness.timeout_seconds,
+        config=config,
+    )
 
 
 def _checked_file(source_dir: Path, relative_name: str) -> Path:

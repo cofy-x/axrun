@@ -24,12 +24,17 @@ from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.axern_backend import AxernBackend
 from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import AxrunError, ContractError
+from axrun.harnesses import ClaudeCodeHarness
+from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
 from axrun.models import (
     EpisodePhase,
+    HarnessSpec,
     ResolvedEpisode,
     canonical_json,
     resolved_episode_from_dict,
 )
+from axrun.proxy.model import ModelProxy
+from axrun.proxy.protocols import AnthropicProtocol
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 
@@ -46,6 +51,8 @@ def _adapters(
 ) -> tuple[InferenceAdapter, VerifierAdapter]:
     if episode.harness.identity == "static-patch":
         inference: InferenceAdapter = StaticPatchAdapter(version=episode.harness.version)
+    elif episode.harness.identity == "claude-code":
+        inference = ClaudeCodeHarness(version=episode.harness.version)
     elif episode.harness.identity == "mini-swe-agent":
         command_value: object = episode.harness.config.get("command", ["mini"])
         if not _is_string_array(command_value):
@@ -96,6 +103,26 @@ def _runner(args: argparse.Namespace, client: Any) -> EpisodeRunner:
         backend=AxernBackend(client, namespace=args.namespace),
         store=EpisodeStore(args.state_dir),
     )
+
+
+def _model_lifecycle(
+    args: argparse.Namespace, client: Any, episode: ResolvedEpisode
+) -> ModelTunnelLifecycle | None:
+    if episode.harness.identity != "claude-code":
+        return None
+    upstream_url = args.model_upstream_url or os.environ.get("AXRUN_MODEL_UPSTREAM_URL", "")
+    credential = os.environ.get("AXRUN_MODEL_CREDENTIAL", "")
+    if not upstream_url or not credential:
+        raise ContractError(
+            "Claude Code requires --model-upstream-url (or AXRUN_MODEL_UPSTREAM_URL) "
+            "and AXRUN_MODEL_CREDENTIAL"
+        )
+    proxy = ModelProxy(
+        upstream_url=upstream_url,
+        credential=credential,
+        protocol=AnthropicProtocol(),
+    )
+    return ModelTunnelLifecycle(client=client, proxy=proxy)
 
 
 def _print(value: Any) -> None:
@@ -162,6 +189,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-file", default="")
     parser.add_argument("--context", default="")
     parser.add_argument("--namespace", default="default")
+    parser.add_argument("--model-upstream-url", default="")
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="validate a ResolvedEpisode JSON file")
     validate.add_argument("episode", type=Path)
@@ -170,7 +198,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     resolve.add_argument("row", type=Path)
     resolve.add_argument("--episode-id", required=True)
-    resolve.add_argument("--candidate-file", required=True)
+    resolve.add_argument(
+        "--harness", choices=("static-patch", "claude-code"), default="static-patch"
+    )
+    resolve.add_argument("--candidate-file", default="")
+    resolve.add_argument("--claude-mount-image", default="")
+    resolve.add_argument("--model", default="")
+    resolve.add_argument("--max-turns", type=int, default=40)
     resolve.add_argument("--inference-environment", required=True)
     resolve.add_argument("--verification-environment", required=True)
     resolve.add_argument("--output", type=Path, required=True)
@@ -199,13 +233,33 @@ def main(argv: list[str] | None = None) -> int:
             raw_value: object = json.loads(args.row.read_text(encoding="utf-8"))
             if not isinstance(raw_value, dict):
                 raise ContractError("synthetic dataset row must be a JSON object")
+            if args.harness == "static-patch":
+                if not args.candidate_file:
+                    raise ContractError("static-patch requires --candidate-file")
+                harness = HarnessSpec(
+                    identity="static-patch",
+                    version="1",
+                    config={"candidate_file": args.candidate_file},
+                )
+            else:
+                if not args.claude_mount_image or not args.model:
+                    raise ContractError("claude-code requires --claude-mount-image and --model")
+                harness = HarnessSpec(
+                    identity="claude-code",
+                    version="2.1.205",
+                    config={
+                        "mount_image": args.claude_mount_image,
+                        "model": args.model,
+                        "max_turns": args.max_turns,
+                    },
+                )
             episode = SyntheticCodeTaskResolver().resolve(
                 cast(dict[str, Any], raw_value),
                 source_dir=args.row.parent,
                 episode_id=args.episode_id,
-                candidate_file=args.candidate_file,
                 inference_environment_id=args.inference_environment,
                 verification_environment_id=args.verification_environment,
+                harness=harness,
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(canonical_json(asdict(episode)) + b"\n")
@@ -236,7 +290,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "run":
                 episode = _episode(args.episode)
                 inference, verifier = _adapters(episode)
-                result = runner.run(episode, inference=inference, verifier=verifier)
+                result = runner.run(
+                    episode,
+                    inference=inference,
+                    verifier=verifier,
+                    inference_lifecycle=_model_lifecycle(args, client, episode),
+                )
             elif args.command == "cancel":
                 _print(runner.cancel(args.episode_id).as_dict())
                 return 0

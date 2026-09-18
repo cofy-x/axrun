@@ -10,6 +10,8 @@ def test_claude_205_rootfs_source_is_fixed_and_registry_neutral() -> None:
         "ARG CLAUDE_RUNTIME_VERSION=2.1.205-20260812-234142",
         "ARG NODE_VERSION=22.23.2",
         "ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307",
+        "ARG NODE_DIST_BASE_URL=https://nodejs.org/dist",
+        "ARG NPM_REGISTRY_URL=https://registry.npmjs.org",
         'test "$TARGETARCH" = amd64',
         'new = b"/__claude_code/l\\0"',
         "unset LD_LIBRARY_PATH",

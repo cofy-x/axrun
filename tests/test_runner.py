@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from axrun.adapters._candidate import persist_candidate
-from axrun.errors import ContractError, InfrastructureError
+from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     Artifact,
     EpisodePhase,
@@ -199,6 +199,28 @@ def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:
     assert result.verdict == "passed"
     assert len(backend.executions) == 1
     assert backend.executions[0].environment_id == "env-v"
+
+
+def test_live_model_recovery_requires_operator_decision_for_original_run(
+    tmp_path: Path,
+) -> None:
+    class LiveInference(Inference):
+        requires_live_model_connection = True
+
+    class LiveBackend(FakeBackend):
+        def recover(self, execution, plan, *, artifact_dir):
+            return None
+
+    value = episode(tmp_path, "live-model")
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(value)
+    record.phase = EpisodePhase.INFERENCE_RUNNING
+    record.inference = ExecutionRef("env-i", "original-run", "original-allocation")
+    store.save(record)
+    runner = EpisodeRunner(backend=LiveBackend(), store=store)
+    with pytest.raises(RecoveryRequiredError, match="cannot recreate its ephemeral Tunnel"):
+        runner.recover("live-model", inference=LiveInference(), verifier=Verifier())
+    assert runner.inspect("live-model").inference.run_id == "original-run"
 
 
 def test_failed_verdict_is_a_completed_business_result(tmp_path: Path) -> None:

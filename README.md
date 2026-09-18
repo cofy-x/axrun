@@ -33,6 +33,25 @@ The selected Axern environments must provide `/bin/sh`, Git, and Python 3. The s
 
 ## Supported harness paths
 
+The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits `candidate.patch`, redacted `trajectory.jsonl`, `harness.log`, and `usage.json` as bounded declared outputs. It uses the same synthetic seed and fresh no-network verifier as the static patch qualification path. Resolve a live synthetic episode with:
+
+```bash
+uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
+  --episode-id synthetic-claude \
+  --harness claude-code \
+  --claude-mount-image REGISTRY/claude-code@sha256:DIGEST \
+  --model MODEL_ID \
+  --inference-environment ENVIRONMENT_ID \
+  --verification-environment ENVIRONMENT_ID \
+  --output /tmp/synthetic-claude.json
+
+AXRUN_MODEL_CREDENTIAL=... uv run axrun \
+  --model-upstream-url https://api.anthropic.com \
+  --context-file ~/.config/axern/config.json run /tmp/synthetic-claude.json
+```
+
+The credential is read only from the caller environment when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret local sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential.
+
 The mini-swe-agent adapter uses the official `mini-swe-agent` 2.4.6 CLI contract and an explicitly selected verifier adapter. A canonical episode selects two pre-created Axern Environments, pins the adapters, and may set explicit CPU, memory and ephemeral-storage requests and limits for each stage. Axrun uploads the prompt, starts the inference Run, consumes bounded retained stdout/stderr, downloads declared outputs, verifies their size and SHA-256, and publishes an immutable CandidateBundle. It then uploads only the candidate patch and fixed verifier seed into a new verification Run with deny-all networking.
 
 The verifier writes `/outputs/verification.json` containing at least:
@@ -66,7 +85,7 @@ Without `--context-file`, remote commands use the explicit Axern SDK environment
 
 ## Credentials and network access
 
-Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. `ModelGateway` exposes only the required Anthropic-compatible message paths from a bounded loopback listener and injects the real credential only on the caller-side upstream hop. `AxernTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz` from inside that Allocation, and only then releases the staged process. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
+Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. One short-lived `ModelProxy` is created per inference stage. Its Anthropic protocol adapter exposes only the required message paths from a bounded loopback listener, strips sandbox authentication headers, and injects the real credential only on the caller-side upstream hop. `ModelTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz` from inside that Allocation, and only then releases the staged process. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
 
 ## Persistence, recovery, and cancellation
 

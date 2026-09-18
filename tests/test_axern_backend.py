@@ -8,6 +8,7 @@ from axern_sdk import AxernClient
 
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
+from axrun.errors import ContractError
 from axrun.models import OutputSpec, ResourceSpec, StagePlan
 
 
@@ -83,6 +84,30 @@ def test_output_capture_has_per_stream_bound(tmp_path: Path) -> None:
     )
     assert stdout.stat().st_size == 16 << 20
     assert stderr.read_bytes() == b"error"
+
+
+def test_sealed_output_manifest_size_is_bounded_before_download(tmp_path: Path) -> None:
+    class Client:
+        def get_sealed_output_manifest(self, _run_id):
+            return [
+                SimpleNamespace(
+                    path="/outputs/large",
+                    status="available",
+                    reason="",
+                    size_bytes=5,
+                    output_id="output-1",
+                )
+            ]
+
+        def download_sealed_output(self, *_args):
+            raise AssertionError("oversized output must not be downloaded")
+
+    with __import__("pytest").raises(ContractError, match="exceeds 4 bytes"):
+        AxernBackend(Client())._download_outputs(
+            "run",
+            StagePlan("env", ("true",), "/workspace", (OutputSpec("/outputs/large", max_bytes=4),)),
+            tmp_path,
+        )
 
 
 def test_transport_failure_after_launch_does_not_implicitly_cancel(

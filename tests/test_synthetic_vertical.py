@@ -14,7 +14,7 @@ from axrun.adapters import StaticPatchAdapter, SyntheticVerifierAdapter
 from axrun.adapters._candidate import load_candidate
 from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import ContractError
-from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
+from axrun.models import Artifact, ExecutionRef, HarnessSpec, StagePlan, StageResult
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 
@@ -151,6 +151,12 @@ def _row(fixture: Path) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
+def _static_harness(candidate_file: str) -> HarnessSpec:
+    return HarnessSpec(
+        identity="static-patch", version="1", config={"candidate_file": candidate_file}
+    )
+
+
 @pytest.mark.parametrize(
     ("candidate_file", "expected_verdict", "expected_score"),
     [("gold.patch", "passed", 1.0), ("known-bad.patch", "failed", 0.0)],
@@ -167,9 +173,9 @@ def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
         _row(fixture),
         source_dir=fixture,
         episode_id=f"synthetic-{candidate_file.removesuffix('.patch')}",
-        candidate_file=candidate_file,
         inference_environment_id="synthetic-inference",
         verification_environment_id="synthetic-verification",
+        harness=_static_harness(candidate_file),
     )
     backend = SyntheticVerticalBackend()
     store = EpisodeStore(tmp_path / "state")
@@ -201,17 +207,17 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
         row,
         source_dir=fixture,
         episode_id="gold",
-        candidate_file="gold.patch",
         inference_environment_id="env-i",
         verification_environment_id="env-v",
+        harness=_static_harness("gold.patch"),
     )
     second = resolver.resolve(
         row,
         source_dir=fixture,
         episode_id="bad",
-        candidate_file="known-bad.patch",
         inference_environment_id="other-i",
         verification_environment_id="other-v",
+        harness=_static_harness("known-bad.patch"),
     )
     assert first.seed_digest == second.seed_digest
     assert first.harness.config != second.harness.config
@@ -221,9 +227,9 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
             invalid,
             source_dir=fixture,
             episode_id="invalid",
-            candidate_file="gold.patch",
             inference_environment_id="env-i",
             verification_environment_id="env-v",
+            harness=_static_harness("gold.patch"),
         )
     tampered = json.loads(json.dumps(row))
     cast(dict[str, Any], cast(list[object], tampered["seed_files"])[0])["sha256"] = "0" * 64
@@ -232,7 +238,7 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
             cast(dict[str, Any], tampered),
             source_dir=fixture,
             episode_id="tampered",
-            candidate_file="gold.patch",
             inference_environment_id="env-i",
             verification_environment_id="env-v",
+            harness=_static_harness("gold.patch"),
         )

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
-from axrun.lifecycle import PreStartLifecycle
+from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
 
 
@@ -205,6 +205,10 @@ class AxernBackend:
             if sealed is None or sealed.status != "available":
                 reason = "missing" if sealed is None else f"{sealed.status}: {sealed.reason}"
                 raise ContractError(f"declared output {expected.path} is unavailable: {reason}")
+            if int(sealed.size_bytes) > expected.max_bytes:
+                raise ContractError(
+                    f"declared output {expected.path} exceeds {expected.max_bytes} bytes"
+                )
             destination = artifact_dir / f"{index:02d}-{Path(expected.path).name}"
             with destination.open("wb") as stream:
                 verified = self.client.download_sealed_output(run_id, sealed.output_id, stream)

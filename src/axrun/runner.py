@@ -8,7 +8,7 @@ from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.backend import ExecutionBackend
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
-from axrun.lifecycle import PreStartLifecycle
+from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import (
     CandidateBundle,
     EpisodePhase,
@@ -99,6 +99,13 @@ class EpisodeRunner:
             destination = self.store.root / "artifacts" / episode_id / "verification"
         stage = self.backend.recover(execution, plan, artifact_dir=destination)
         if stage is None:
+            if phase == EpisodePhase.INFERENCE_RUNNING and bool(
+                getattr(inference, "requires_live_model_connection", False)
+            ):
+                raise RecoveryRequiredError(
+                    "live model inference cannot recreate its ephemeral Tunnel; "
+                    "inspect or cancel the persisted Run"
+                )
             raise RecoveryRequiredError(f"{phase.value} Run is still active")
         if phase == EpisodePhase.INFERENCE_RUNNING:
             candidate = self._commit_candidate(episode, inference, stage)

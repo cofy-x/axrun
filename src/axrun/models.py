@@ -32,10 +32,13 @@ class OutputSpec:
     path: str
     format: OutputFormat = OutputFormat.FILE
     media_type: str = "application/octet-stream"
+    max_bytes: int = 64 << 20
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
             raise ContractError("declared output path must be absolute")
+        if self.max_bytes <= 0:
+            raise ContractError("declared output max_bytes must be positive")
 
 
 @dataclass(frozen=True, slots=True)

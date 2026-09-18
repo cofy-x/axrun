@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, cast
+
+from axrun.datasets import SyntheticCodeTaskResolver
+from axrun.harnesses import ClaudeCodeHarness
+from axrun.models import Artifact, ExecutionRef, HarnessSpec, ResolvedEpisode, StageResult
+
+
+def _episode() -> ResolvedEpisode:
+    fixture = Path(__file__).parents[1] / "fixtures" / "synthetic" / "code-task-v1"
+    raw: object = json.loads((fixture / "row.json").read_text())
+    assert isinstance(raw, dict)
+    return SyntheticCodeTaskResolver().resolve(
+        cast(dict[str, Any], raw),
+        source_dir=fixture,
+        episode_id="synthetic-claude",
+        inference_environment_id="env-inference",
+        verification_environment_id="env-verification",
+        harness=HarnessSpec(
+            identity="claude-code",
+            version="2.1.205",
+            config={
+                "mount_image": f"registry.invalid/axrun/claude@sha256:{'a' * 64}",
+                "model": "test-model",
+                "max_turns": 7,
+            },
+        ),
+    )
+
+
+def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Path) -> None:
+    episode = _episode()
+    plan = ClaudeCodeHarness().plan(episode)
+    assert plan.image_mounts[0].target == "/__claude_code"
+    assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
+    assert plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
+    assert plan.network_policy == "deny_all"
+    assert "credential-must-stay-in-memory" not in repr(plan)
+    assert "/__claude_code/usr/local/bin/claude" in plan.argv[-1]
+    assert [item.path for item in plan.outputs] == [
+        "/outputs/candidate.patch",
+        "/outputs/trajectory.jsonl",
+        "/outputs/harness.log",
+        "/outputs/usage.json",
+    ]
+    artifacts = []
+    for index, output in enumerate(plan.outputs):
+        path = tmp_path / str(index)
+        payload = b"{}\n" if output.path.endswith((".json", ".jsonl")) else b"content"
+        path.write_bytes(payload)
+        artifacts.append(
+            Artifact(
+                output.path,
+                str(path),
+                len(payload),
+                hashlib.sha256(payload).hexdigest(),
+                output.media_type,
+            )
+        )
+    bundle = ClaudeCodeHarness().build_candidate(
+        episode,
+        StageResult(
+            ExecutionRef("env-inference", "run-claude", "alloc-claude"), 0, "", tuple(artifacts)
+        ),
+        destination=tmp_path / "candidates",
+    )
+    assert bundle.harness == "claude-code" and len(bundle.files) == 4
+
+
+def test_claude_output_normalizer_redacts_auth_material_and_extracts_usage(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "raw.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "result",
+                "authorization": "Bearer secret",
+                "text": "contains local-placeholder",
+                "usage": {"input_tokens": 12, "output_tokens": 4},
+            }
+        )
+        + "\n"
+    )
+    trajectory = tmp_path / "trajectory.jsonl"
+    usage = tmp_path / "usage.json"
+    script = (
+        Path(__file__).parents[1] / "src" / "axrun" / "fixtures" / "claude" / "normalize_output.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--input",
+            str(source),
+            "--trajectory",
+            str(trajectory),
+            "--usage",
+            str(usage),
+            "--redact-value",
+            "local-placeholder",
+        ],
+        check=True,
+    )
+    output = trajectory.read_text()
+    assert "Bearer secret" not in output and "local-placeholder" not in output
+    assert json.loads(output)["usage"] == {"input_tokens": 12, "output_tokens": 4}
+    assert json.loads(usage.read_text()) == {
+        "schema_version": 1,
+        "observations": 1,
+        "input_tokens": 12,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }

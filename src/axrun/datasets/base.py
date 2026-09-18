@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
-from axrun.models import ResolvedEpisode
+from axrun.models import HarnessSpec, ResolvedEpisode
 
 
 class DatasetAdapter(Protocol):
@@ -21,7 +21,7 @@ class DatasetAdapter(Protocol):
         *,
         source_dir: Path,
         episode_id: str,
-        candidate_file: str,
         inference_environment_id: str,
         verification_environment_id: str,
+        harness: HarnessSpec,
     ) -> ResolvedEpisode: ...
