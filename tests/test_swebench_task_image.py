@@ -6,6 +6,22 @@ from pathlib import Path
 from typing import Any, cast
 
 ROOT = Path(__file__).parents[1] / "docker" / "swebench-verified" / "django__django-12419"
+OFFICIAL_AMD64_DIGEST = "sha256:6c6b1fec0a323b9225564620cd34f2d39828cef8f32496ad4a6c9ca0f7256768"
+BASE_COMMIT = "7fa1a93c6c8109010a6ff3f604fda83b604e0e97"
+
+
+def test_amd64_task_seed_is_pinned_clean_and_registry_neutral() -> None:
+    dockerfile = (ROOT / "Dockerfile.amd64").read_text(encoding="utf-8")
+    assert f"@{OFFICIAL_AMD64_DIGEST}" in dockerfile
+    assert f'ARG DJANGO_BASE_COMMIT="{BASE_COMMIT}"' in dockerfile
+    assert 'test "$(uname -m)" = x86_64' in dockerfile
+    assert "test -x /usr/bin/python3" in dockerfile
+    assert "git -C /testbed checkout --detach" in dockerfile
+    assert "git -C /testbed clean -ffdx" in dockerfile
+    assert "git -C /testbed status --porcelain --untracked-files=all" in dockerfile
+    assert 'io.axrun.platform-role="benchmark"' in dockerfile
+    forbidden = ("cr.aliyuncs.com", "AKIA", "token=", "password=", "_authToken")
+    assert all(value not in dockerfile for value in forbidden)
 
 
 def test_arm64_task_image_is_fixed_fail_closed_and_registry_neutral() -> None:
@@ -16,10 +32,8 @@ def test_arm64_task_image_is_fixed_fail_closed_and_registry_neutral() -> None:
     )
     assert lock["platform"] == "linux/arm64"
     assert lock["role"] == "local-development"
-    assert lock["django"]["base_commit"] == ("7fa1a93c6c8109010a6ff3f604fda83b604e0e97")
-    assert lock["official_amd64_image"].endswith(
-        "@sha256:6c6b1fec0a323b9225564620cd34f2d39828cef8f32496ad4a6c9ca0f7256768"
-    )
+    assert lock["django"]["base_commit"] == BASE_COMMIT
+    assert lock["official_amd64_image"].endswith(f"@{OFFICIAL_AMD64_DIGEST}")
     assert (
         lock["conda_explicit_lock_sha256"]
         == hashlib.sha256((ROOT / "environment-arm64.lock").read_bytes()).hexdigest()

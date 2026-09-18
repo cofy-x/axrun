@@ -1,4 +1,25 @@
-# django__django-12419 arm64 task image
+# django__django-12419 task images
+
+## Canonical amd64 seed
+
+`Dockerfile.amd64` derives the benchmark seed from the official SWE-bench image at its fixed
+manifest digest. The upstream image contains the required commit but starts `/testbed` at an
+environment snapshot commit. The thin Axrun seed checks out the row's exact base commit, removes
+workspace-local state, and verifies system Python and Git without changing the official test
+environment. Build it with:
+
+```bash
+docker build --platform linux/amd64 \
+  --file docker/swebench-verified/django__django-12419/Dockerfile.amd64 \
+  --tag swebench/sweb.eval.x86_64.django_1776_django-12419:axrun-seed-amd64 \
+  docker/swebench-verified/django__django-12419
+```
+
+The derived tag deliberately retains the official repository identity required by the amd64
+resolver contract. Axern's returned canonical digest, never this mutable local tag, is the runtime
+identity.
+
+## Local-development arm64 seed
 
 This directory owns Axrun's self-contained `linux/arm64` local-development seed image for the
 single qualified SWE-bench Verified instance `django__django-12419`. It does not replace the
