@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
-from axrun.errors import InfrastructureError
+from axrun.errors import DiagnosedInfrastructureError, InfrastructureError
 from axrun.models import ExecutionRef
 from axrun.proxy.base import ModelProxyInstance
 
@@ -43,6 +43,11 @@ class ModelTunnelLifecycle:
             f"active={bool(self._session_id)})"
         )
 
+    @property
+    def failure_diagnostic(self) -> dict[str, Any]:
+        summary = self._proxy.last_summary
+        return {} if summary is None else summary.as_safe_dict()
+
     def start(self, execution: ExecutionRef, allocation: Any) -> None:
         if not execution.allocation_id:
             raise InfrastructureError("Allocation identity must be persisted before tunnel setup")
@@ -75,8 +80,10 @@ class ModelTunnelLifecycle:
             self._wait_for_preflight(allocation, response.session)
         except BaseException as exc:
             self.close()
+            if isinstance(exc, DiagnosedInfrastructureError):
+                raise
             if isinstance(exc, Exception):
-                raise InfrastructureError("model Tunnel setup or preflight failed") from None
+                raise DiagnosedInfrastructureError("tunnel_health_failed") from None
             raise
 
     def close(self) -> None:
@@ -122,7 +129,7 @@ class ModelTunnelLifecycle:
             except Exception:
                 time.sleep(0.25)
         else:
-            raise InfrastructureError("model tunnel did not pass Allocation health preflight")
+            raise DiagnosedInfrastructureError("tunnel_health_failed")
 
         preflight = self._proxy.preflight(self._model)
         body_path = "/run/axrun/model-preflight-body"
@@ -153,4 +160,7 @@ class ModelTunnelLifecycle:
                 rpc_timeout=40.0,
             )
         except Exception as exc:
-            raise InfrastructureError("model tunnel did not pass model preflight") from exc
+            details = self.failure_diagnostic
+            if not details:
+                details = {"reason_code": "tunnel_model_preflight_failed"}
+            raise DiagnosedInfrastructureError("tunnel_model_preflight_failed", details) from exc

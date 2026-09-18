@@ -6,7 +6,7 @@ import hashlib
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
 from axrun.lifecycle.base import PreStartLifecycle
@@ -105,6 +105,7 @@ class AxernBackend:
             terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
             exit_code = _effective_exit_code(terminal)
             artifacts = () if exit_code != 0 else self._download_outputs(run.id, plan, artifact_dir)
+            diagnostic_details = _lifecycle_failure_diagnostic(lifecycle, exit_code)
             return StageResult(
                 execution=execution,
                 exit_code=exit_code,
@@ -112,6 +113,7 @@ class AxernBackend:
                 artifacts=artifacts,
                 stdout_path=str(stdout_path),
                 stderr_path=str(stderr_path),
+                diagnostic_details=diagnostic_details,
             )
         finally:
             if lifecycle is not None:
@@ -290,6 +292,15 @@ def _manifest_retryable(exc: Exception) -> bool:
     if isinstance(exc, SandboxNotFoundError):
         return True
     return isinstance(exc, SandboxConnectionError) and exc.retryable
+
+
+def _lifecycle_failure_diagnostic(
+    lifecycle: PreStartLifecycle | None, exit_code: int
+) -> dict[str, Any]:
+    if lifecycle is None or exit_code == 0:
+        return {}
+    value: object = getattr(lifecycle, "failure_diagnostic", {})
+    return dict(cast(dict[str, Any], value)) if isinstance(value, dict) else {}
 
 
 def _sha256(path: Path) -> str:

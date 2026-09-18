@@ -269,3 +269,56 @@ def test_prestart_failure_cancels_run_before_release(tmp_path: Path, monkeypatch
             lifecycle=Lifecycle(),
         )
     assert events == ["prestart", "closed", "cancelled:run-1"]
+
+
+def test_failed_run_carries_only_lifecycle_safe_diagnostic(tmp_path: Path, monkeypatch) -> None:
+    class Allocation:
+        def write_file(self, _path, _value):
+            return None
+
+    class Lifecycle:
+        @property
+        def failure_diagnostic(self):
+            return {
+                "protocol": "anthropic",
+                "path": "/v1/messages",
+                "status": 503,
+                "reason_code": "upstream_response",
+            }
+
+        def start(self, _execution, _allocation):
+            return None
+
+        def close(self):
+            return None
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-1")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def wait_run(self, _run_id, timeout):
+            return SimpleNamespace(exit_code=1, diagnostic_code="")
+
+        def cancel_run(self, _run_id):
+            raise AssertionError("released Run must not be cancelled")
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(
+        backend_module,
+        "_wait_running",
+        lambda *_args, **_kwargs: SimpleNamespace(id="run-1", allocation_id="alloc-1"),
+    )
+    monkeypatch.setattr(
+        backend, "_capture_output", lambda *_args, **_kwargs: (tmp_path / "out", tmp_path / "err")
+    )
+    result = backend.execute(
+        StagePlan("env", ("false",), "/workspace", ()),
+        artifact_dir=tmp_path,
+        on_bound=lambda _ref: None,
+        lifecycle=Lifecycle(),
+    )
+    assert result.exit_code == 1
+    assert result.diagnostic_details == Lifecycle().failure_diagnostic

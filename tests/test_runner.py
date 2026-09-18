@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from axrun.adapters._candidate import persist_candidate
-from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
+from axrun.errors import (
+    ContractError,
+    DiagnosedInfrastructureError,
+    InfrastructureError,
+    RecoveryRequiredError,
+)
 from axrun.models import (
     Artifact,
     EpisodePhase,
@@ -287,6 +292,81 @@ def test_terminal_inference_failure_is_not_recoverable(tmp_path: Path) -> None:
     with pytest.raises(InfrastructureError, match="inference Run failed"):
         runner.run(episode(tmp_path, "failed"), inference=Inference(), verifier=Verifier())
     assert runner.inspect("failed").phase == EpisodePhase.FAILED
+
+
+def test_terminal_model_failure_persists_only_safe_proxy_diagnosis(tmp_path: Path) -> None:
+    class FailedBackend(FakeBackend):
+        def _result(self, plan, artifact_dir, ref):
+            return StageResult(
+                ref,
+                1,
+                "",
+                (),
+                diagnostic_details={
+                    "method": "POST",
+                    "protocol": "anthropic",
+                    "path": "/v1/messages?beta=true",
+                    "status": 429,
+                    "request_bytes": 100,
+                    "response_bytes": 20,
+                    "latency_ms": 15,
+                    "model": "opaque-model",
+                    "usage": {},
+                    "reason_code": "upstream_response",
+                },
+            )
+
+    runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(InfrastructureError, match="inference Run failed"):
+        runner.run(episode(tmp_path, "model-failed"), inference=Inference(), verifier=Verifier())
+    record = runner.inspect("model-failed")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.diagnostic_code == "upstream_response"
+    assert json.loads(record.message) == {
+        "method": "POST",
+        "protocol": "anthropic",
+        "path": "/v1/messages?beta=true",
+        "status": 429,
+        "request_bytes": 100,
+        "response_bytes": 20,
+        "latency_ms": 15,
+        "model": "opaque-model",
+        "usage": {},
+        "reason_code": "upstream_response",
+    }
+
+
+def test_prestart_model_failure_persists_stable_diagnosis_without_secret(
+    tmp_path: Path,
+) -> None:
+    class FailedBackend(FakeBackend):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+            on_bound(ExecutionRef(plan.environment_id, "run-safe", "alloc-safe"))
+            raise DiagnosedInfrastructureError(
+                "tunnel_model_preflight_failed",
+                {
+                    "protocol": "anthropic",
+                    "status": 401,
+                    "reason_code": "upstream_response",
+                    "credential": "must-not-persist",
+                    "tunnel_token": "must-not-persist",
+                    "response_body": "must-not-persist",
+                },
+            )
+
+    runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(DiagnosedInfrastructureError):
+        runner.run(
+            episode(tmp_path, "preflight-failed"), inference=Inference(), verifier=Verifier()
+        )
+    record = runner.inspect("preflight-failed")
+    assert record.diagnostic_code == "tunnel_model_preflight_failed"
+    assert json.loads(record.message) == {
+        "protocol": "anthropic",
+        "status": 401,
+        "reason_code": "upstream_response",
+    }
+    assert "credential" not in record.message and "token" not in record.message
 
 
 def test_terminal_success_with_missing_declared_output_fails_contract(tmp_path: Path) -> None:

@@ -195,6 +195,7 @@ class StageResult:
     artifacts: tuple[Artifact, ...]
     stdout_path: str = ""
     stderr_path: str = ""
+    diagnostic_details: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def artifact_for_path(self, path: str) -> Artifact:
         try:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,9 @@ class ModelProxyInstance(Protocol):
 
     def stop(self) -> None: ...
 
+    @property
+    def last_summary(self) -> ModelRequestSummary | None: ...
+
 
 @dataclass(frozen=True)
 class ModelRequestSummary:
@@ -70,3 +73,17 @@ class ModelRequestSummary:
     model: str
     usage: Mapping[str, int]
     reason_code: str
+
+    def as_safe_dict(self) -> dict[str, Any]:
+        return {
+            "method": self.method,
+            "protocol": self.protocol,
+            "path": self.path,
+            "status": self.status,
+            "request_bytes": self.request_bytes,
+            "response_bytes": self.response_bytes,
+            "latency_ms": self.latency_ms,
+            "model": self.model,
+            "usage": dict(self.usage),
+            "reason_code": self.reason_code,
+        }

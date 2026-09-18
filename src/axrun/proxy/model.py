@@ -87,6 +87,11 @@ class ModelProxy:
         with self._summary_lock:
             return tuple(self._summaries)
 
+    @property
+    def last_summary(self) -> ModelRequestSummary | None:
+        with self._summary_lock:
+            return self._summaries[-1] if self._summaries else None
+
     def preflight(self, model: str) -> ModelPreflight:
         return self._protocol.preflight(model)
 

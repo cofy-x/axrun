@@ -6,6 +6,8 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
+
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
 
@@ -202,3 +204,78 @@ def test_model_proxy_rejects_half_closed_request_without_upstream_call() -> None
     finally:
         client.close()
         proxy.stop()
+
+
+@pytest.mark.parametrize("status", [400, 401, 429, 500, 503])
+def test_model_proxy_classifies_upstream_http_failures_without_bodies(status: int) -> None:
+    response_body = b"response-secret-must-not-be-observable"
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["content-length"]))
+            self.send_response(status)
+            self.send_header("content-length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    host, port = upstream.server_address[:2]
+    proxy = ModelProxy(
+        upstream_url=f"http://{host}:{port}",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+    )
+    proxy.start()
+    proxy_host, proxy_port = proxy.local_target.split(":")
+    connection = http.client.HTTPConnection(proxy_host, int(proxy_port), timeout=2)
+    try:
+        connection.request("POST", "/v1/messages", body=b'{"model":"test-model"}')
+        response = connection.getresponse()
+        assert response.status == status
+        response.read()
+    finally:
+        connection.close()
+        proxy.stop()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=2)
+
+    summary = proxy.last_summary
+    assert summary is not None
+    assert summary.status == status and summary.reason_code == "upstream_response"
+    assert response_body.decode() not in repr(summary.as_safe_dict())
+    assert "caller-secret" not in repr(summary.as_safe_dict())
+
+
+def test_model_proxy_classifies_upstream_connection_error_without_credential() -> None:
+    unavailable = socket.socket()
+    unavailable.bind(("127.0.0.1", 0))
+    host, port = unavailable.getsockname()
+    unavailable.close()
+    proxy = ModelProxy(
+        upstream_url=f"http://{host}:{port}",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+        connect_timeout_seconds=0.5,
+    )
+    proxy.start()
+    proxy_host, proxy_port = proxy.local_target.split(":")
+    connection = http.client.HTTPConnection(proxy_host, int(proxy_port), timeout=2)
+    try:
+        connection.request("POST", "/v1/messages", body=b'{"model":"test-model"}')
+        response = connection.getresponse()
+        assert response.status == 502
+        response.read()
+    finally:
+        connection.close()
+        proxy.stop()
+
+    summary = proxy.last_summary
+    assert summary is not None
+    assert summary.status == 502 and summary.reason_code == "proxy_upstream_error"
+    assert "caller-secret" not in repr(summary.as_safe_dict())

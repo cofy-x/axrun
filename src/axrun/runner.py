@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.backend import ExecutionBackend
-from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
+from axrun.errors import (
+    ContractError,
+    DiagnosedInfrastructureError,
+    InfrastructureError,
+    RecoveryRequiredError,
+    safe_diagnostic_details,
+)
 from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import (
     CandidateBundle,
@@ -190,8 +197,16 @@ class EpisodeRunner:
                 self._require_execution(record, EpisodePhase.INFERENCE_RUNNING, result.execution)
                 record.inference = result.execution
                 record.phase = EpisodePhase.FAILED
-                record.diagnostic_code = result.diagnostic_code or "AXRUN_INFERENCE_FAILED"
-                record.message = f"inference Run exited with code {result.exit_code}"
+                safe_code = result.diagnostic_details.get("reason_code")
+                record.diagnostic_code = (
+                    safe_code
+                    if isinstance(safe_code, str) and safe_code
+                    else result.diagnostic_code or "AXRUN_INFERENCE_FAILED"
+                )
+                record.message = _safe_failure_message(
+                    result.diagnostic_details,
+                    fallback=f"inference Run exited with code {result.exit_code}",
+                )
                 record.completed_at = _now()
                 self.store.save(record)
             raise InfrastructureError(
@@ -283,10 +298,15 @@ class EpisodeRunner:
                 EpisodePhase.FAILED,
             }:
                 return
-            if isinstance(exc, ContractError) or not self._has_recoverable_identity(record):
+            if isinstance(exc, DiagnosedInfrastructureError):
+                record.diagnostic_code = exc.diagnostic_code
+                record.message = _safe_failure_message(exc.details, fallback=str(exc))
+            elif isinstance(exc, ContractError) or not self._has_recoverable_identity(record):
                 record.phase = EpisodePhase.FAILED
                 record.diagnostic_code = "AXRUN_STAGE_FAILED"
-            record.message = f"{type(exc).__name__}: {exc}"
+                record.message = f"{type(exc).__name__}: {exc}"
+            else:
+                record.message = f"{type(exc).__name__}: {exc}"
             self.store.save(record)
 
     @staticmethod
@@ -333,3 +353,10 @@ def _now() -> str:
     from datetime import UTC, datetime
 
     return datetime.now(UTC).isoformat()
+
+
+def _safe_failure_message(details: dict[str, object], *, fallback: str) -> str:
+    if not details:
+        return fallback
+    safe = safe_diagnostic_details(details)
+    return json.dumps(safe, sort_keys=True, separators=(",", ":"))
