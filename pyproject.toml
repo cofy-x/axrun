@@ -10,11 +10,6 @@ dependencies = [
     "axern-sdk==0.8.1",
 ]
 
-[project.optional-dependencies]
-harness = [
-    "mini-swe-agent==2.4.6",
-]
-
 [project.urls]
 Homepage = "https://github.com/cofy-x/axrun"
 Repository = "https://github.com/cofy-x/axrun"

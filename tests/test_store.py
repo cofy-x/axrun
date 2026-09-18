@@ -14,7 +14,7 @@ def test_store_separates_immutable_spec_from_minimal_execution_record(tmp_path) 
         "prompt.txt",
         "env-i",
         "env-v",
-        HarnessSpec("mini-swe-agent", "2.4.6"),
+        HarnessSpec("static-patch", "1"),
         VerifierSpec("command-verifier", "1"),
     )
     store = EpisodeStore(tmp_path)

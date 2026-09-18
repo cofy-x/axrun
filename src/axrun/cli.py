@@ -15,7 +15,6 @@ from axern_sdk import AxernError
 
 from axrun.adapters import (
     CommandVerifierAdapter,
-    MiniSweAgentAdapter,
     StaticPatchAdapter,
     SyntheticVerifierAdapter,
 )
@@ -53,15 +52,6 @@ def _adapters(
         inference: InferenceAdapter = StaticPatchAdapter(version=episode.harness.version)
     elif episode.harness.identity == "claude-code":
         inference = ClaudeCodeHarness(version=episode.harness.version)
-    elif episode.harness.identity == "mini-swe-agent":
-        command_value: object = episode.harness.config.get("command", ["mini"])
-        if not _is_string_array(command_value):
-            raise ContractError("mini-swe-agent harness command must be a non-empty string array")
-        inference = MiniSweAgentAdapter(
-            command=tuple(cast(list[str], command_value)),
-            version=episode.harness.version,
-            timeout_seconds=episode.harness.timeout_seconds,
-        )
     else:
         raise ContractError(f"unsupported harness adapter: {episode.harness.identity}")
     if episode.verifier.identity == "synthetic-code-task":

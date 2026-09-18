@@ -44,9 +44,9 @@ def test_episode_decoder_uses_generic_adapters_and_rejects_unknown_fields() -> N
         "inference_environment_id": "env-i",
         "verification_environment_id": "env-v",
         "harness": {
-            "identity": "mini-swe-agent",
-            "version": "2.4.6",
-            "config": {"command": ["mini"]},
+            "identity": "claude-code",
+            "version": "2.1.205",
+            "config": {"model": "test-model"},
         },
         "verifier": {
             "identity": "command-verifier",
@@ -56,7 +56,7 @@ def test_episode_decoder_uses_generic_adapters_and_rejects_unknown_fields() -> N
         "inference_resources": {"request_cpu": "500m", "limit_memory": "2Gi"},
     }
     episode = resolved_episode_from_dict(raw)
-    assert episode.harness == HarnessSpec("mini-swe-agent", "2.4.6", config={"command": ["mini"]})
+    assert episode.harness == HarnessSpec("claude-code", "2.1.205", config={"model": "test-model"})
     assert episode.inference_resources.request_cpu == "500m"
     raw["node_id"] = "private"
     with pytest.raises(ContractError, match="unknown"):
