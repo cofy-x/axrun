@@ -47,6 +47,7 @@ class StageProgressObserver:
         self._thread: threading.Thread | None = None
         self._failure_reason = ""
         self._revision = 0
+        self._last_runtime: RuntimeProgress | None = None
         self._closed = False
 
     def start(self, execution: ExecutionRef, allocation: Any) -> None:
@@ -101,6 +102,7 @@ class StageProgressObserver:
             self._publish_unavailable()
             return
         runtime = runtime_progress_from_bytes(payload)
+        self._last_runtime = runtime
         self._publish(self._merge(runtime, self._proxy.snapshot(), execution))
 
     def _publish_unavailable(self) -> None:
@@ -111,6 +113,7 @@ class StageProgressObserver:
         now = _now()
         self._revision += 1
         summary = model.last_summary
+        runtime = self._last_runtime
         snapshot = ProgressSnapshot(
             schema_version=1,
             format=PROGRESS_FORMAT,
@@ -120,13 +123,13 @@ class StageProgressObserver:
             phase="inference_running",
             revision=self._revision,
             updated_at=now,
-            process_alive=False,
-            native_event_count=0,
-            canonical_event_count=0,
-            latest_event_kind="",
-            latest_tool_name="",
-            trajectory_bytes=0,
-            usage_bytes=0,
+            process_alive=runtime.process_alive if runtime else False,
+            native_event_count=runtime.native_event_count if runtime else 0,
+            canonical_event_count=runtime.canonical_event_count if runtime else 0,
+            latest_event_kind=runtime.latest_event_kind if runtime else "",
+            latest_tool_name=runtime.latest_tool_name if runtime else "",
+            trajectory_bytes=runtime.trajectory_bytes if runtime else 0,
+            usage_bytes=runtime.usage_bytes if runtime else 0,
             request_count=model.request_count,
             model_requests_in_flight=model.requests_in_flight,
             last_model_method=summary.method if summary else "",
@@ -138,7 +141,7 @@ class StageProgressObserver:
             last_model_response_bytes=summary.response_bytes if summary else 0,
             last_model_latency_ms=summary.latency_ms if summary else 0,
             last_model_usage=dict(summary.usage) if summary else {},
-            last_agent_activity_at="",
+            last_agent_activity_at=runtime.last_agent_activity_at if runtime else "",
             last_model_activity_at=model.last_activity_at,
             stale_seconds=0,
             state_reason_code="progress_unavailable",

@@ -119,6 +119,18 @@ class _Allocation:
         return self.payload
 
 
+class _FlakyAllocation(_Allocation):
+    def __init__(self, payload: bytes) -> None:
+        super().__init__(payload)
+        self.reads = 0
+
+    def read_file(self, path: str, *, rpc_timeout: float | None = None) -> bytes:
+        self.reads += 1
+        if self.reads > 1:
+            raise RuntimeError("Allocation is no longer readable")
+        return super().read_file(path, rpc_timeout=rpc_timeout)
+
+
 def _runtime() -> RuntimeProgress:
     return RuntimeProgress(
         1,
@@ -207,6 +219,36 @@ def test_observer_merges_runtime_and_proxy_and_cleanup_is_idempotent(tmp_path: P
     assert snapshot.last_model_path == "/v1/messages?beta=true"
     assert snapshot.state_reason_code == "tool_activity"
     assert snapshot.last_model_usage == {"input_tokens": 3, "output_tokens": 2}
+
+
+def test_observer_preserves_last_runtime_counters_when_allocation_becomes_unreadable(
+    tmp_path: Path,
+) -> None:
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(_episode(tmp_path))
+    record.phase = EpisodePhase.INFERENCE_RUNNING
+    record.inference = ExecutionRef("env", "run", "allocation")
+    store.save(record)
+    observer = StageProgressObserver(
+        episode_id="episode",
+        store=store,
+        proxy=_Proxy(),  # type: ignore[arg-type]
+        poll_seconds=60.0,
+    )
+    observer.start(record.inference, _FlakyAllocation(canonical_progress_bytes(_runtime())))
+    observer._sample()
+    observer._sample()
+    observer.close()
+
+    snapshot = ProgressStore(store.root).load("episode")
+    assert snapshot is not None
+    assert snapshot.state_reason_code == "progress_unavailable"
+    assert snapshot.native_event_count == 4
+    assert snapshot.canonical_event_count == 5
+    assert snapshot.latest_event_kind == "tool_result"
+    assert snapshot.latest_tool_name == "Read"
+    assert snapshot.trajectory_bytes == 123
+    assert snapshot.usage_bytes == 45
 
 
 def test_invalid_observed_progress_is_infrastructure_diagnostic(tmp_path: Path) -> None:
