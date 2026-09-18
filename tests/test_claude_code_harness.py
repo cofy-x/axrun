@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -119,6 +120,7 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         "default_haiku_model": "opaque-model-id",
         "subagent_model": "opaque-model-id",
         "max_turns": 40,
+        "working_directory": "/workspace",
     }
     plan = ClaudeCodeHarness().plan(episode)
     assert {
@@ -128,6 +130,16 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         plan.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
         plan.env["CLAUDE_CODE_SUBAGENT_MODEL"],
     } == {"opaque-model-id"}
+
+
+def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:
+    episode = _episode()
+    config = dict(episode.harness.config, working_directory="/testbed")
+    benchmark_episode = replace(
+        episode,
+        harness=HarnessSpec("claude-code", "2.1.205", config=config),
+    )
+    assert ClaudeCodeHarness().plan(benchmark_episode).cwd == "/testbed"
 
 
 def test_claude_output_normalizer_redacts_auth_material_and_extracts_usage(

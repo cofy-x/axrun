@@ -42,6 +42,7 @@ _CONFIG_KEYS = frozenset(
         "effort_level",
         "auto_compact_window",
         "max_turns",
+        "working_directory",
     }
 )
 _MODEL_ALIAS_KEYS = (
@@ -72,6 +73,10 @@ def resolve_claude_code_spec(harness: HarnessSpec) -> HarnessSpec:
     max_turns = config.get("max_turns", 40)
     _validate_max_turns(max_turns)
     config["max_turns"] = max_turns
+    working_directory = config.get("working_directory", "/workspace")
+    if not isinstance(working_directory, str) or not working_directory.startswith("/"):
+        raise ContractError("Claude Code working_directory must be an absolute path")
+    config["working_directory"] = working_directory
     _validate_optional_runtime_config(config)
     return HarnessSpec(
         identity=harness.identity,
@@ -101,6 +106,9 @@ class ClaudeCodeHarness:
             raise ContractError("Claude Code mount_image must use an OCI sha256 digest")
         max_turns = config.get("max_turns")
         _validate_max_turns(max_turns)
+        working_directory = _required_string(config, "working_directory")
+        if not working_directory.startswith("/"):
+            raise ContractError("Claude Code working_directory must be an absolute path")
         normalizer = Path(__file__).parents[1] / "fixtures" / "claude" / "normalize_output.py"
         if not normalizer.is_file():
             raise ContractError("packaged Claude output normalizer is missing")
@@ -158,7 +166,7 @@ class ClaudeCodeHarness:
         return StagePlan(
             environment_id=episode.inference_environment_id,
             argv=("/bin/sh", "-lc", script),
-            cwd="/workspace",
+            cwd=working_directory,
             inputs=(
                 InputFile(episode.prompt_file, "/inputs/prompt.txt"),
                 InputFile(str(normalizer), "/opt/axrun/normalize-claude-output.py"),

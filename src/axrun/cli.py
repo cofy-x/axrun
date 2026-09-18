@@ -16,12 +16,13 @@ from axern_sdk import AxernError
 from axrun.adapters import (
     CommandVerifierAdapter,
     StaticPatchAdapter,
+    SweBenchVerifiedVerifierAdapter,
     SyntheticVerifierAdapter,
 )
 from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import InferenceAdapter, VerifierAdapter
 from axrun.axern_backend import AxernBackend
-from axrun.datasets import SyntheticCodeTaskResolver
+from axrun.datasets import SweBenchVerifiedResolver, SyntheticCodeTaskResolver
 from axrun.errors import AxrunError, ContractError
 from axrun.harnesses import ClaudeCodeHarness
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
@@ -56,6 +57,11 @@ def _adapters(
         raise ContractError(f"unsupported harness adapter: {episode.harness.identity}")
     if episode.verifier.identity == "synthetic-code-task":
         verifier: VerifierAdapter = SyntheticVerifierAdapter(
+            version=episode.verifier.version,
+            timeout_seconds=episode.verifier.timeout_seconds,
+        )
+    elif episode.verifier.identity == "swebench-verified":
+        verifier = SweBenchVerifiedVerifierAdapter(
             version=episode.verifier.version,
             timeout_seconds=episode.verifier.timeout_seconds,
         )
@@ -197,20 +203,22 @@ def _parser() -> argparse.ArgumentParser:
         "--harness", choices=("static-patch", "claude-code"), default="static-patch"
     )
     resolve.add_argument("--candidate-file", default="")
-    resolve.add_argument("--claude-mount-image", default="")
-    resolve.add_argument("--model", default="")
-    resolve.add_argument("--claude-default-opus-model", default="")
-    resolve.add_argument("--claude-default-sonnet-model", default="")
-    resolve.add_argument("--claude-default-haiku-model", default="")
-    resolve.add_argument("--claude-subagent-model", default="")
-    resolve.add_argument(
-        "--claude-effort-level", choices=("low", "medium", "high", "max"), default=""
-    )
-    resolve.add_argument("--claude-auto-compact-window", type=int, default=0)
-    resolve.add_argument("--max-turns", type=int, default=40)
+    _add_claude_arguments(resolve)
     resolve.add_argument("--inference-environment", required=True)
     resolve.add_argument("--verification-environment", required=True)
     resolve.add_argument("--output", type=Path, required=True)
+    swebench = commands.add_parser(
+        "resolve-swebench-verified",
+        help="resolve one official SWE-bench Verified enriched-v1 row",
+    )
+    swebench.add_argument("row", type=Path)
+    swebench.add_argument("--episode-id", required=True)
+    swebench.add_argument("--task-image", required=True)
+    swebench.add_argument("--assets-dir", type=Path, required=True)
+    _add_claude_arguments(swebench)
+    swebench.add_argument("--inference-environment", required=True)
+    swebench.add_argument("--verification-environment", required=True)
+    swebench.add_argument("--output", type=Path, required=True)
     run = commands.add_parser("run", help="execute inference and isolated verification")
     run.add_argument("episode", type=Path)
     for name in ("status", "inspect", "cancel"):
@@ -223,6 +231,55 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument("episode_id")
     export.add_argument("destination", type=Path)
     return parser
+
+
+def _add_claude_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--claude-mount-image", default="")
+    parser.add_argument("--model", default="")
+    parser.add_argument("--claude-default-opus-model", default="")
+    parser.add_argument("--claude-default-sonnet-model", default="")
+    parser.add_argument("--claude-default-haiku-model", default="")
+    parser.add_argument("--claude-subagent-model", default="")
+    parser.add_argument(
+        "--claude-effort-level", choices=("low", "medium", "high", "max"), default=""
+    )
+    parser.add_argument("--claude-auto-compact-window", type=int, default=0)
+    parser.add_argument("--max-turns", type=int, default=40)
+
+
+def _claude_harness(args: argparse.Namespace, *, working_directory: str) -> HarnessSpec:
+    if not args.claude_mount_image or not args.model:
+        raise ContractError("claude-code requires --claude-mount-image and --model")
+    config: dict[str, Any] = {
+        "mount_image": args.claude_mount_image,
+        "model": args.model,
+        "max_turns": args.max_turns,
+        "working_directory": working_directory,
+    }
+    for argument, key in (
+        (args.claude_default_opus_model, "default_opus_model"),
+        (args.claude_default_sonnet_model, "default_sonnet_model"),
+        (args.claude_default_haiku_model, "default_haiku_model"),
+        (args.claude_subagent_model, "subagent_model"),
+        (args.claude_effort_level, "effort_level"),
+    ):
+        if argument:
+            config[key] = argument
+    if args.claude_auto_compact_window:
+        config["auto_compact_window"] = args.claude_auto_compact_window
+    return HarnessSpec(identity="claude-code", version="2.1.205", config=config)
+
+
+def _write_episode(episode: ResolvedEpisode, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(canonical_json(asdict(episode)) + b"\n")
+    _print(
+        {
+            "episode_id": episode.episode_id,
+            "seed_digest": episode.seed_digest,
+            "output": str(output),
+        }
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,29 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                     config={"candidate_file": args.candidate_file},
                 )
             else:
-                if not args.claude_mount_image or not args.model:
-                    raise ContractError("claude-code requires --claude-mount-image and --model")
-                config: dict[str, Any] = {
-                    "mount_image": args.claude_mount_image,
-                    "model": args.model,
-                    "max_turns": args.max_turns,
-                }
-                for argument, key in (
-                    (args.claude_default_opus_model, "default_opus_model"),
-                    (args.claude_default_sonnet_model, "default_sonnet_model"),
-                    (args.claude_default_haiku_model, "default_haiku_model"),
-                    (args.claude_subagent_model, "subagent_model"),
-                    (args.claude_effort_level, "effort_level"),
-                ):
-                    if argument:
-                        config[key] = argument
-                if args.claude_auto_compact_window:
-                    config["auto_compact_window"] = args.claude_auto_compact_window
-                harness = HarnessSpec(
-                    identity="claude-code",
-                    version="2.1.205",
-                    config=config,
-                )
+                harness = _claude_harness(args, working_directory="/workspace")
             episode = SyntheticCodeTaskResolver().resolve(
                 cast(dict[str, Any], raw_value),
                 source_dir=args.row.parent,
@@ -276,15 +311,22 @@ def main(argv: list[str] | None = None) -> int:
                 verification_environment_id=args.verification_environment,
                 harness=harness,
             )
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_bytes(canonical_json(asdict(episode)) + b"\n")
-            _print(
-                {
-                    "episode_id": episode.episode_id,
-                    "seed_digest": episode.seed_digest,
-                    "output": str(args.output),
-                }
+            _write_episode(episode, args.output)
+            return 0
+        if args.command == "resolve-swebench-verified":
+            raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("SWE-bench Verified row must be a JSON object")
+            episode = SweBenchVerifiedResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                asset_dir=args.assets_dir,
+                episode_id=args.episode_id,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
+                task_image=args.task_image,
+                harness=_claude_harness(args, working_directory="/testbed"),
             )
+            _write_episode(episode, args.output)
             return 0
         store = EpisodeStore(args.state_dir)
         if args.command == "status":

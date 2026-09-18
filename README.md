@@ -33,6 +33,31 @@ uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
 
 The synthetic verifier does not upload or reconstruct the repository. In its fresh Allocation it verifies the task image's clean base commit, receives only the immutable CandidateBundle patch plus the Axrun-owned verifier entrypoint, applies the patch, runs `unittest` with deny-all networking, and publishes a normal passed or failed `VerificationResult`.
 
+Axrun also contains one deliberately closed SWE-bench Verified vertical for
+`django__django-12419`. `SweBenchVerifiedResolver` accepts exactly the official enriched-v1
+row shape, commits the entire row to the seed digest, then discards the native row after
+materializing only the prompt and official offline evaluation script. The current adapter rejects
+other instances and log parsers; this is one qualified path, not a dataset platform or a claim of
+general leaderboard support. Resolve it with the amd64 platform manifest digest, never the mutable
+official tag or the multi-platform index digest:
+
+```bash
+uv run axrun resolve-swebench-verified /path/to/django__django-12419.json \
+  --episode-id swebench-django-12419 \
+  --task-image docker.io/swebench/sweb.eval.x86_64.django_1776_django-12419@sha256:6c6b1fec0a323b9225564620cd34f2d39828cef8f32496ad4a6c9ca0f7256768 \
+  --assets-dir /tmp/axrun-swebench-assets \
+  --claude-mount-image REGISTRY/claude-code@sha256:AMD64_DIGEST \
+  --model MODEL_ID \
+  --inference-environment AMD64_ENVIRONMENT_ID \
+  --verification-environment AMD64_ENVIRONMENT_ID \
+  --output /tmp/swebench-django-12419.json
+```
+
+The official image owns `/testbed`, its repository, dependencies, and base commit. Claude's
+working directory is explicit in the resolved harness configuration. The fresh verifier receives
+only the CandidateBundle patch, the content-addressed official evaluation script, and Axrun's
+packaged grader; it has deny-all networking and no inference mount, process, Tunnel, or credential.
+
 ## Supported harness paths
 
 The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits `candidate.patch`, redacted `trajectory.jsonl`, `harness.log`, and `usage.json` as bounded declared outputs. It uses the same synthetic seed and fresh no-network verifier as the static patch qualification path. Resolve a live synthetic episode with:
