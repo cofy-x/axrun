@@ -24,6 +24,13 @@ STREAM_FIXTURE = (
 )
 
 
+def test_allocation_fixture_scripts_remain_python_3_10_compatible() -> None:
+    fixtures = Path(__file__).parents[1] / "src" / "axrun" / "fixtures"
+    for script in fixtures.rglob("*.py"):
+        source = script.read_text(encoding="utf-8")
+        assert "from datetime import UTC" not in source
+
+
 @pytest.mark.parametrize(("name", "child_exit"), [("success", 0), ("error", 1)])
 def test_supervisor_incrementally_publishes_safe_progress(
     tmp_path: Path, name: str, child_exit: int

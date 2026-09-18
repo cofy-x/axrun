@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
@@ -38,7 +38,7 @@ def main() -> int:
     args = parser.parse_args()
     args.result.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    started_at = datetime.now(UTC).isoformat()
+    started_at = datetime.now(timezone.utc).isoformat()  # noqa: UP017 -- sandbox Python 3.10
     with args.log.open("w", encoding="utf-8") as log:
         actual_commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=args.workspace, text=True, timeout=10
@@ -87,7 +87,7 @@ def main() -> int:
                 "score": 1.0 if resolved else 0.0,
                 "diagnostic_code": diagnostic,
                 "started_at": started_at,
-                "completed_at": datetime.now(UTC).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
                 "test_exit_code": test_exit_code,
             },
             sort_keys=True,

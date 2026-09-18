@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from axrun.progress.schema import (
@@ -173,7 +173,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()  # noqa: UP017 -- sandbox Python 3.10
 
 
 def main() -> int:
