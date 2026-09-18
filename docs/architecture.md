@@ -65,6 +65,12 @@ payload fields do not enter the common contract. Hidden system prompts are not i
 traffic. Raw thinking and signatures are discarded; a thinking block becomes only
 `reasoning_metadata`. Future harnesses require their own explicit native-to-canonical adapter.
 
+The harness interprets only Claude's explicit `error_max_turns` native result as a completed
+agent-budget outcome with a candidate. It still canonicalizes and seals that result before a fresh
+verifier judges the patch. Other non-zero Claude exits remain infrastructure failures. The
+allowlist is intentionally closed so authentication, protocol, transport, and unknown runtime
+errors cannot become benchmark `failed` verdicts.
+
 ModelProxy summaries are a separate failure-diagnostic contract. ModelProxy never contributes
 request/response bodies, system prompts, tool payloads, or reasoning to a successful agent
 trajectory.
@@ -88,6 +94,11 @@ grader into a fresh deny-all Allocation. Expanding to another instance requires 
 and offline-image qualification rather than shape-based acceptance.
 
 The task image and harness image have separate ownership. An Environment is created from the task image. Claude inference additionally attaches the versioned Claude Code rootfs read-only at `/__claude_code`; static inference and verification do not. The task image and Claude rootfs each publish amd64 and arm64 variants, and a Run must select matching platform digests. Benchmark and production acceptance are canonical on amd64; arm64 exists for local source-cluster validation and does not change episode semantics. Both Claude variants expose the same mount ABI. This keeps benchmark state in the task image and reusable harness tooling in the mount image.
+
+Axrun-owned control code does not run under the repository's benchmark interpreter. The closed
+arm64 Django task image retains Conda Python 3.6 for official tests and separately provides
+`/usr/bin/python3` for Tunnel probes and trajectory normalization. Harness plans name that system
+path explicitly, preventing task-level `PATH` activation from changing the control runtime.
 
 ## SDK boundary
 

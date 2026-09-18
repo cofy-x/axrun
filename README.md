@@ -96,6 +96,11 @@ independent content-addressed manifest. Static patch episodes have no Trajectory
 verifier never receives trajectory, usage, harness logs, ModelProxy summaries, or the inference
 workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
 
+An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
+transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
+business verdict. Every other non-zero Claude terminal subtype remains fail-closed infrastructure
+failure.
+
 The task prompt is recorded as canonical context with `axrun_task_prompt` provenance, content, and
 SHA-256. A system message is recorded only when the harness explicitly exposes its content. Axrun
 does not inspect ModelProxy bodies, reconstruct Claude Code's hidden system prompt, or claim that
