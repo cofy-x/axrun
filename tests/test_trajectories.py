@@ -117,6 +117,15 @@ def _native_events() -> list[dict[str, Any]]:
                 ]
             },
         },
+        {
+            "type": "assistant",
+            "message": {
+                "id": "subagent-message",
+                "model": "opaque-model[1m]",
+                "content": [{"type": "text", "text": "Subagent-visible response."}],
+            },
+            "parent_tool_use_id": "call-1",
+        },
         {"type": "thinking_tokens", "thinking_tokens": 23, "model": "opaque-model[1m]"},
         {
             "type": "result",
@@ -201,6 +210,7 @@ def test_claude_mapping_is_deterministic_safe_and_preserves_tool_relationships(
         "assistant_message",
         "tool_call",
         "tool_result",
+        "assistant_message",
         "reasoning_metadata",
         "usage",
         "final_result",
@@ -216,6 +226,8 @@ def test_claude_mapping_is_deterministic_safe_and_preserves_tool_relationships(
     assert tool_result.parent_event_id == tool_call.event_id
     assert tool_result.turn_id == tool_call.turn_id
     assert tool_call.model == "opaque-model[1m]"
+    subagent = [event for event in first if event.kind == "assistant_message"][-1]
+    assert subagent.parent_event_id == tool_call.event_id
     assert "authorization" not in tool_call.data["arguments"]
     serialized = trajectory.read_text()
     for marker in (THINKING_MARKER, SIGNATURE_MARKER, SECRET_MARKER):
@@ -227,6 +239,43 @@ def test_claude_mapping_is_deterministic_safe_and_preserves_tool_relationships(
         "output_tokens": 8,
         "cache_creation_input_tokens": 1,
         "cache_read_input_tokens": 7,
+    }
+
+
+def test_claude_visible_user_message_and_failed_result_mapping(tmp_path: Path) -> None:
+    tmp_path.mkdir(exist_ok=True)
+    native = tmp_path / "native.jsonl"
+    prompt = tmp_path / "prompt.txt"
+    trajectory = tmp_path / "trajectory.jsonl"
+    usage = tmp_path / "usage.json"
+    events = [
+        {
+            "type": "system",
+            "subtype": "init",
+            "claude_code_version": "2.1.205",
+            "model": "opaque-model",
+            "tools": [],
+        },
+        {"type": "user", "message": {"content": "Visible follow-up"}},
+        {
+            "type": "result",
+            "subtype": "error_max_turns",
+            "is_error": True,
+            "result": "Stopped",
+            "stop_reason": "max_turns",
+            "usage": {},
+        },
+    ]
+    _write_native(native, events)
+    prompt.write_text("Task prompt")
+    normalized = normalize_claude_stream(native, prompt, trajectory, usage)
+    user = next(event for event in normalized if event.kind == "user_message")
+    final = next(event for event in normalized if event.kind == "final_result")
+    assert user.data["content"] == "Visible follow-up"
+    assert final.data == {
+        "status": "error",
+        "stop_reason": "max_turns",
+        "content": "Stopped",
     }
 
 
