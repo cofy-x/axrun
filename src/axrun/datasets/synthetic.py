@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from axrun.errors import ContractError
+from axrun.harnesses import resolve_claude_code_spec
 from axrun.models import (
     HarnessSpec,
     ResolvedEpisode,
@@ -125,21 +126,7 @@ def _resolve_harness(harness: HarnessSpec, source_dir: Path) -> HarnessSpec:
         candidate = _checked_file(source_dir, _required_string(config, "candidate_file"))
         config = {"candidate_file": str(candidate)}
     elif harness.identity == "claude-code":
-        unknown = set(config) - {
-            "mount_image",
-            "model",
-            "default_opus_model",
-            "default_sonnet_model",
-            "default_haiku_model",
-            "subagent_model",
-            "effort_level",
-            "auto_compact_window",
-            "max_turns",
-        }
-        if unknown:
-            raise ContractError(f"unknown Claude Code config: {', '.join(sorted(unknown))}")
-        _required_string(config, "mount_image")
-        _required_string(config, "model")
+        return resolve_claude_code_spec(harness)
     else:
         raise ContractError(f"unsupported synthetic harness: {harness.identity}")
     return HarnessSpec(

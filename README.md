@@ -59,7 +59,7 @@ MODEL_API_KEY=... uv run axrun \
   --context-file ~/.config/axern/config.json run /tmp/synthetic-claude.json
 ```
 
-Model IDs are opaque strings. The primary model and four Claude model-selection aliases are recorded explicitly so internal model selection cannot silently change providers or tiers; omitted aliases default to the primary model. Effort and auto-compact settings are optional, validated runtime configuration.
+Model IDs are opaque strings. The primary model and four Claude model-selection aliases are recorded explicitly so internal model selection cannot silently change providers or tiers. When an alias is omitted, the resolver materializes the primary model into that field in canonical `spec.json`; StagePlan construction requires and consumes those resolved values without applying another hidden default. Effort and auto-compact settings are optional, validated runtime configuration.
 
 The credential is read only from the selected caller environment variable when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret `ANTHROPIC_AUTH_TOKEN` sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential as `x-api-key`.
 

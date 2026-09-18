@@ -13,6 +13,7 @@ from axrun.adapters._git import canonical_patch_export
 from axrun.errors import ContractError
 from axrun.models import (
     CandidateBundle,
+    HarnessSpec,
     ImageMountSpec,
     InputFile,
     OutputSpec,
@@ -30,6 +31,54 @@ _TRAJECTORY = "/outputs/trajectory.jsonl"
 _LOG = "/outputs/harness.log"
 _USAGE = "/outputs/usage.json"
 _DIGEST_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
+_CONFIG_KEYS = frozenset(
+    {
+        "mount_image",
+        "model",
+        "default_opus_model",
+        "default_sonnet_model",
+        "default_haiku_model",
+        "subagent_model",
+        "effort_level",
+        "auto_compact_window",
+        "max_turns",
+    }
+)
+_MODEL_ALIAS_KEYS = (
+    "default_opus_model",
+    "default_sonnet_model",
+    "default_haiku_model",
+    "subagent_model",
+)
+
+
+def resolve_claude_code_spec(harness: HarnessSpec) -> HarnessSpec:
+    """Validate and materialize the canonical Claude Code harness configuration."""
+    if harness.identity != "claude-code" or harness.version != _VERSION:
+        raise ContractError(f"Claude Code adapter requires claude-code@{_VERSION}")
+    config = dict(harness.config)
+    unknown = set(config) - _CONFIG_KEYS
+    if unknown:
+        raise ContractError(f"unknown Claude Code config: {', '.join(sorted(unknown))}")
+    image = _required_string(config, "mount_image")
+    if not _DIGEST_IMAGE.fullmatch(image):
+        raise ContractError("Claude Code mount_image must use an OCI sha256 digest")
+    model = _required_string(config, "model")
+    for key in _MODEL_ALIAS_KEYS:
+        value = config.get(key, model)
+        if not isinstance(value, str) or not value:
+            raise ContractError(f"Claude Code {key} must be a non-empty string")
+        config[key] = value
+    max_turns = config.get("max_turns", 40)
+    _validate_max_turns(max_turns)
+    config["max_turns"] = max_turns
+    _validate_optional_runtime_config(config)
+    return HarnessSpec(
+        identity=harness.identity,
+        version=harness.version,
+        timeout_seconds=harness.timeout_seconds,
+        config=config,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,19 +93,14 @@ class ClaudeCodeHarness:
         config = episode.harness.config
         image = _required_string(config, "mount_image")
         model = _required_string(config, "model")
-        default_opus_model = _optional_string(config, "default_opus_model", model)
-        default_sonnet_model = _optional_string(config, "default_sonnet_model", model)
-        default_haiku_model = _optional_string(config, "default_haiku_model", model)
-        subagent_model = _optional_string(config, "subagent_model", model)
+        default_opus_model = _required_string(config, "default_opus_model")
+        default_sonnet_model = _required_string(config, "default_sonnet_model")
+        default_haiku_model = _required_string(config, "default_haiku_model")
+        subagent_model = _required_string(config, "subagent_model")
         if not _DIGEST_IMAGE.fullmatch(image):
             raise ContractError("Claude Code mount_image must use an OCI sha256 digest")
-        max_turns = config.get("max_turns", 40)
-        if (
-            not isinstance(max_turns, int)
-            or isinstance(max_turns, bool)
-            or not 1 <= max_turns <= 200
-        ):
-            raise ContractError("Claude Code max_turns must be an integer from 1 to 200")
+        max_turns = config.get("max_turns")
+        _validate_max_turns(max_turns)
         normalizer = Path(__file__).parents[1] / "fixtures" / "claude" / "normalize_output.py"
         if not normalizer.is_file():
             raise ContractError("packaged Claude output normalizer is missing")
@@ -104,19 +148,12 @@ class ClaudeCodeHarness:
             "IS_SANDBOX": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
         }
+        _validate_optional_runtime_config(config)
         effort_level = config.get("effort_level")
         if effort_level is not None:
-            if effort_level not in {"low", "medium", "high", "max"}:
-                raise ContractError("Claude Code effort_level must be low, medium, high, or max")
             env["CLAUDE_CODE_EFFORT_LEVEL"] = effort_level
         auto_compact_window = config.get("auto_compact_window")
         if auto_compact_window is not None:
-            if (
-                not isinstance(auto_compact_window, int)
-                or isinstance(auto_compact_window, bool)
-                or auto_compact_window <= 0
-            ):
-                raise ContractError("Claude Code auto_compact_window must be a positive integer")
             env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(auto_compact_window)
         return StagePlan(
             environment_id=episode.inference_environment_id,
@@ -164,8 +201,19 @@ def _required_string(config: dict[str, Any], key: str) -> str:
     return value
 
 
-def _optional_string(config: dict[str, Any], key: str, default: str) -> str:
-    value = config.get(key, default)
-    if not isinstance(value, str) or not value:
-        raise ContractError(f"Claude Code {key} must be a non-empty string")
-    return value
+def _validate_max_turns(value: object) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 200:
+        raise ContractError("Claude Code max_turns must be an integer from 1 to 200")
+
+
+def _validate_optional_runtime_config(config: dict[str, Any]) -> None:
+    effort_level = config.get("effort_level")
+    if effort_level is not None and effort_level not in {"low", "medium", "high", "max"}:
+        raise ContractError("Claude Code effort_level must be low, medium, high, or max")
+    auto_compact_window = config.get("auto_compact_window")
+    if auto_compact_window is not None and (
+        not isinstance(auto_compact_window, int)
+        or isinstance(auto_compact_window, bool)
+        or auto_compact_window <= 0
+    ):
+        raise ContractError("Claude Code auto_compact_window must be a positive integer")

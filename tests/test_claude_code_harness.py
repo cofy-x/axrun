@@ -40,6 +40,10 @@ def _episode() -> ResolvedEpisode:
 
 def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Path) -> None:
     episode = _episode()
+    assert episode.harness.config["default_opus_model"] == "test-model[1m]"
+    assert episode.harness.config["default_sonnet_model"] == "test-model[1m]"
+    assert episode.harness.config["default_haiku_model"] == "test-model"
+    assert episode.harness.config["subagent_model"] == "test-model"
     plan = ClaudeCodeHarness().plan(episode)
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
@@ -85,6 +89,45 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
         destination=tmp_path / "candidates",
     )
     assert bundle.harness == "claude-code" and len(bundle.files) == 4
+
+
+def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "synthetic" / "code-task-v1"
+    raw: object = json.loads((fixture / "row.json").read_text())
+    assert isinstance(raw, dict)
+    episode = SyntheticCodeTaskResolver().resolve(
+        cast(dict[str, Any], raw),
+        source_dir=fixture,
+        episode_id="synthetic-claude-default-models",
+        inference_environment_id="env-inference",
+        verification_environment_id="env-verification",
+        harness=HarnessSpec(
+            identity="claude-code",
+            version="2.1.205",
+            config={
+                "mount_image": f"registry.invalid/axrun/claude@sha256:{'a' * 64}",
+                "model": "opaque-model-id",
+            },
+        ),
+    )
+
+    assert episode.harness.config == {
+        "mount_image": f"registry.invalid/axrun/claude@sha256:{'a' * 64}",
+        "model": "opaque-model-id",
+        "default_opus_model": "opaque-model-id",
+        "default_sonnet_model": "opaque-model-id",
+        "default_haiku_model": "opaque-model-id",
+        "subagent_model": "opaque-model-id",
+        "max_turns": 40,
+    }
+    plan = ClaudeCodeHarness().plan(episode)
+    assert {
+        plan.env["ANTHROPIC_MODEL"],
+        plan.env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+        plan.env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+        plan.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+        plan.env["CLAUDE_CODE_SUBAGENT_MODEL"],
+    } == {"opaque-model-id"}
 
 
 def test_claude_output_normalizer_redacts_auth_material_and_extracts_usage(
