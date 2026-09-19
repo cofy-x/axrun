@@ -31,7 +31,7 @@ class GreenfieldVerifierAdapter(CommandVerifierAdapter):
         package_root = Path(__file__).parents[1]
         archive_module = package_root / "candidates" / "archive.py"
         errors_module = package_root / "errors.py"
-        init_module = package_root / "__init__.py"
+        init_module = package_root / "fixtures" / "claude" / "runtime_package_init.py"
         verification_root = shlex.quote(episode.verification_environment.working_directory)
         script = "\n".join(
             (
