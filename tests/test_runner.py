@@ -18,6 +18,8 @@ from axrun.errors import (
 )
 from axrun.models import (
     Artifact,
+    CandidateSpec,
+    EnvironmentBinding,
     EpisodePhase,
     ExecutionRef,
     HarnessSpec,
@@ -25,6 +27,7 @@ from axrun.models import (
     ResolvedEpisode,
     StagePlan,
     StageResult,
+    TaskSpec,
     VerificationResult,
     VerifierSpec,
 )
@@ -116,18 +119,18 @@ class Inference:
 
     def plan(self, episode):
         return StagePlan(
-            episode.inference_environment_id,
+            episode.inference_environment.environment_id,
             ("agent",),
             "/workspace",
             (OutputSpec("/outputs/candidate.patch"),),
         )
 
-    def build_candidate(self, episode, result, *, destination):
+    def build(self, episode, result, *, destination):
         return persist_candidate(
             episode,
             result,
             destination=destination,
-            required_paths=("/outputs/candidate.patch",),
+            required_outputs=(("patch", "/outputs/candidate.patch"),),
             harness=self.name,
             harness_version="1",
         )
@@ -138,7 +141,7 @@ class Verifier:
 
     def plan(self, episode, candidate):
         return StagePlan(
-            episode.verification_environment_id,
+            episode.verification_environment.environment_id,
             ("verify",),
             "/workspace",
             (OutputSpec("/outputs/verification.json", media_type="application/json"),),
@@ -171,11 +174,16 @@ def episode(tmp_path: Path, name: str = "ep") -> ResolvedEpisode:
         name,
         "task",
         "b" * 64,
-        "a" * 40,
         str(prompt),
-        "env-i",
-        "env-v",
+        TaskSpec("git-worktree", "1", {"base_commit": "a" * 40}),
+        EnvironmentBinding(
+            "env-i", f"registry.invalid/task@sha256:{'f' * 64}", "linux/amd64", "/workspace"
+        ),
+        EnvironmentBinding(
+            "env-v", f"registry.invalid/task@sha256:{'f' * 64}", "linux/amd64", "/workspace"
+        ),
         HarnessSpec("fake", "1"),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("fake-verifier", "1"),
     )
 
@@ -184,7 +192,9 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
     backend = FakeBackend()
     store = EpisodeStore(tmp_path / "state")
     runner = EpisodeRunner(backend=backend, store=store)
-    result = runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier())
+    result = runner.run(
+        episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+    )
     record = runner.inspect("ep")
     assert result.verdict == "passed" and record.phase == EpisodePhase.COMPLETED
     assert record.inference is not None and record.verification is not None
@@ -193,7 +203,12 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
     assert f"/sha256/{record.verification_result_digest}/" in record.verification_result
     assert record.trajectory_manifest == "" and record.trajectory_digest == ""
     assert record.inference_termination_reason == "completed"
-    assert runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier()) == result
+    assert (
+        runner.run(
+            episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+        )
+        == result
+    )
     assert len(backend.executions) == 2
 
 
@@ -203,7 +218,7 @@ def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch
     class TrajectoryInference(Inference):
         def plan(self, episode):
             return StagePlan(
-                episode.inference_environment_id,
+                episode.inference_environment.environment_id,
                 ("agent",),
                 "/workspace",
                 (
@@ -270,6 +285,7 @@ def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch
     result = runner.run(
         episode(tmp_path, "with-trajectory"),
         inference=TrajectoryInference(),
+        candidate=TrajectoryInference(),
         verifier=Verifier(),
         trajectory=ClaudeCodeTrajectoryAdapter(),
     )
@@ -306,6 +322,7 @@ def test_trajectory_contract_failure_is_infrastructure_failure_without_verificat
         runner.run(
             episode(tmp_path, "trajectory-contract-failure"),
             inference=RequiredTrajectoryInference(),
+            candidate=RequiredTrajectoryInference(),
             verifier=Verifier(),
             trajectory=RejectingTrajectoryAdapter(),
         )
@@ -327,7 +344,7 @@ def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:
     store.save(record)
     backend = FakeBackend()
     result = EpisodeRunner(backend=backend, store=store).recover(
-        "recover", inference=Inference(), verifier=Verifier()
+        "recover", inference=Inference(), candidate=Inference(), verifier=Verifier()
     )
     assert result.verdict == "passed"
     assert len(backend.executions) == 1
@@ -352,7 +369,9 @@ def test_live_model_recovery_requires_operator_decision_for_original_run(
     store.save(record)
     runner = EpisodeRunner(backend=LiveBackend(), store=store)
     with pytest.raises(RecoveryRequiredError, match="cannot recreate its ephemeral Tunnel"):
-        runner.recover("live-model", inference=LiveInference(), verifier=Verifier())
+        runner.recover(
+            "live-model", inference=LiveInference(), candidate=LiveInference(), verifier=Verifier()
+        )
     assert runner.inspect("live-model").inference.run_id == "original-run"
 
 
@@ -360,7 +379,12 @@ def test_failed_verdict_is_a_completed_business_result(tmp_path: Path) -> None:
     runner = EpisodeRunner(
         backend=FakeBackend(resolved=False), store=EpisodeStore(tmp_path / "state")
     )
-    result = runner.run(episode(tmp_path, "unresolved"), inference=Inference(), verifier=Verifier())
+    result = runner.run(
+        episode(tmp_path, "unresolved"),
+        inference=Inference(),
+        candidate=Inference(),
+        verifier=Verifier(),
+    )
     assert result.verdict == "failed" and result.score == 0.0
     assert runner.inspect("unresolved").phase == EpisodePhase.COMPLETED
 
@@ -380,11 +404,18 @@ def test_verification_transport_failure_recovers_same_run(tmp_path: Path) -> Non
     backend = PartitionOnceBackend()
     runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
     with pytest.raises(ConnectionError, match="partition"):
-        runner.run(episode(tmp_path, "partition"), inference=Inference(), verifier=Verifier())
+        runner.run(
+            episode(tmp_path, "partition"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
+        )
     before = runner.inspect("partition")
     assert before.phase == EpisodePhase.VERIFICATION_RUNNING
     assert before.verification is not None and before.verification.run_id == "run-verification"
-    result = runner.recover("partition", inference=Inference(), verifier=Verifier())
+    result = runner.recover(
+        "partition", inference=Inference(), candidate=Inference(), verifier=Verifier()
+    )
     assert result.verdict == "passed"
     assert [value.run_id for value in backend.executions] == ["run-1", "run-verification"]
 
@@ -396,7 +427,12 @@ def test_cancel_is_not_blocked_by_remote_execution(tmp_path: Path) -> None:
 
     def execute() -> None:
         try:
-            runner.run(episode(tmp_path, "cancel"), inference=Inference(), verifier=Verifier())
+            runner.run(
+                episode(tmp_path, "cancel"),
+                inference=Inference(),
+                candidate=Inference(),
+                verifier=Verifier(),
+            )
         except BaseException as exc:
             errors.append(exc)
 
@@ -418,7 +454,12 @@ def test_terminal_inference_failure_is_not_recoverable(tmp_path: Path) -> None:
 
     runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
     with pytest.raises(InfrastructureError, match="inference Run failed"):
-        runner.run(episode(tmp_path, "failed"), inference=Inference(), verifier=Verifier())
+        runner.run(
+            episode(tmp_path, "failed"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
+        )
     assert runner.inspect("failed").phase == EpisodePhase.FAILED
 
 
@@ -446,7 +487,12 @@ def test_terminal_model_failure_persists_only_safe_proxy_diagnosis(tmp_path: Pat
 
     runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
     with pytest.raises(InfrastructureError, match="inference Run failed"):
-        runner.run(episode(tmp_path, "model-failed"), inference=Inference(), verifier=Verifier())
+        runner.run(
+            episode(tmp_path, "model-failed"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
+        )
     record = runner.inspect("model-failed")
     assert record.phase == EpisodePhase.FAILED
     assert record.diagnostic_code == "upstream_response"
@@ -485,7 +531,10 @@ def test_prestart_model_failure_persists_stable_diagnosis_without_secret(
     runner = EpisodeRunner(backend=FailedBackend(), store=EpisodeStore(tmp_path / "state"))
     with pytest.raises(DiagnosedInfrastructureError):
         runner.run(
-            episode(tmp_path, "preflight-failed"), inference=Inference(), verifier=Verifier()
+            episode(tmp_path, "preflight-failed"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
         )
     record = runner.inspect("preflight-failed")
     assert record.diagnostic_code == "tunnel_model_preflight_failed"
@@ -515,6 +564,7 @@ def test_progress_observer_failure_is_terminal_infrastructure_not_verdict(
         runner.run(
             episode(tmp_path, "observer-failed"),
             inference=Inference(),
+            candidate=Inference(),
             verifier=Verifier(),
             inference_lifecycle=BrokenObserver(),
         )
@@ -531,5 +581,10 @@ def test_terminal_success_with_missing_declared_output_fails_contract(tmp_path: 
 
     runner = EpisodeRunner(backend=MissingOutputBackend(), store=EpisodeStore(tmp_path / "state"))
     with pytest.raises(ContractError, match="required sealed output is missing"):
-        runner.run(episode(tmp_path, "missing"), inference=Inference(), verifier=Verifier())
+        runner.run(
+            episode(tmp_path, "missing"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
+        )
     assert runner.inspect("missing").phase == EpisodePhase.FAILED

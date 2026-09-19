@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from axrun.candidates import GitPatchCandidateAdapter
 from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import ContractError
 from axrun.harnesses import ClaudeCodeHarness
@@ -24,6 +25,8 @@ def _episode() -> ResolvedEpisode:
         episode_id="synthetic-claude",
         inference_environment_id="env-inference",
         verification_environment_id="env-verification",
+        task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+        task_platform="linux/amd64",
         harness=HarnessSpec(
             identity="claude-code",
             version="2.1.205",
@@ -94,7 +97,7 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
                 output.media_type,
             )
         )
-    bundle = ClaudeCodeHarness().build_candidate(
+    bundle = GitPatchCandidateAdapter().build(
         episode,
         StageResult(
             ExecutionRef("env-inference", "run-claude", "alloc-claude"), 0, "", tuple(artifacts)
@@ -115,6 +118,8 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         episode_id="synthetic-claude-default-models",
         inference_environment_id="env-inference",
         verification_environment_id="env-verification",
+        task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+        task_platform="linux/amd64",
         harness=HarnessSpec(
             identity="claude-code",
             version="2.1.205",
@@ -179,5 +184,6 @@ def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:
     benchmark_episode = replace(
         episode,
         harness=HarnessSpec("claude-code", "2.1.205", config=config),
+        inference_environment=replace(episode.inference_environment, working_directory="/testbed"),
     )
     assert ClaudeCodeHarness().plan(benchmark_episode).cwd == "/testbed"

@@ -10,10 +10,13 @@ import pytest
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
+    CandidateSpec,
+    EnvironmentBinding,
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
     StageResult,
+    TaskSpec,
     VerifierSpec,
 )
 from axrun.qualification import qualify_episode
@@ -31,10 +34,10 @@ def _episode(tmp_path: Path) -> ResolvedEpisode:
         "episode",
         "task",
         "c" * 64,
-        "d" * 40,
         str(prompt),
-        "env-inference",
-        "env-verification",
+        TaskSpec("git-worktree", "1", {"base_commit": "d" * 40}),
+        EnvironmentBinding("env-inference", _TASK_IMAGE, "linux/arm64", "/workspace"),
+        EnvironmentBinding("env-verification", _TASK_IMAGE, "linux/arm64", "/workspace"),
         HarnessSpec(
             "claude-code",
             "2.1.205",
@@ -50,8 +53,8 @@ def _episode(tmp_path: Path) -> ResolvedEpisode:
                 "disallowed_tools": ["WebFetch", "WebSearch"],
             },
         ),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("synthetic-code-task", "1"),
-        metadata={"task_image": _TASK_IMAGE},
     )
 
 

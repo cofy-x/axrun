@@ -23,5 +23,7 @@ class DatasetAdapter(Protocol):
         episode_id: str,
         inference_environment_id: str,
         verification_environment_id: str,
+        task_image: str,
+        task_platform: str,
         harness: HarnessSpec,
     ) -> ResolvedEpisode: ...

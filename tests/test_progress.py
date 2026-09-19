@@ -12,10 +12,13 @@ import pytest
 from axrun.errors import ContractError, DiagnosedInfrastructureError
 from axrun.lifecycle.stage_progress import StageProgressObserver
 from axrun.models import (
+    CandidateSpec,
+    EnvironmentBinding,
     EpisodePhase,
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
+    TaskSpec,
     VerifierSpec,
 )
 from axrun.progress.schema import (
@@ -72,16 +75,18 @@ def _snapshot() -> ProgressSnapshot:
 def _episode(tmp_path: Path) -> ResolvedEpisode:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("secret prompt that must not enter progress")
+    image = f"registry.invalid/task@sha256:{'f' * 64}"
     return ResolvedEpisode(
         1,
         "episode",
         "task",
         "a" * 64,
-        "b" * 40,
         str(prompt),
-        "env",
-        "env",
+        TaskSpec("git-worktree", "1", {"base_commit": "b" * 40}),
+        EnvironmentBinding("env", image, "linux/amd64", "/workspace"),
+        EnvironmentBinding("env", image, "linux/amd64", "/workspace"),
         HarnessSpec("claude-code", "2.1.205", config={"model": "opaque"}),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("command-verifier", "1"),
     )
 

@@ -9,8 +9,11 @@ from typing import Any, cast
 from axrun.errors import ContractError
 from axrun.harnesses import resolve_claude_code_spec
 from axrun.models import (
+    CandidateSpec,
+    EnvironmentBinding,
     HarnessSpec,
     ResolvedEpisode,
+    TaskSpec,
     VerifierSpec,
     canonical_digest,
 )
@@ -28,6 +31,8 @@ class SyntheticCodeTaskResolver:
         episode_id: str,
         inference_environment_id: str,
         verification_environment_id: str,
+        task_image: str,
+        task_platform: str,
         harness: HarnessSpec,
     ) -> ResolvedEpisode:
         expected = {
@@ -55,10 +60,10 @@ class SyntheticCodeTaskResolver:
         task_id = _required_string(row, "task_id")
         base_commit = _required_string(row, "base_commit")
         prompt = _checked_file(source_dir, _required_string(row, "problem_statement_file"))
-        task_image = row["task_image"]
-        if not isinstance(task_image, dict):
+        task_image_definition = row["task_image"]
+        if not isinstance(task_image_definition, dict):
             raise ContractError("synthetic task_image has an invalid shape")
-        task_image_values = cast(dict[str, Any], task_image)
+        task_image_values = cast(dict[str, Any], task_image_definition)
         if set(task_image_values) != {
             "dockerfile",
             "platforms",
@@ -92,11 +97,20 @@ class SyntheticCodeTaskResolver:
             episode_id=episode_id,
             task_id=task_id,
             seed_digest=canonical_digest(row),
-            base_commit=base_commit,
             prompt_file=str(prompt),
-            inference_environment_id=inference_environment_id,
-            verification_environment_id=verification_environment_id,
+            task=TaskSpec(
+                identity="axrun.synthetic.code-task",
+                version="1",
+                config={"base_commit": base_commit},
+            ),
+            inference_environment=EnvironmentBinding(
+                inference_environment_id, task_image, task_platform, "/workspace"
+            ),
+            verification_environment=EnvironmentBinding(
+                verification_environment_id, task_image, task_platform, "/workspace"
+            ),
             harness=resolved_harness,
+            candidate=CandidateSpec(identity="git-patch", version="1"),
             verifier=VerifierSpec(
                 identity="synthetic-code-task",
                 version="1",

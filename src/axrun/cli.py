@@ -20,8 +20,9 @@ from axrun.adapters import (
     SyntheticVerifierAdapter,
 )
 from axrun.adapters._candidate import load_candidate
-from axrun.adapters.base import InferenceAdapter, VerifierAdapter
+from axrun.adapters.base import CandidateAdapter, InferenceAdapter, VerifierAdapter
 from axrun.axern_backend import AxernBackend
+from axrun.candidates import GitPatchCandidateAdapter
 from axrun.datasets import SweBenchVerifiedResolver, SyntheticCodeTaskResolver
 from axrun.errors import AxrunError, ContractError
 from axrun.harnesses import ClaudeCodeHarness
@@ -55,7 +56,7 @@ def _episode(path: Path) -> ResolvedEpisode:
 
 def _adapters(
     episode: ResolvedEpisode,
-) -> tuple[InferenceAdapter, VerifierAdapter]:
+) -> tuple[InferenceAdapter, CandidateAdapter, VerifierAdapter]:
     if episode.harness.identity == "static-patch":
         inference: InferenceAdapter = StaticPatchAdapter(version=episode.harness.version)
     elif episode.harness.identity == "claude-code":
@@ -84,7 +85,11 @@ def _adapters(
         )
     else:
         raise ContractError(f"unsupported verifier adapter: {episode.verifier.identity}")
-    return inference, verifier
+    if episode.candidate.identity == "git-patch":
+        candidate: CandidateAdapter = GitPatchCandidateAdapter(version=episode.candidate.version)
+    else:
+        raise ContractError(f"unsupported candidate adapter: {episode.candidate.identity}")
+    return inference, candidate, verifier
 
 
 def _is_string_array(value: object) -> bool:
@@ -252,6 +257,8 @@ def _parser() -> argparse.ArgumentParser:
         "--harness", choices=("static-patch", "claude-code"), default="static-patch"
     )
     resolve.add_argument("--candidate-file", default="")
+    resolve.add_argument("--task-image", required=True)
+    resolve.add_argument("--task-platform", choices=("linux/amd64", "linux/arm64"), required=True)
     _add_claude_arguments(resolve)
     resolve.add_argument("--inference-environment", required=True)
     resolve.add_argument("--verification-environment", required=True)
@@ -383,6 +390,8 @@ def main(argv: list[str] | None = None) -> int:
                 episode_id=args.episode_id,
                 inference_environment_id=args.inference_environment,
                 verification_environment_id=args.verification_environment,
+                task_image=args.task_image,
+                task_platform=args.task_platform,
                 harness=harness,
             )
             _write_episode(episode, args.output)
@@ -444,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
             runner = _runner(args, client)
             if args.command == "qualify":
                 episode = _episode(args.episode)
-                inference, _ = _adapters(episode)
+                inference, _, _ = _adapters(episode)
                 inference.plan(episode)
                 result = qualify_episode(
                     episode,
@@ -456,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "run":
                 episode = _episode(args.episode)
-                inference, verifier = _adapters(episode)
+                inference, candidate, verifier = _adapters(episode)
                 inference.plan(episode)
                 qualify_episode(
                     episode,
@@ -467,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = runner.run(
                     episode,
                     inference=inference,
+                    candidate=candidate,
                     verifier=verifier,
                     trajectory=_trajectory_adapter(episode),
                     inference_lifecycle=_model_lifecycle(args, client, episode, store),
@@ -476,11 +486,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             else:
                 episode = store.load_spec(args.episode_id)
-                inference, verifier = _adapters(episode)
+                inference, candidate, verifier = _adapters(episode)
                 if args.command in {"wait", "resume"}:
                     result = runner.wait(
                         args.episode_id,
                         inference=inference,
+                        candidate=candidate,
                         verifier=verifier,
                         trajectory=_trajectory_adapter(episode),
                         timeout=args.timeout,

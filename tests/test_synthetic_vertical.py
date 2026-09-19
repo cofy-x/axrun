@@ -14,6 +14,7 @@ import pytest
 
 from axrun.adapters import StaticPatchAdapter, SyntheticVerifierAdapter
 from axrun.adapters._candidate import load_candidate
+from axrun.candidates import GitPatchCandidateAdapter
 from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import ContractError
 from axrun.models import Artifact, ExecutionRef, HarnessSpec, StagePlan, StageResult
@@ -197,6 +198,8 @@ def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
         episode_id=f"synthetic-{candidate_file.removesuffix('.patch')}",
         inference_environment_id="synthetic-inference",
         verification_environment_id="synthetic-verification",
+        task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+        task_platform="linux/amd64",
         harness=_static_harness(candidate_file),
     )
     backend = SyntheticVerticalBackend()
@@ -205,6 +208,7 @@ def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
     result = runner.run(
         episode,
         inference=StaticPatchAdapter(),
+        candidate=GitPatchCandidateAdapter(),
         verifier=SyntheticVerifierAdapter(),
     )
     record = runner.inspect(episode.episode_id)
@@ -232,6 +236,8 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
         episode_id="gold",
         inference_environment_id="env-i",
         verification_environment_id="env-v",
+        task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+        task_platform="linux/amd64",
         harness=_static_harness("gold.patch"),
     )
     second = resolver.resolve(
@@ -240,6 +246,8 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
         episode_id="bad",
         inference_environment_id="other-i",
         verification_environment_id="other-v",
+        task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+        task_platform="linux/amd64",
         harness=_static_harness("known-bad.patch"),
     )
     assert first.seed_digest == second.seed_digest
@@ -252,6 +260,8 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
             episode_id="invalid",
             inference_environment_id="env-i",
             verification_environment_id="env-v",
+            task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+            task_platform="linux/amd64",
             harness=_static_harness("gold.patch"),
         )
     tampered = json.loads(json.dumps(row))
@@ -264,5 +274,7 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
             episode_id="tampered",
             inference_environment_id="env-i",
             verification_environment_id="env-v",
+            task_image=f"registry.invalid/task@sha256:{'f' * 64}",
+            task_platform="linux/amd64",
             harness=_static_harness("gold.patch"),
         )

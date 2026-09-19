@@ -12,10 +12,13 @@ from axrun.adapters._candidate import load_candidate, persist_candidate
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
+    CandidateSpec,
+    EnvironmentBinding,
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
     StageResult,
+    TaskSpec,
     VerifierSpec,
 )
 
@@ -23,17 +26,19 @@ from axrun.models import (
 def episode(tmp_path: Path) -> ResolvedEpisode:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("fix it", encoding="utf-8")
+    image = f"registry.invalid/task@sha256:{'f' * 64}"
     return ResolvedEpisode(
-        1,
-        "ep",
-        "task",
-        "b" * 64,
-        "a" * 40,
-        str(prompt),
-        "env-i",
-        "env-v",
-        HarnessSpec("static-patch", "1"),
-        VerifierSpec("command-verifier", "1"),
+        schema_version=1,
+        episode_id="ep",
+        task_id="task",
+        seed_digest="b" * 64,
+        prompt_file=str(prompt),
+        task=TaskSpec("git-worktree", "1", {"base_commit": "a" * 40}),
+        inference_environment=EnvironmentBinding("env-i", image, "linux/amd64", "/workspace"),
+        verification_environment=EnvironmentBinding("env-v", image, "linux/amd64", "/workspace"),
+        harness=HarnessSpec("static-patch", "1"),
+        candidate=CandidateSpec("git-patch", "1"),
+        verifier=VerifierSpec("command-verifier", "1"),
     )
 
 
@@ -53,7 +58,7 @@ def test_candidate_is_self_contained_and_detects_tampering(tmp_path: Path) -> No
         episode(tmp_path),
         stage,
         destination=destination,
-        required_paths=(artifact.name,),
+        required_outputs=(("patch", artifact.name),),
         harness="static-patch",
         harness_version="1",
     )
@@ -80,7 +85,7 @@ def test_verifier_receives_only_candidate_and_digest(tmp_path: Path) -> None:
         episode(tmp_path),
         StageResult(ExecutionRef("env-i", "run-i"), 0, "", (artifact,)),
         destination=tmp_path / "candidate",
-        required_paths=(artifact.name,),
+        required_outputs=(("patch", artifact.name),),
         harness="static-patch",
         harness_version="1",
     )
@@ -111,7 +116,7 @@ def test_candidate_crash_before_atomic_publish_leaves_no_final_bundle(
             episode(tmp_path),
             StageResult(ExecutionRef("env-i", "run-i"), 0, "", (artifact,)),
             destination=destination,
-            required_paths=(artifact.name,),
+            required_outputs=(("patch", artifact.name),),
             harness="static-patch",
             harness_version="1",
         )

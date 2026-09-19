@@ -42,7 +42,8 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
             candidate.episode_id != episode_id
             or candidate.task_id != episode.task_id
             or candidate.seed_digest != episode.seed_digest
-            or candidate.base_commit != episode.base_commit
+            or candidate.candidate != episode.candidate.identity
+            or candidate.candidate_version != episode.candidate.version
             or record.inference is None
             or candidate.inference_run_id != record.inference.run_id
         ):
@@ -71,11 +72,11 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
             raise ContractError("VerificationResult CandidateBundle mismatch")
 
     if record.inference is not None and (
-        record.inference.environment_id != episode.inference_environment_id
+        record.inference.environment_id != episode.inference_environment.environment_id
     ):
         raise ContractError("inference Environment mismatch")
     if record.verification is not None:
-        if record.verification.environment_id != episode.verification_environment_id:
+        if record.verification.environment_id != episode.verification_environment.environment_id:
             raise ContractError("verification Environment mismatch")
         if record.inference is not None and record.verification.run_id == record.inference.run_id:
             raise ContractError("verification did not use a fresh Run")
@@ -109,8 +110,12 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         "spec_digest": record.spec_digest,
         "seed_digest": episode.seed_digest,
         "task_id": episode.task_id,
-        "base_commit": episode.base_commit,
+        "task": {"identity": episode.task.identity, "version": episode.task.version},
         "harness": {"identity": episode.harness.identity, "version": episode.harness.version},
+        "candidate": {
+            "identity": episode.candidate.identity,
+            "version": episode.candidate.version,
+        },
         "verifier": {
             "identity": episode.verifier.identity,
             "version": episode.verifier.version,
@@ -119,6 +124,9 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         "qualification_result_digest": record.qualification_result_digest,
         "qualified_environment_image": (
             qualification.environment_image if qualification is not None else ""
+        ),
+        "qualified_verification_environment_image": (
+            qualification.verification_environment_image if qualification is not None else ""
         ),
         "qualification_checks": qualification.checks if qualification is not None else {},
         "inference": _execution(record.inference),

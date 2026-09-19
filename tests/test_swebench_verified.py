@@ -153,7 +153,7 @@ def _candidate(tmp_path: Path, episode, payload: bytes = b""):
         episode,
         StageResult(ExecutionRef("env-i", "run-i", "alloc-i"), 0, "", (artifact,)),
         destination=tmp_path / "bundles",
-        required_paths=(artifact.name,),
+        required_outputs=(("patch", artifact.name),),
         harness="claude-code",
         harness_version="2.1.205",
     )

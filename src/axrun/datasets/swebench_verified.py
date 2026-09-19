@@ -7,7 +7,15 @@ from typing import Any, cast
 
 from axrun.errors import ContractError
 from axrun.harnesses import resolve_claude_code_spec
-from axrun.models import HarnessSpec, ResolvedEpisode, VerifierSpec, canonical_digest
+from axrun.models import (
+    CandidateSpec,
+    EnvironmentBinding,
+    HarnessSpec,
+    ResolvedEpisode,
+    TaskSpec,
+    VerifierSpec,
+    canonical_digest,
+)
 
 _FIELDS = {
     "FAIL_TO_PASS",
@@ -121,11 +129,20 @@ class SweBenchVerifiedResolver:
             episode_id=episode_id,
             task_id=strings["instance_id"],
             seed_digest=seed_digest,
-            base_commit=base_commit,
             prompt_file=str(prompt),
-            inference_environment_id=inference_environment_id,
-            verification_environment_id=verification_environment_id,
+            task=TaskSpec(
+                identity="swebench-verified",
+                version="1",
+                config={"base_commit": base_commit},
+            ),
+            inference_environment=EnvironmentBinding(
+                inference_environment_id, task_image, task_platform, "/testbed"
+            ),
+            verification_environment=EnvironmentBinding(
+                verification_environment_id, task_image, task_platform, "/testbed"
+            ),
             harness=resolved_harness,
+            candidate=CandidateSpec(identity="git-patch", version="1"),
             verifier=VerifierSpec(
                 identity="swebench-verified",
                 version="1",

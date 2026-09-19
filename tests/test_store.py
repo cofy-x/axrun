@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from axrun.models import EpisodePhase, ExecutionRef, HarnessSpec, ResolvedEpisode, VerifierSpec
+from axrun.models import (
+    CandidateSpec,
+    EnvironmentBinding,
+    EpisodePhase,
+    ExecutionRef,
+    HarnessSpec,
+    ResolvedEpisode,
+    TaskSpec,
+    VerifierSpec,
+)
 from axrun.store import EpisodeStore
 
 
@@ -10,11 +19,12 @@ def test_store_separates_immutable_spec_from_minimal_execution_record(tmp_path) 
         "ep-1",
         "task-1",
         "b" * 64,
-        "a" * 40,
-        "prompt.txt",
-        "env-i",
-        "env-v",
+        str(tmp_path / "prompt.txt"),
+        TaskSpec("git-worktree", "1", {"base_commit": "a" * 40}),
+        EnvironmentBinding("env-i", f"x/task@sha256:{'f' * 64}", "linux/amd64", "/workspace"),
+        EnvironmentBinding("env-v", f"x/task@sha256:{'f' * 64}", "linux/amd64", "/workspace"),
         HarnessSpec("static-patch", "1"),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("command-verifier", "1"),
     )
     store = EpisodeStore(tmp_path)

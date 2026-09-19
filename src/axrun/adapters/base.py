@@ -21,7 +21,12 @@ class InferenceAdapter(Protocol):
 
     def plan(self, episode: ResolvedEpisode) -> StagePlan: ...
 
-    def build_candidate(
+
+class CandidateAdapter(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def build(
         self, episode: ResolvedEpisode, result: StageResult, *, destination: Path
     ) -> CandidateBundle: ...
 

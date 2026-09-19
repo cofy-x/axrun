@@ -13,6 +13,7 @@ from axrun.models import (
     OutputSpec,
     ResolvedEpisode,
     StagePlan,
+    task_config_string,
 )
 
 _RESULT = "/outputs/verification.json"
@@ -28,7 +29,7 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
         if episode.verifier.identity != self.name:
             raise ContractError("synthetic verifier requires a matching verifier")
         patch = next(
-            (item for item in candidate.files if item.declared_path == "/outputs/candidate.patch"),
+            (item for item in candidate.files if item.role == "patch"),
             None,
         )
         if patch is None:
@@ -46,14 +47,14 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
             InputFile(verifier_file, "/opt/axrun-synthetic/run_verifier.py"),
         ]
         return StagePlan(
-            environment_id=episode.verification_environment_id,
+            environment_id=episode.verification_environment.environment_id,
             argv=(
                 "python3",
                 "/opt/axrun-synthetic/run_verifier.py",
                 "--workspace",
                 "/workspace",
                 "--base-commit",
-                episode.base_commit,
+                task_config_string(episode, "base_commit"),
                 "--candidate",
                 "/inputs/candidate.patch",
                 "--candidate-digest",
@@ -63,7 +64,7 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
                 "--log",
                 _LOG,
             ),
-            cwd="/workspace",
+            cwd=episode.verification_environment.working_directory,
             inputs=tuple(inputs),
             outputs=(
                 OutputSpec(_RESULT, media_type="application/json"),

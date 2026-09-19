@@ -19,6 +19,7 @@ from axrun.models import (
     ResolvedEpisode,
     StagePlan,
     canonical_digest,
+    task_config_string,
 )
 from axrun.store import EpisodeStore
 
@@ -32,6 +33,7 @@ class QualificationResult:
     episode_id: str
     spec_digest: str
     environment_image: str
+    verification_environment_image: str
     run_id: str
     allocation_id: str
     output_sha256: str
@@ -48,6 +50,7 @@ class QualificationResult:
                 raise ContractError(f"qualification {name} must be lowercase SHA-256")
         if (
             not _is_digest_image(self.environment_image)
+            or not _is_digest_image(self.verification_environment_image)
             or not self.run_id
             or not self.allocation_id
         ):
@@ -71,24 +74,21 @@ def qualify_episode(
             return load_qualification_result(store, episode)
         if record.phase != EpisodePhase.NEW:
             raise RecoveryRequiredError("episode started without qualification evidence")
-    inference_image = _environment_image(client, episode.inference_environment_id)
-    verification_image = _environment_image(client, episode.verification_environment_id)
-    if inference_image != verification_image:
-        raise ContractError("inference and verification Environments use different task images")
-    expected_image = episode.metadata.get("task_image", "")
-    if expected_image and inference_image != expected_image:
-        raise ContractError("Environment task image differs from the resolved episode")
+    inference_image = _environment_image(client, episode.inference_environment.environment_id)
+    verification_image = _environment_image(client, episode.verification_environment.environment_id)
+    if inference_image != episode.inference_environment.image:
+        raise ContractError("inference Environment image differs from the resolved episode")
+    if verification_image != episode.verification_environment.image:
+        raise ContractError("verification Environment image differs from the resolved episode")
 
-    working_directory = episode.harness.config.get("working_directory", "/workspace")
-    if not isinstance(working_directory, str) or not working_directory.startswith("/"):
-        raise ContractError("qualification working directory must be absolute")
+    working_directory = episode.inference_environment.working_directory
     fixture = Path(__file__).parent / "fixtures" / "qualification" / "run.py"
     qualification_args = [
         "/opt/axrun/qualification.py",
         "--workspace",
         working_directory,
         "--base-commit",
-        episode.base_commit,
+        task_config_string(episode, "base_commit"),
         "--output",
         _OUTPUT,
     ]
@@ -107,7 +107,7 @@ def qualify_episode(
         *qualification_args,
     )
     plan = StagePlan(
-        environment_id=episode.inference_environment_id,
+        environment_id=episode.inference_environment.environment_id,
         argv=argv,
         cwd=working_directory,
         inputs=(InputFile(str(fixture), "/opt/axrun/qualification.py"),),
@@ -143,6 +143,7 @@ def qualify_episode(
         episode_id=episode.episode_id,
         spec_digest=episode.digest,
         environment_image=inference_image,
+        verification_environment_image=verification_image,
         run_id=stage.execution.run_id,
         allocation_id=stage.execution.allocation_id,
         output_sha256=artifact.sha256,
@@ -195,7 +196,7 @@ def _validate_checks(
         raise ContractError("qualification output has an invalid shape")
     if (
         checks["schema_version"] != 1
-        or checks["base_commit"] != episode.base_commit
+        or checks["base_commit"] != task_config_string(episode, "base_commit")
         or checks["working_directory"] != working_directory
     ):
         raise ContractError("qualification output does not match the episode")

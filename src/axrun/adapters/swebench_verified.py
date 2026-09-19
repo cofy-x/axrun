@@ -9,7 +9,14 @@ from typing import cast
 
 from axrun.adapters.command_verifier import CommandVerifierAdapter
 from axrun.errors import ContractError
-from axrun.models import CandidateBundle, InputFile, OutputSpec, ResolvedEpisode, StagePlan
+from axrun.models import (
+    CandidateBundle,
+    InputFile,
+    OutputSpec,
+    ResolvedEpisode,
+    StagePlan,
+    task_config_string,
+)
 
 _RESULT = "/outputs/verification.json"
 _LOG = "/outputs/verifier.log"
@@ -24,7 +31,7 @@ class SweBenchVerifiedVerifierAdapter(CommandVerifierAdapter):
         if episode.verifier.identity != self.name or episode.verifier.version != self.version:
             raise ContractError("SWE-bench Verified adapter requires swebench-verified@1")
         patch = next(
-            (item for item in candidate.files if item.declared_path == "/outputs/candidate.patch"),
+            (item for item in candidate.files if item.role == "patch"),
             None,
         )
         if patch is None:
@@ -38,14 +45,14 @@ class SweBenchVerifiedVerifierAdapter(CommandVerifierAdapter):
         fail_to_pass = _string_array(config, "fail_to_pass", require_nonempty=True)
         pass_to_pass = _string_array(config, "pass_to_pass", require_nonempty=False)
         return StagePlan(
-            environment_id=episode.verification_environment_id,
+            environment_id=episode.verification_environment.environment_id,
             argv=(
                 "python3",
                 "/opt/axrun-swebench/run_verifier.py",
                 "--workspace",
                 "/testbed",
                 "--base-commit",
-                episode.base_commit,
+                task_config_string(episode, "base_commit"),
                 "--candidate",
                 "/inputs/candidate.patch",
                 "--candidate-digest",
@@ -63,7 +70,7 @@ class SweBenchVerifiedVerifierAdapter(CommandVerifierAdapter):
                 "--log",
                 _LOG,
             ),
-            cwd="/testbed",
+            cwd=episode.verification_environment.working_directory,
             inputs=(
                 InputFile(
                     str(Path(candidate.root) / patch.bundle_path),

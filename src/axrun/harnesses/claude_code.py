@@ -8,18 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from axrun.adapters._candidate import persist_candidate
 from axrun.adapters._git import canonical_patch_export
 from axrun.errors import ContractError
 from axrun.models import (
-    CandidateBundle,
     HarnessSpec,
     ImageMountSpec,
     InputFile,
     OutputSpec,
     ResolvedEpisode,
     StagePlan,
-    StageResult,
+    task_config_string,
 )
 
 _VERSION = "2.1.205"
@@ -114,9 +112,11 @@ class ClaudeCodeHarness:
             raise ContractError("Claude Code mount_image must use an OCI sha256 digest")
         max_turns = config.get("max_turns")
         _validate_max_turns(max_turns)
-        working_directory = _required_string(config, "working_directory")
-        if not working_directory.startswith("/"):
-            raise ContractError("Claude Code working_directory must be an absolute path")
+        working_directory = episode.inference_environment.working_directory
+        configured_working_directory = _required_string(config, "working_directory")
+        if configured_working_directory != working_directory:
+            raise ContractError("Claude Code working_directory must match the inference binding")
+        base_commit = task_config_string(episode, "base_commit")
         disallowed_tools = _validate_disallowed_tools(config.get("disallowed_tools"))
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
@@ -168,7 +168,7 @@ class ClaudeCodeHarness:
             (
                 "set -eu",
                 "mkdir -p /outputs /run/axrun/claude-home",
-                f'test "$(git rev-parse HEAD)" = {shlex.quote(episode.base_commit)}',
+                f'test "$(git rev-parse HEAD)" = {shlex.quote(base_commit)}',
                 'test -z "$(git status --porcelain --untracked-files=all)"',
                 "if [ -x /usr/bin/python3 ]; then "
                 "control_python=/usr/bin/python3; else control_python=python3; fi",
@@ -176,7 +176,7 @@ class ClaudeCodeHarness:
                 supervisor,
                 "agent_rc=$?",
                 "set -e",
-                canonical_patch_export(episode.base_commit, _PATCH),
+                canonical_patch_export(base_commit, _PATCH),
                 'test "$patch_rc" -eq 0 || exit 125',
                 'exit "$agent_rc"',
             )
@@ -204,7 +204,7 @@ class ClaudeCodeHarness:
         if auto_compact_window is not None:
             env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(auto_compact_window)
         return StagePlan(
-            environment_id=episode.inference_environment_id,
+            environment_id=episode.inference_environment.environment_id,
             argv=("/bin/sh", "-lc", script),
             cwd=working_directory,
             inputs=(
@@ -240,22 +240,6 @@ class ClaudeCodeHarness:
             network_policy="deny_all",
             timeout_seconds=episode.harness.timeout_seconds,
             labels={"axrun.stage": "inference", "axrun.agent": self.name},
-        )
-
-    def build_candidate(
-        self,
-        episode: ResolvedEpisode,
-        result: StageResult,
-        *,
-        destination: Path,
-    ) -> CandidateBundle:
-        return persist_candidate(
-            episode,
-            result,
-            destination=destination,
-            required_paths=(_PATCH,),
-            harness=self.name,
-            harness_version=self.version,
         )
 
 

@@ -12,10 +12,13 @@ import axrun.trajectories.bundle as bundle_module
 from axrun.errors import ContractError, InfrastructureError
 from axrun.models import (
     Artifact,
+    CandidateSpec,
+    EnvironmentBinding,
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
     StageResult,
+    TaskSpec,
     VerifierSpec,
 )
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
@@ -443,16 +446,18 @@ def test_trajectory_limits_fail_closed(tmp_path: Path) -> None:
 def _episode(tmp_path: Path) -> ResolvedEpisode:
     prompt = tmp_path / "episode-prompt.txt"
     prompt.write_text("task", encoding="utf-8")
+    image = f"registry.invalid/task@sha256:{'f' * 64}"
     return ResolvedEpisode(
         1,
         "trajectory-episode",
         "task",
         "b" * 64,
-        "a" * 40,
         str(prompt),
-        "env-i",
-        "env-v",
+        TaskSpec("git-worktree", "1", {"base_commit": "a" * 40}),
+        EnvironmentBinding("env-i", image, "linux/amd64", "/workspace"),
+        EnvironmentBinding("env-v", image, "linux/amd64", "/workspace"),
         HarnessSpec("claude-code", "2.1.205"),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("synthetic-code-task", "1"),
     )
 

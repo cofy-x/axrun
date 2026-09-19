@@ -11,11 +11,14 @@ from axrun.adapters._candidate import persist_candidate
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
+    CandidateSpec,
+    EnvironmentBinding,
     EpisodePhase,
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
     StageResult,
+    TaskSpec,
     VerificationResult,
     VerifierSpec,
     canonical_digest,
@@ -28,16 +31,18 @@ from axrun.store import EpisodeStore
 def _episode(tmp_path: Path) -> ResolvedEpisode:
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("task", encoding="utf-8")
+    image = f"registry.invalid/task@sha256:{'f' * 64}"
     return ResolvedEpisode(
         1,
         "episode",
         "task",
         "a" * 64,
-        "b" * 40,
         str(prompt),
-        "env-inference",
-        "env-verification",
+        TaskSpec("git-worktree", "1", {"base_commit": "b" * 40}),
+        EnvironmentBinding("env-inference", image, "linux/amd64", "/workspace"),
+        EnvironmentBinding("env-verification", image, "linux/amd64", "/workspace"),
         HarnessSpec("static-patch", "1"),
+        CandidateSpec("git-patch", "1"),
         VerifierSpec("command-verifier", "1"),
     )
 
@@ -58,7 +63,7 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
             (Artifact("/outputs/candidate.patch", str(patch), 5, patch_digest, "text/x-diff"),),
         ),
         destination=store.root / "candidates",
-        required_paths=("/outputs/candidate.patch",),
+        required_outputs=(("patch", "/outputs/candidate.patch"),),
         harness="static-patch",
         harness_version="1",
     )
@@ -82,12 +87,13 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
         episode.episode_id,
         episode.digest,
         f"registry.example/task@sha256:{'e' * 64}",
+        f"registry.example/task@sha256:{'e' * 64}",
         "run-qualification",
         "alloc-qualification",
         "f" * 64,
         {
             "schema_version": 1,
-            "base_commit": episode.base_commit,
+            "base_commit": episode.task.config["base_commit"],
             "git": "git version 2.51.0",
             "machine": "aarch64",
             "python": "3.12.11",
