@@ -14,6 +14,15 @@ ResolvedEpisode
 
 Axrun does not provide a scheduler, sandbox runtime, agent registry, provider marketplace, dataset service, or workflow server. Its durable records contain public Environment, Run and Allocation IDs only—never Node IDs, runtime IDs, leases, credentials or private protocol state.
 
+## Design documents
+
+- [System architecture](docs/architecture.md) defines ownership, lifecycle, isolation, recovery,
+  model transport, trajectory, and security invariants.
+- [Benchmark and harness extension model](docs/design/benchmark-extension-model.md) defines how
+  tasks, harnesses, candidates, verifiers, qualification, and benchmark adapters compose.
+- [CandidateBundle contract](docs/contracts/candidate-bundle.md) defines the immutable artifact
+  boundary between inference and fresh verification.
+
 ## Canonical episode contracts
 
 `ResolvedEpisode v1` selects task, harness, candidate and verifier adapters by explicit identity/version, carries adapter-owned validated configuration, binds each stage to an exact image/platform/working-directory contract, and binds the input to a lowercase SHA-256 `seed_digest`. Git and `base_commit` are task-adapter details rather than core fields. A dataset-native row is parsed exactly once by an explicit resolver; inference and verification consume the resulting canonical episode rather than reparsing the original row.

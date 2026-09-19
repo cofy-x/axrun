@@ -2,11 +2,19 @@
 
 Axrun is caller-side orchestration. Axern remains the sole owner of Environment, Run, Allocation, node binding, execution leases, runtime identity, process transport, output sealing and cleanup.
 
+## Document map
+
+This document defines system ownership, lifecycle, isolation, and security invariants. See the
+[benchmark and harness extension model](design/benchmark-extension-model.md) for how new adapters
+compose without adding benchmark-specific runner branches, and the
+[CandidateBundle contract](contracts/candidate-bundle.md) for the normative inference-to-verifier
+artifact boundary.
+
 ## Fact ownership
 
 | Fact | Owner | Durable location |
 | --- | --- | --- |
-| Canonical seed, harness and verifier selection | Axrun resolver/caller | immutable `spec.json` |
+| Canonical seed, task, harness, candidate and verifier selection | Axrun resolver/caller | immutable `spec.json` |
 | Task image and mount qualification evidence | Axrun + Axern Run | content-verified qualification record |
 | Task semantics and adapter-owned configuration | Axrun dataset adapter | immutable `spec.json` |
 | Task repository, tools and optional base commit | task OCI image | Axern Environment rootfs |
@@ -53,7 +61,12 @@ grade the candidate. TrajectoryBundle contains strict `axrun.trajectory@1` JSONL
 them into a temporary directory, validates every event and relationship, fsyncs files and manifest,
 and atomically publishes by canonical digest. Static inference produces no fake empty trajectory.
 
-Verification gets a fresh Run/Allocation rooted in the same immutable task image contract and receives only the CandidateBundle payload plus the Axrun-owned verifier entrypoint. It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its default network policy is deny-all. The verifier output must name the exact CandidateBundle digest before Axrun publishes the result.
+Verification gets a fresh Run/Allocation rooted in the explicit immutable verification
+EnvironmentBinding and receives only the CandidateBundle payload plus verifier-owned inputs and the
+Axrun-owned verifier entrypoint. The verification binding may intentionally differ from inference.
+It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its
+default network policy is deny-all. The verifier output must name the exact CandidateBundle digest
+before Axrun publishes the result.
 
 The archive v1 format is an uncompressed deterministic PAX tar with stable path order, uid/gid zero, empty owner names, mtime zero, and preserved ordinary permission bits. Creation and extraction reject symlinks and special files, absolute/non-canonical/traversing/duplicate paths, more than 10,000 entries, paths over 240 characters, archives over 64 MiB, and extracted payloads over 512 MiB. Output must live outside the archive root. Fresh verification manually extracts only validated files and directories and rejects pre-existing symlink traversal.
 
