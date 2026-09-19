@@ -92,6 +92,15 @@ class SyntheticCodeTaskResolver:
             if _sha256(source) != digest:
                 raise ContractError(f"synthetic task image source digest mismatch: {item['path']}")
         resolved_harness = _resolve_harness(harness, source_dir)
+        candidate_config = (
+            {
+                "source_file": str(
+                    _checked_file(source_dir, _required_string(harness.config, "candidate_file"))
+                )
+            }
+            if harness.identity == "static-candidate"
+            else {}
+        )
         return ResolvedEpisode(
             schema_version=1,
             episode_id=episode_id,
@@ -110,7 +119,7 @@ class SyntheticCodeTaskResolver:
                 verification_environment_id, task_image, task_platform, "/workspace"
             ),
             harness=resolved_harness,
-            candidate=CandidateSpec(identity="git-patch", version="1"),
+            candidate=CandidateSpec(identity="git-patch", version="1", config=candidate_config),
             verifier=VerifierSpec(
                 identity="synthetic-code-task",
                 version="1",
@@ -133,12 +142,12 @@ def _required_string(value: dict[str, Any], key: str) -> str:
 
 
 def _resolve_harness(harness: HarnessSpec, source_dir: Path) -> HarnessSpec:
-    config = dict(harness.config)
-    if harness.identity == "static-patch":
+    config: dict[str, Any] = dict(harness.config)
+    if harness.identity == "static-candidate":
         if set(config) != {"candidate_file"}:
-            raise ContractError("static-patch config requires only candidate_file")
-        candidate = _checked_file(source_dir, _required_string(config, "candidate_file"))
-        config = {"candidate_file": str(candidate)}
+            raise ContractError("static-candidate config requires only candidate_file")
+        _checked_file(source_dir, _required_string(config, "candidate_file"))
+        config = {}
     elif harness.identity == "claude-code":
         return resolve_claude_code_spec(harness)
     else:

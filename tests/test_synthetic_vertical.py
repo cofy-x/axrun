@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 
-from axrun.adapters import StaticPatchAdapter, SyntheticVerifierAdapter
+from axrun.adapters import StaticCandidateHarness, SyntheticVerifierAdapter
 from axrun.adapters._candidate import load_candidate
 from axrun.candidates import GitPatchCandidateAdapter
 from axrun.datasets import SyntheticCodeTaskResolver
@@ -172,7 +172,7 @@ def _row(fixture: Path) -> dict[str, Any]:
 
 def _static_harness(candidate_file: str) -> HarnessSpec:
     return HarnessSpec(
-        identity="static-patch", version="1", config={"candidate_file": candidate_file}
+        identity="static-candidate", version="1", config={"candidate_file": candidate_file}
     )
 
 
@@ -207,7 +207,7 @@ def test_synthetic_gold_and_bad_patch_complete_fresh_two_stage_vertical(
     runner = EpisodeRunner(backend=backend, store=store)
     result = runner.run(
         episode,
-        inference=StaticPatchAdapter(),
+        inference=StaticCandidateHarness(),
         candidate=GitPatchCandidateAdapter(),
         verifier=SyntheticVerifierAdapter(),
     )
@@ -251,7 +251,8 @@ def test_synthetic_resolver_parses_one_explicit_schema_and_stabilizes_seed_diges
         harness=_static_harness("known-bad.patch"),
     )
     assert first.seed_digest == second.seed_digest
-    assert first.harness.config != second.harness.config
+    assert first.harness.config == second.harness.config == {}
+    assert first.candidate.config != second.candidate.config
     invalid = dict(row, benchmark="guessed-from-shape")
     with pytest.raises(ContractError, match="unknown"):
         resolver.resolve(

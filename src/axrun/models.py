@@ -177,6 +177,37 @@ class StagePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateCapturePlan:
+    """One bounded post-agent finalizer composed into the inference stage."""
+
+    setup_script: str
+    finalize_script: str
+    inputs: tuple[InputFile, ...]
+    outputs: tuple[OutputSpec, ...]
+
+    def __post_init__(self) -> None:
+        if not self.finalize_script.strip() or not self.outputs:
+            raise ContractError("candidate capture requires a script and declared outputs")
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessRuntimeRequirements:
+    """Closed, non-sensitive runtime capabilities declared by a harness adapter."""
+
+    model_protocol: str = ""
+    requires_model_tunnel: bool = False
+    trajectory_adapter: str = ""
+    progress_adapter: str = ""
+    terminal_mode: str = "noninteractive"
+
+    def __post_init__(self) -> None:
+        if self.requires_model_tunnel != bool(self.model_protocol):
+            raise ContractError("model tunnel and protocol requirements must be declared together")
+        if self.terminal_mode not in {"noninteractive"}:
+            raise ContractError("unsupported harness terminal mode")
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedEpisode:
     """Harness-neutral canonical episode contract."""
 
@@ -333,7 +364,7 @@ class EpisodeRecord:
     episode_id: str
     spec_digest: str
     phase: EpisodePhase = EpisodePhase.NEW
-    qualification: ExecutionRef | None = None
+    qualifications: tuple[ExecutionRef, ...] = ()
     qualification_result: str = ""
     qualification_result_digest: str = ""
     inference: ExecutionRef | None = None

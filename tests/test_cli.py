@@ -9,7 +9,7 @@ from pytest import MonkeyPatch
 
 from axrun import cli
 from axrun.errors import ContractError
-from axrun.models import HarnessSpec
+from axrun.models import HarnessRuntimeRequirements, HarnessSpec
 from axrun.store import EpisodeStore
 
 
@@ -32,7 +32,13 @@ def test_model_credential_is_read_from_selected_caller_environment(
     )
 
     lifecycle = cli._model_lifecycle(  # pyright: ignore[reportPrivateUsage]
-        cast(Namespace, args), object(), cast(Any, episode), EpisodeStore(tmp_path)
+        cast(Namespace, args),
+        object(),
+        cast(Any, episode),
+        EpisodeStore(tmp_path),
+        HarnessRuntimeRequirements(
+            model_protocol="anthropic-compatible", requires_model_tunnel=True
+        ),
     )
 
     assert lifecycle is not None
@@ -65,6 +71,9 @@ def test_missing_selected_model_credential_names_variable_not_value(
             object(),
             cast(Any, episode),
             EpisodeStore(tmp_path),
+            HarnessRuntimeRequirements(
+                model_protocol="anthropic-compatible", requires_model_tunnel=True
+            ),
         )
 
 

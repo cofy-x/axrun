@@ -68,26 +68,37 @@ class Client:
 
 class Backend:
     def __init__(self) -> None:
-        self.plan = None
+        self.plans = []
 
     def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
         assert lifecycle is None
-        self.plan = plan
-        execution = ExecutionRef(plan.environment_id, "run-qualification", "alloc-qualification")
+        self.plans.append(plan)
+        role = plan.labels["axrun.qualification.role"]
+        execution = ExecutionRef(
+            plan.environment_id, f"run-{role}-qualification", f"alloc-{role}-qualification"
+        )
         on_bound(execution)
         payload = {
             "schema_version": 1,
+            "role": role,
             "base_commit": "d" * 40,
             "git": "git version 2.51.0",
             "machine": "aarch64",
             "python": "3.12.11",
             "working_directory": "/workspace",
-            "claude": {
-                "entry": "/__claude_code/usr/local/bin/claude",
-                "mount_readonly": True,
-                "node_version": "v22.23.2",
-                "version": "2.1.205 (Claude Code)",
-            },
+            "workspace_empty": None,
+            "archive_module": False,
+            "verifier_file": False,
+            "claude": (
+                {
+                    "entry": "/__claude_code/usr/local/bin/claude",
+                    "mount_readonly": True,
+                    "node_version": "v22.23.2",
+                    "version": "2.1.205 (Claude Code)",
+                }
+                if role == "inference"
+                else None
+            ),
         }
         data = json.dumps(payload).encode()
         path = artifact_dir / "qualification.json"
@@ -121,22 +132,27 @@ def test_qualification_is_model_free_deny_all_and_digest_pinned(tmp_path: Path) 
         store=EpisodeStore(tmp_path / "state"),
     )
 
-    assert result.run_id == "run-qualification"
-    assert result.environment_image == _TASK_IMAGE
-    assert result.checks["claude"]["mount_readonly"] is True
-    assert backend.plan.network_policy == "deny_all"
-    assert backend.plan.env == {} and backend.plan.secret_env == ()
-    assert backend.plan.image_mounts[0].image == _CLAUDE_IMAGE
-    assert backend.plan.image_mounts[0].readonly is True
+    assert result.targets[0].run_id == "run-inference-qualification"
+    assert result.targets[0].environment_image == _TASK_IMAGE
+    assert result.targets[0].checks["claude"]["mount_readonly"] is True
+    assert result.targets[1].checks["claude"] is None
+    assert all(plan.network_policy == "deny_all" for plan in backend.plans)
+    assert all(plan.env == {} and plan.secret_env == () for plan in backend.plans)
+    assert backend.plans[0].image_mounts[0].image == _CLAUDE_IMAGE
+    assert backend.plans[0].image_mounts[0].readonly is True
+    assert backend.plans[1].image_mounts == ()
     evidence = (
         tmp_path
         / "state"
         / "qualifications"
         / "episode"
         / _episode(tmp_path).digest
-        / "run-qualification.json"
+        / "result.json"
     )
-    assert json.loads(evidence.read_text())["output_sha256"] == result.output_sha256
+    assert (
+        json.loads(evidence.read_text())["targets"][0]["output_sha256"]
+        == result.targets[0].output_sha256
+    )
 
 
 def test_qualification_rejects_mutable_environment_image(tmp_path: Path) -> None:

@@ -63,7 +63,7 @@ class EpisodeStore:
             episode_id=str(raw["episode_id"]),
             spec_digest=str(raw["spec_digest"]),
             phase=EpisodePhase(raw["phase"]),
-            qualification=_optional_execution(raw.get("qualification")),
+            qualifications=tuple(ExecutionRef(**item) for item in raw.get("qualifications", [])),
             qualification_result=str(raw.get("qualification_result", "")),
             qualification_result_digest=str(raw.get("qualification_result_digest", "")),
             inference=_optional_execution(raw.get("inference")),

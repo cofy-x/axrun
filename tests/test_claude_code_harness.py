@@ -8,11 +8,19 @@ from typing import Any, cast
 
 import pytest
 
-from axrun.candidates import GitPatchCandidateAdapter
+from axrun.candidates import GitPatchCandidateAdapter, WorkspaceArchiveCandidateAdapter
 from axrun.datasets import SyntheticCodeTaskResolver
 from axrun.errors import ContractError
 from axrun.harnesses import ClaudeCodeHarness
-from axrun.models import Artifact, ExecutionRef, HarnessSpec, ResolvedEpisode, StageResult
+from axrun.models import (
+    Artifact,
+    CandidateSpec,
+    ExecutionRef,
+    HarnessSpec,
+    ResolvedEpisode,
+    StageResult,
+    TaskSpec,
+)
 
 
 def _episode() -> ResolvedEpisode:
@@ -50,7 +58,7 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert episode.harness.config["default_haiku_model"] == "test-model"
     assert episode.harness.config["subagent_model"] == "test-model"
     assert episode.harness.config["disallowed_tools"] == ["WebFetch", "WebSearch"]
-    plan = ClaudeCodeHarness().plan(episode)
+    plan = ClaudeCodeHarness().plan(episode, GitPatchCandidateAdapter().capture_plan(episode))
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
     assert "control_python=/usr/bin/python3; else control_python=python3" in plan.argv[2]
@@ -108,6 +116,20 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert bundle.files[0].declared_path == "/outputs/candidate.patch"
 
 
+def test_claude_harness_composes_workspace_archive_without_candidate_semantics() -> None:
+    episode = replace(
+        _episode(),
+        task=TaskSpec("axrun.synthetic.greenfield-task", "1"),
+        candidate=CandidateSpec("workspace-archive", "1"),
+    )
+    capture = WorkspaceArchiveCandidateAdapter().capture_plan(episode)
+    plan = ClaudeCodeHarness().plan(episode, capture)
+    script = plan.argv[-1]
+    assert "git " not in script and "candidate.patch" not in script
+    assert "/outputs/workspace.tar" in [output.path for output in plan.outputs]
+    assert "archive.py create /workspace /outputs/workspace.tar" in script
+
+
 def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> None:
     fixture = Path(__file__).parents[1] / "fixtures" / "synthetic" / "code-task-v1"
     raw: object = json.loads((fixture / "row.json").read_text())
@@ -141,7 +163,7 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         "working_directory": "/workspace",
         "disallowed_tools": ["WebFetch", "WebSearch"],
     }
-    plan = ClaudeCodeHarness().plan(episode)
+    plan = ClaudeCodeHarness().plan(episode, GitPatchCandidateAdapter().capture_plan(episode))
     assert {
         plan.env["ANTHROPIC_MODEL"],
         plan.env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
@@ -158,7 +180,11 @@ def test_claude_disallowed_tools_are_explicit_deterministic_and_may_be_empty() -
         episode,
         harness=HarnessSpec("claude-code", "2.1.205", config=config),
     )
-    assert "--disallowedTools WebFetch WebSearch" in ClaudeCodeHarness().plan(resolved).argv[-1]
+    capture = GitPatchCandidateAdapter().capture_plan(resolved)
+    assert (
+        "--disallowedTools WebFetch WebSearch"
+        in ClaudeCodeHarness().plan(resolved, capture).argv[-1]
+    )
 
     enabled = replace(
         episode,
@@ -166,7 +192,8 @@ def test_claude_disallowed_tools_are_explicit_deterministic_and_may_be_empty() -
             "claude-code", "2.1.205", config=dict(episode.harness.config, disallowed_tools=[])
         ),
     )
-    assert "--disallowedTools" not in ClaudeCodeHarness().plan(enabled).argv[-1]
+    capture = GitPatchCandidateAdapter().capture_plan(enabled)
+    assert "--disallowedTools" not in ClaudeCodeHarness().plan(enabled, capture).argv[-1]
 
 
 @pytest.mark.parametrize("value", [["WebSearch", "WebSearch"], ["bad tool"], "WebSearch"])
@@ -175,7 +202,7 @@ def test_claude_disallowed_tools_fail_closed(value: object) -> None:
     config = dict(episode.harness.config, disallowed_tools=value)
     invalid = replace(episode, harness=HarnessSpec("claude-code", "2.1.205", config=config))
     with pytest.raises(ContractError, match="disallowed_tools"):
-        ClaudeCodeHarness().plan(invalid)
+        ClaudeCodeHarness().plan(invalid, GitPatchCandidateAdapter().capture_plan(invalid))
 
 
 def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:
@@ -186,4 +213,9 @@ def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:
         harness=HarnessSpec("claude-code", "2.1.205", config=config),
         inference_environment=replace(episode.inference_environment, working_directory="/testbed"),
     )
-    assert ClaudeCodeHarness().plan(benchmark_episode).cwd == "/testbed"
+    assert (
+        ClaudeCodeHarness()
+        .plan(benchmark_episode, GitPatchCandidateAdapter().capture_plan(benchmark_episode))
+        .cwd
+        == "/testbed"
+    )

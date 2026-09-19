@@ -13,24 +13,21 @@ from typing import Any, cast
 
 from axern_sdk import AxernError
 
-from axrun.adapters import (
-    CommandVerifierAdapter,
-    StaticPatchAdapter,
-    SweBenchVerifiedVerifierAdapter,
-    SyntheticVerifierAdapter,
-)
 from axrun.adapters._candidate import load_candidate
-from axrun.adapters.base import CandidateAdapter, InferenceAdapter, VerifierAdapter
 from axrun.axern_backend import AxernBackend
-from axrun.candidates import GitPatchCandidateAdapter
-from axrun.datasets import SweBenchVerifiedResolver, SyntheticCodeTaskResolver
+from axrun.catalog import resolve_adapters, resolve_model_protocol
+from axrun.datasets import (
+    SweBenchVerifiedResolver,
+    SyntheticCodeTaskResolver,
+    SyntheticGreenfieldResolver,
+)
 from axrun.errors import AxrunError, ContractError
-from axrun.harnesses import ClaudeCodeHarness
 from axrun.lifecycle.base import CompositePreStartLifecycle, PreStartLifecycle
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
 from axrun.lifecycle.stage_progress import StageProgressObserver
 from axrun.models import (
     EpisodePhase,
+    HarnessRuntimeRequirements,
     HarnessSpec,
     ResolvedEpisode,
     canonical_json,
@@ -38,12 +35,10 @@ from axrun.models import (
 )
 from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
-from axrun.proxy.protocols import AnthropicProtocol
 from axrun.qualification import qualify_episode
 from axrun.report import canonical_report_json, report_markdown, verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
-from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 from axrun.trajectories.bundle import load_trajectory_bundle
 
 
@@ -52,56 +47,6 @@ def _episode(path: Path) -> ResolvedEpisode:
     if not isinstance(raw, dict):
         raise ContractError("ResolvedEpisode must be a JSON object")
     return resolved_episode_from_dict(cast(dict[str, Any], raw))
-
-
-def _adapters(
-    episode: ResolvedEpisode,
-) -> tuple[InferenceAdapter, CandidateAdapter, VerifierAdapter]:
-    if episode.harness.identity == "static-patch":
-        inference: InferenceAdapter = StaticPatchAdapter(version=episode.harness.version)
-    elif episode.harness.identity == "claude-code":
-        inference = ClaudeCodeHarness(version=episode.harness.version)
-    else:
-        raise ContractError(f"unsupported harness adapter: {episode.harness.identity}")
-    if episode.verifier.identity == "synthetic-code-task":
-        verifier: VerifierAdapter = SyntheticVerifierAdapter(
-            version=episode.verifier.version,
-            timeout_seconds=episode.verifier.timeout_seconds,
-        )
-    elif episode.verifier.identity == "swebench-verified":
-        verifier = SweBenchVerifiedVerifierAdapter(
-            version=episode.verifier.version,
-            timeout_seconds=episode.verifier.timeout_seconds,
-        )
-    elif episode.verifier.identity == "command-verifier":
-        command_value = episode.verifier.config.get("command", ["/opt/axrun/run-verifier"])
-        if not _is_string_array(command_value):
-            raise ContractError("verifier command must be a non-empty string array")
-        verifier = CommandVerifierAdapter(
-            command=tuple(cast(list[str], command_value)),
-            version=episode.verifier.version,
-            timeout_seconds=episode.verifier.timeout_seconds,
-            name=episode.verifier.identity,
-        )
-    else:
-        raise ContractError(f"unsupported verifier adapter: {episode.verifier.identity}")
-    if episode.candidate.identity == "git-patch":
-        candidate: CandidateAdapter = GitPatchCandidateAdapter(version=episode.candidate.version)
-    else:
-        raise ContractError(f"unsupported candidate adapter: {episode.candidate.identity}")
-    return inference, candidate, verifier
-
-
-def _is_string_array(value: object) -> bool:
-    return isinstance(value, list) and all(
-        isinstance(item, str) and bool(item) for item in cast(list[object], value)
-    )
-
-
-def _trajectory_adapter(episode: ResolvedEpisode) -> ClaudeCodeTrajectoryAdapter | None:
-    if episode.harness.identity == "claude-code":
-        return ClaudeCodeTrajectoryAdapter(version=episode.harness.version)
-    return None
 
 
 def _client(args: argparse.Namespace) -> Any:
@@ -124,8 +69,10 @@ def _model_lifecycle(
     client: Any,
     episode: ResolvedEpisode,
     store: EpisodeStore,
+    requirements: HarnessRuntimeRequirements,
 ) -> PreStartLifecycle | None:
-    if episode.harness.identity != "claude-code":
+    protocol = resolve_model_protocol(requirements)
+    if protocol is None:
         return None
     upstream_url = args.model_upstream_url or os.environ.get("AXRUN_MODEL_UPSTREAM_URL", "")
     credential_env = args.model_credential_env
@@ -138,7 +85,7 @@ def _model_lifecycle(
     proxy = ModelProxy(
         upstream_url=upstream_url,
         credential=credential,
-        protocol=AnthropicProtocol(),
+        protocol=protocol,
         connect_timeout_seconds=args.model_connect_timeout_seconds,
         read_timeout_seconds=args.model_response_timeout_seconds,
     )
@@ -254,7 +201,7 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("row", type=Path)
     resolve.add_argument("--episode-id", required=True)
     resolve.add_argument(
-        "--harness", choices=("static-patch", "claude-code"), default="static-patch"
+        "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
     )
     resolve.add_argument("--candidate-file", default="")
     resolve.add_argument("--task-image", required=True)
@@ -263,6 +210,26 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("--inference-environment", required=True)
     resolve.add_argument("--verification-environment", required=True)
     resolve.add_argument("--output", type=Path, required=True)
+    greenfield = commands.add_parser(
+        "resolve-greenfield", help="resolve the Axrun no-Git greenfield synthetic row"
+    )
+    greenfield.add_argument("row", type=Path)
+    greenfield.add_argument("--episode-id", required=True)
+    greenfield.add_argument(
+        "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
+    )
+    greenfield.add_argument(
+        "--candidate-variant", choices=("gold", "empty", "known-bad"), default="gold"
+    )
+    greenfield.add_argument("--inference-image", required=True)
+    greenfield.add_argument("--verification-image", required=True)
+    greenfield.add_argument(
+        "--task-platform", choices=("linux/amd64", "linux/arm64"), required=True
+    )
+    _add_claude_arguments(greenfield)
+    greenfield.add_argument("--inference-environment", required=True)
+    greenfield.add_argument("--verification-environment", required=True)
+    greenfield.add_argument("--output", type=Path, required=True)
     swebench = commands.add_parser(
         "resolve-swebench-verified",
         help="resolve one official SWE-bench Verified enriched-v1 row",
@@ -374,11 +341,11 @@ def main(argv: list[str] | None = None) -> int:
             raw_value: object = json.loads(args.row.read_text(encoding="utf-8"))
             if not isinstance(raw_value, dict):
                 raise ContractError("synthetic dataset row must be a JSON object")
-            if args.harness == "static-patch":
+            if args.harness == "static-candidate":
                 if not args.candidate_file:
-                    raise ContractError("static-patch requires --candidate-file")
+                    raise ContractError("static-candidate requires --candidate-file")
                 harness = HarnessSpec(
-                    identity="static-patch",
+                    identity="static-candidate",
                     version="1",
                     config={"candidate_file": args.candidate_file},
                 )
@@ -391,6 +358,30 @@ def main(argv: list[str] | None = None) -> int:
                 inference_environment_id=args.inference_environment,
                 verification_environment_id=args.verification_environment,
                 task_image=args.task_image,
+                task_platform=args.task_platform,
+                harness=harness,
+            )
+            _write_episode(episode, args.output)
+            return 0
+        if args.command == "resolve-greenfield":
+            raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("greenfield dataset row must be a JSON object")
+            harness = (
+                HarnessSpec(
+                    "static-candidate", "1", config={"candidate_variant": args.candidate_variant}
+                )
+                if args.harness == "static-candidate"
+                else _claude_harness(args, working_directory="/workspace")
+            )
+            episode = SyntheticGreenfieldResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                source_dir=args.row.parent,
+                episode_id=args.episode_id,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
+                inference_image=args.inference_image,
+                verification_image=args.verification_image,
                 task_platform=args.task_platform,
                 harness=harness,
             )
@@ -453,8 +444,8 @@ def main(argv: list[str] | None = None) -> int:
             runner = _runner(args, client)
             if args.command == "qualify":
                 episode = _episode(args.episode)
-                inference, _, _ = _adapters(episode)
-                inference.plan(episode)
+                selection = resolve_adapters(episode)
+                selection.inference.plan(episode, selection.candidate.capture_plan(episode))
                 result = qualify_episode(
                     episode,
                     client=client,
@@ -465,8 +456,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.command == "run":
                 episode = _episode(args.episode)
-                inference, candidate, verifier = _adapters(episode)
-                inference.plan(episode)
+                selection = resolve_adapters(episode)
+                selection.inference.plan(episode, selection.candidate.capture_plan(episode))
                 qualify_episode(
                     episode,
                     client=client,
@@ -475,25 +466,27 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 result = runner.run(
                     episode,
-                    inference=inference,
-                    candidate=candidate,
-                    verifier=verifier,
-                    trajectory=_trajectory_adapter(episode),
-                    inference_lifecycle=_model_lifecycle(args, client, episode, store),
+                    inference=selection.inference,
+                    candidate=selection.candidate,
+                    verifier=selection.verifier,
+                    trajectory=selection.trajectory,
+                    inference_lifecycle=_model_lifecycle(
+                        args, client, episode, store, selection.runtime
+                    ),
                 )
             elif args.command == "cancel":
                 _print(runner.cancel(args.episode_id).as_dict())
                 return 0
             else:
                 episode = store.load_spec(args.episode_id)
-                inference, candidate, verifier = _adapters(episode)
+                selection = resolve_adapters(episode)
                 if args.command in {"wait", "resume"}:
                     result = runner.wait(
                         args.episode_id,
-                        inference=inference,
-                        candidate=candidate,
-                        verifier=verifier,
-                        trajectory=_trajectory_adapter(episode),
+                        inference=selection.inference,
+                        candidate=selection.candidate,
+                        verifier=selection.verifier,
+                        trajectory=selection.trajectory,
                         timeout=args.timeout,
                     )
                 else:

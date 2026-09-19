@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "dataset_identity": "axrun.synthetic.greenfield-task",
+  "dataset_version": "1",
+  "task_id": "python-greeter",
+  "problem_statement_file": "problem.md",
+  "inference_image": {
+    "dockerfile": "Dockerfile.inference",
+    "dockerfile_sha256": "55889f59c614777a4e5427d90380578618886dce021bf48a08fdc881095f7564",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "reference": "axrun-synthetic-greenfield-inference:1"
+  },
+  "verification_image": {
+    "dockerfile": "Dockerfile.verification",
+    "dockerfile_sha256": "7d7c4017aae923fd068b9990732ac5de48f6c76c4ddf2266a60508619cbce310",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "reference": "axrun-synthetic-greenfield-verification:1"
+  },
+  "candidates": {
+    "gold": {
+      "directory": "candidates/gold",
+      "files": {"greeter.py": "755d2d864ef86a023ea6bc7cb36985bf848654ae604d3f333c94e7465be74fd4"}
+    },
+    "empty": {"directory": null, "files": {}},
+    "known-bad": {
+      "directory": "candidates/known-bad",
+      "files": {"greeter.py": "d66764153f64d434d46417eb9335ab84178137501854d7b000cf36a0e59c81bd"}
+    }
+  },
+  "verifier_file": "verifier/run_verifier.py",
+  "verifier_sha256": "2a6da2a9e5634cd8f20277d5c04097ccdcfe6f06789412b8f4fbaf54d418f25a"
+}

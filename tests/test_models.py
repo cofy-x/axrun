@@ -84,7 +84,7 @@ def test_episode_requires_sha256_seed() -> None:
             "working_directory": "/workspace",
         },
         "harness": {
-            "identity": "static-patch",
+            "identity": "static-candidate",
             "version": "1",
             "config": {"candidate_file": "gold.patch"},
         },

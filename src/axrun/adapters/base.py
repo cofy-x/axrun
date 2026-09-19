@@ -7,6 +7,7 @@ from typing import Protocol
 
 from axrun.models import (
     CandidateBundle,
+    CandidateCapturePlan,
     ResolvedEpisode,
     StagePlan,
     StageResult,
@@ -19,12 +20,14 @@ class InferenceAdapter(Protocol):
     @property
     def name(self) -> str: ...
 
-    def plan(self, episode: ResolvedEpisode) -> StagePlan: ...
+    def plan(self, episode: ResolvedEpisode, capture: CandidateCapturePlan) -> StagePlan: ...
 
 
 class CandidateAdapter(Protocol):
     @property
     def name(self) -> str: ...
+
+    def capture_plan(self, episode: ResolvedEpisode) -> CandidateCapturePlan: ...
 
     def build(
         self, episode: ResolvedEpisode, result: StageResult, *, destination: Path

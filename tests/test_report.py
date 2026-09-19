@@ -23,7 +23,7 @@ from axrun.models import (
     VerifierSpec,
     canonical_digest,
 )
-from axrun.qualification import QualificationResult
+from axrun.qualification import QualificationResult, QualificationTargetResult
 from axrun.report import REPORT_FORMAT, report_markdown, verify_record
 from axrun.store import EpisodeStore
 
@@ -41,7 +41,7 @@ def _episode(tmp_path: Path) -> ResolvedEpisode:
         TaskSpec("git-worktree", "1", {"base_commit": "b" * 40}),
         EnvironmentBinding("env-inference", image, "linux/amd64", "/workspace"),
         EnvironmentBinding("env-verification", image, "linux/amd64", "/workspace"),
-        HarnessSpec("static-patch", "1"),
+        HarnessSpec("static-candidate", "1"),
         CandidateSpec("git-patch", "1"),
         VerifierSpec("command-verifier", "1"),
     )
@@ -64,7 +64,7 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
         ),
         destination=store.root / "candidates",
         required_outputs=(("patch", "/outputs/candidate.patch"),),
-        harness="static-patch",
+        harness="static-candidate",
         harness_version="1",
     )
     now = datetime.now(UTC).isoformat()
@@ -82,32 +82,47 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
         1.0,
     )
     result_path, result_digest = store.save_result(result)
-    qualification = QualificationResult(
-        1,
-        episode.episode_id,
-        episode.digest,
-        f"registry.example/task@sha256:{'e' * 64}",
-        f"registry.example/task@sha256:{'e' * 64}",
-        "run-qualification",
-        "alloc-qualification",
-        "f" * 64,
-        {
-            "schema_version": 1,
-            "base_commit": episode.task.config["base_commit"],
-            "git": "git version 2.51.0",
-            "machine": "aarch64",
-            "python": "3.12.11",
-            "working_directory": "/workspace",
-            "claude": None,
-        },
+    checks = {
+        "schema_version": 1,
+        "role": "inference",
+        "base_commit": episode.task.config["base_commit"],
+        "git": "git version 2.51.0",
+        "machine": "aarch64",
+        "python": "3.12.11",
+        "working_directory": "/workspace",
+        "workspace_empty": None,
+        "archive_module": False,
+        "verifier_file": False,
+        "claude": None,
+    }
+    targets = tuple(
+        QualificationTargetResult(
+            role,
+            environment_id,
+            episode.inference_environment.image,
+            "linux/amd64",
+            "/workspace",
+            f"run-{role}-qualification",
+            f"alloc-{role}-qualification",
+            "f" * 64,
+            dict(checks, role=role),
+        )
+        for role, environment_id in (
+            ("inference", "env-inference"),
+            ("verification", "env-verification"),
+        )
     )
+    qualification = QualificationResult(1, episode.episode_id, episode.digest, targets)
     qualification_path = tmp_path / "qualification.json"
     qualification_path.write_text(
         json.dumps(qualification.as_dict(), sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
     record.phase = EpisodePhase.COMPLETED
-    record.qualification = ExecutionRef("env-inference", "run-qualification", "alloc-qualification")
+    record.qualifications = tuple(
+        ExecutionRef(target.environment_id, target.run_id, target.allocation_id)
+        for target in targets
+    )
     record.qualification_result = str(qualification_path)
     record.qualification_result_digest = canonical_digest(qualification.as_dict())
     record.inference = ExecutionRef("env-inference", "run-inference", "alloc-inference")
@@ -130,7 +145,7 @@ def test_verify_record_rechecks_full_completed_digest_chain(tmp_path: Path) -> N
     assert report["integrity_verified"] is True
     assert report["verdict"] == "passed" and report["score"] == 1.0
     assert report["inference_termination_reason"] == "completed"
-    assert report["qualification"]["run_id"] == "run-qualification"
+    assert report["qualifications"][0]["run_id"] == "run-inference-qualification"
     assert report["inference"]["run_id"] == "run-inference"
     assert report["verification"]["run_id"] == "run-verification"
     assert "CandidateBundle" in report_markdown(report)

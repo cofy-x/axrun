@@ -18,6 +18,7 @@ from axrun.errors import (
 )
 from axrun.models import (
     Artifact,
+    CandidateCapturePlan,
     CandidateSpec,
     EnvironmentBinding,
     EpisodePhase,
@@ -117,7 +118,15 @@ class BlockingBackend(FakeBackend):
 class Inference:
     name = "fake"
 
-    def plan(self, episode):
+    def capture_plan(self, episode):
+        return CandidateCapturePlan(
+            setup_script="",
+            finalize_script="true",
+            inputs=(),
+            outputs=(OutputSpec("/outputs/candidate.patch"),),
+        )
+
+    def plan(self, episode, capture):
         return StagePlan(
             episode.inference_environment.environment_id,
             ("agent",),
@@ -216,7 +225,7 @@ def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch
     tmp_path: Path,
 ) -> None:
     class TrajectoryInference(Inference):
-        def plan(self, episode):
+        def plan(self, episode, capture):
             return StagePlan(
                 episode.inference_environment.environment_id,
                 ("agent",),

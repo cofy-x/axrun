@@ -63,7 +63,7 @@ class EpisodeRunner:
             record.phase = EpisodePhase.INFERENCE_RUNNING
             self.store.save(record)
         try:
-            plan = inference.plan(episode)
+            plan = inference.plan(episode, candidate.capture_plan(episode))
             destination = self.store.root / "artifacts" / episode.episode_id / "inference"
             stage = self.backend.execute(
                 plan,
@@ -109,7 +109,7 @@ class EpisodeRunner:
         if execution is None:
             raise RecoveryRequiredError(f"{phase.value} Run identity was not persisted")
         if phase == EpisodePhase.INFERENCE_RUNNING:
-            plan = inference.plan(episode)
+            plan = inference.plan(episode, candidate.capture_plan(episode))
             destination = self.store.root / "artifacts" / episode_id / "inference"
         else:
             try:

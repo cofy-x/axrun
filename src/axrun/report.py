@@ -120,15 +120,24 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
             "identity": episode.verifier.identity,
             "version": episode.verifier.version,
         },
-        "qualification": _execution(record.qualification),
+        "qualifications": (
+            [
+                {
+                    **_execution(execution),
+                    "role": target.role,
+                    "environment_image": target.environment_image,
+                    "platform": target.platform,
+                    "working_directory": target.working_directory,
+                    "checks": target.checks,
+                }
+                for execution, target in zip(
+                    record.qualifications, qualification.targets, strict=True
+                )
+            ]
+            if qualification is not None
+            else []
+        ),
         "qualification_result_digest": record.qualification_result_digest,
-        "qualified_environment_image": (
-            qualification.environment_image if qualification is not None else ""
-        ),
-        "qualified_verification_environment_image": (
-            qualification.verification_environment_image if qualification is not None else ""
-        ),
-        "qualification_checks": qualification.checks if qualification is not None else {},
         "inference": _execution(record.inference),
         "inference_termination_reason": record.inference_termination_reason,
         "progress_revision": progress_revision,
@@ -149,6 +158,17 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
 def report_markdown(report: dict[str, Any]) -> str:
     inference = report["inference"]
     verification = report["verification"]
+    qualifications = report["qualifications"]
+    qualification_lines = (
+        [
+            "- Inference qualification Run / Allocation: "
+            f"`{qualifications[0]['run_id']}` / `{qualifications[0]['allocation_id']}`",
+            "- Verification qualification Run / Allocation: "
+            f"`{qualifications[1]['run_id']}` / `{qualifications[1]['allocation_id']}`",
+        ]
+        if len(qualifications) == 2
+        else ["- Qualification: `not available`"]
+    )
     lines = [
         f"# Axrun acceptance: {report['episode_id']}",
         "",
@@ -158,11 +178,8 @@ def report_markdown(report: dict[str, Any]) -> str:
         f"- Task: `{report['task_id']}`",
         f"- Spec digest: `{report['spec_digest']}`",
         f"- Seed digest: `{report['seed_digest']}`",
-        "- Qualification Run / Allocation: "
-        f"`{report['qualification']['run_id']}` / "
-        f"`{report['qualification']['allocation_id']}`",
+        *qualification_lines,
         f"- Qualification evidence: `{report['qualification_result_digest']}`",
-        f"- Qualified task image: `{report['qualified_environment_image']}`",
         f"- Inference Run / Allocation: `{inference['run_id']}` / `{inference['allocation_id']}`",
         f"- Inference termination: `{report['inference_termination_reason']}`",
         f"- Progress revision: `{report['progress_revision']}`",

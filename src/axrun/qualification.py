@@ -1,4 +1,4 @@
-"""Bounded, model-free pre-inference qualification."""
+"""Stage-specific, model-free runtime qualification."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from axrun.backend import ExecutionBackend
+from axrun.catalog import QualificationRequirements, resolve_qualification_requirements
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
+    EnvironmentBinding,
     EpisodePhase,
     ExecutionRef,
     ImageMountSpec,
@@ -19,7 +21,6 @@ from axrun.models import (
     ResolvedEpisode,
     StagePlan,
     canonical_digest,
-    task_config_string,
 )
 from axrun.store import EpisodeStore
 
@@ -28,33 +29,40 @@ _DIGEST_IMAGE = "@sha256:"
 
 
 @dataclass(frozen=True, slots=True)
-class QualificationResult:
-    schema_version: int
-    episode_id: str
-    spec_digest: str
+class QualificationTargetResult:
+    role: str
+    environment_id: str
     environment_image: str
-    verification_environment_image: str
+    platform: str
+    working_directory: str
     run_id: str
     allocation_id: str
     output_sha256: str
     checks: dict[str, Any]
 
     def __post_init__(self) -> None:
+        if self.role not in {"inference", "verification"}:
+            raise ContractError("qualification target role is invalid")
+        if not all((self.environment_id, self.run_id, self.allocation_id)):
+            raise ContractError("qualification target execution provenance is incomplete")
+        if not _is_digest_image(self.environment_image):
+            raise ContractError("qualification target image must use an OCI digest")
+        _sha256(self.output_sha256, "qualification target output_sha256")
+
+
+@dataclass(frozen=True, slots=True)
+class QualificationResult:
+    schema_version: int
+    episode_id: str
+    spec_digest: str
+    targets: tuple[QualificationTargetResult, ...]
+
+    def __post_init__(self) -> None:
         if self.schema_version != 1 or not self.episode_id:
             raise ContractError("invalid qualification result identity")
-        for name, value in (
-            ("spec_digest", self.spec_digest),
-            ("output_sha256", self.output_sha256),
-        ):
-            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-                raise ContractError(f"qualification {name} must be lowercase SHA-256")
-        if (
-            not _is_digest_image(self.environment_image)
-            or not _is_digest_image(self.verification_environment_image)
-            or not self.run_id
-            or not self.allocation_id
-        ):
-            raise ContractError("qualification execution provenance is invalid")
+        _sha256(self.spec_digest, "qualification spec_digest")
+        if tuple(target.role for target in self.targets) != ("inference", "verification"):
+            raise ContractError("qualification requires inference and verification targets")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -67,88 +75,53 @@ def qualify_episode(
     backend: ExecutionBackend,
     store: EpisodeStore,
 ) -> QualificationResult:
-    """Qualify immutable environment and runtime prerequisites without a model secret."""
     with store.lock(episode.episode_id):
         record = store.initialize(episode)
         if record.qualification_result:
             return load_qualification_result(store, episode)
         if record.phase != EpisodePhase.NEW:
             raise RecoveryRequiredError("episode started without qualification evidence")
-    inference_image = _environment_image(client, episode.inference_environment.environment_id)
-    verification_image = _environment_image(client, episode.verification_environment.environment_id)
-    if inference_image != episode.inference_environment.image:
-        raise ContractError("inference Environment image differs from the resolved episode")
-    if verification_image != episode.verification_environment.image:
-        raise ContractError("verification Environment image differs from the resolved episode")
-
-    working_directory = episode.inference_environment.working_directory
-    fixture = Path(__file__).parent / "fixtures" / "qualification" / "run.py"
-    qualification_args = [
-        "/opt/axrun/qualification.py",
-        "--workspace",
-        working_directory,
-        "--base-commit",
-        task_config_string(episode, "base_commit"),
-        "--output",
-        _OUTPUT,
-    ]
-    mounts: tuple[ImageMountSpec, ...] = ()
-    if episode.harness.identity == "claude-code":
-        image = episode.harness.config.get("mount_image")
-        if not isinstance(image, str) or not _is_digest_image(image):
-            raise ContractError("Claude qualification requires a digest-pinned mount image")
-        mounts = (ImageMountSpec(image=image, target="/__claude_code", readonly=True),)
-        qualification_args.append("--claude")
-    argv = (
-        "/bin/sh",
-        "-lc",
-        'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 "$@"; else exec python3 "$@"; fi',
-        "axrun-qualification",
-        *qualification_args,
-    )
-    plan = StagePlan(
-        environment_id=episode.inference_environment.environment_id,
-        argv=argv,
-        cwd=working_directory,
-        inputs=(InputFile(str(fixture), "/opt/axrun/qualification.py"),),
-        outputs=(OutputSpec(_OUTPUT, media_type="application/json", max_bytes=16 << 10),),
-        image_mounts=mounts,
-        resources=episode.inference_resources,
-        network_policy="deny_all",
-        timeout_seconds=min(300, episode.harness.timeout_seconds),
-        labels={"axrun.stage": "qualification"},
-    )
-
-    def bound(_value: ExecutionRef) -> None:
-        return
-
-    stage = backend.execute(
-        plan,
-        artifact_dir=store.root / "qualification-artifacts" / episode.episode_id,
-        on_bound=bound,
-    )
-    if stage.exit_code != 0:
-        raise InfrastructureError(
-            f"qualification Run failed: run={stage.execution.run_id} "
-            f"allocation={stage.execution.allocation_id} diagnostic={stage.diagnostic_code}"
+    targets: list[QualificationTargetResult] = []
+    executions: list[ExecutionRef] = []
+    requirements = resolve_qualification_requirements(episode)
+    for role, binding in (
+        ("inference", episode.inference_environment),
+        ("verification", episode.verification_environment),
+    ):
+        image = _environment_image(client, binding.environment_id)
+        if image != binding.image:
+            raise ContractError(f"{role} Environment image differs from the resolved episode")
+        stage = backend.execute(
+            _target_plan(episode, role, binding, requirements),
+            artifact_dir=store.root / "qualification-artifacts" / episode.episode_id / role,
+            on_bound=lambda _value: None,
         )
-    artifact = stage.artifact_for_path(_OUTPUT)
-    try:
-        raw: object = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ContractError("qualification output is not valid JSON") from exc
-    checks = _validate_checks(raw, episode, working_directory)
-    result = QualificationResult(
-        schema_version=1,
-        episode_id=episode.episode_id,
-        spec_digest=episode.digest,
-        environment_image=inference_image,
-        verification_environment_image=verification_image,
-        run_id=stage.execution.run_id,
-        allocation_id=stage.execution.allocation_id,
-        output_sha256=artifact.sha256,
-        checks=checks,
-    )
+        if stage.exit_code != 0:
+            raise InfrastructureError(
+                f"{role} qualification Run failed: run={stage.execution.run_id} "
+                f"allocation={stage.execution.allocation_id} diagnostic={stage.diagnostic_code}"
+            )
+        artifact = stage.artifact_for_path(_OUTPUT)
+        try:
+            raw: object = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ContractError("qualification output is not valid JSON") from exc
+        checks = _validate_checks(raw, role, binding, requirements)
+        executions.append(stage.execution)
+        targets.append(
+            QualificationTargetResult(
+                role=role,
+                environment_id=binding.environment_id,
+                environment_image=image,
+                platform=binding.platform,
+                working_directory=binding.working_directory,
+                run_id=stage.execution.run_id,
+                allocation_id=stage.execution.allocation_id,
+                output_sha256=artifact.sha256,
+                checks=checks,
+            )
+        )
+    result = QualificationResult(1, episode.episode_id, episode.digest, tuple(targets))
     result_path, result_digest = _persist(result, store.root)
     with store.lock(episode.episode_id):
         record = store.initialize(episode)
@@ -156,56 +129,136 @@ def qualify_episode(
             raise RecoveryRequiredError("episode advanced before qualification was committed")
         if record.qualification_result:
             return load_qualification_result(store, episode)
-        record.qualification = stage.execution
+        record.qualifications = tuple(executions)
         record.qualification_result = str(result_path)
         record.qualification_result_digest = result_digest
         store.save(record)
     return result
 
 
-def _environment_image(client: Any, environment_id: str) -> str:
-    environment = client.get_environment(environment_id)
-    image = str(environment.spec.image.ref)
-    if not _is_digest_image(image):
-        raise ContractError("Environment task image must use an OCI sha256 digest")
-    return image
-
-
-def _is_digest_image(value: str) -> bool:
-    name, separator, digest = value.rpartition(_DIGEST_IMAGE)
-    return bool(name and separator and len(digest) == 64) and all(
-        character in "0123456789abcdef" for character in digest
+def _target_plan(
+    episode: ResolvedEpisode,
+    role: str,
+    binding: EnvironmentBinding,
+    requirements: QualificationRequirements,
+) -> StagePlan:
+    fixture = Path(__file__).parent / "fixtures" / "qualification" / "run.py"
+    arguments = [
+        "/opt/axrun/qualification.py",
+        "--role",
+        role,
+        "--workspace",
+        binding.working_directory,
+        "--output",
+        _OUTPUT,
+    ]
+    inputs = [InputFile(str(fixture), "/opt/axrun/qualification.py")]
+    mounts: tuple[ImageMountSpec, ...] = ()
+    if requirements.task_mode == "git":
+        arguments.extend(("--base-commit", requirements.base_commit))
+    else:
+        arguments.append("--require-empty-workspace")
+    if role == "inference" and requirements.archive_finalizer:
+        package_root = Path(__file__).parent
+        inputs.extend(
+            (
+                InputFile(
+                    str(package_root / "candidates" / "archive.py"),
+                    "/opt/axrun/axrun/candidates/archive.py",
+                ),
+                InputFile(str(package_root / "errors.py"), "/opt/axrun/axrun/errors.py"),
+            )
+        )
+        arguments.extend(("--archive-module", "/opt/axrun/axrun/candidates/archive.py"))
+    if role == "verification" and requirements.verifier_file:
+        inputs.append(InputFile(requirements.verifier_file, "/opt/axrun/verifier.py"))
+        arguments.extend(("--verifier-file", "/opt/axrun/verifier.py"))
+    if role == "inference" and requirements.claude_mount_image:
+        if not _is_digest_image(requirements.claude_mount_image):
+            raise ContractError("Claude qualification requires a digest-pinned mount image")
+        mounts = (
+            ImageMountSpec(
+                image=requirements.claude_mount_image,
+                target="/__claude_code",
+                readonly=True,
+            ),
+        )
+        arguments.append("--claude")
+    return StagePlan(
+        environment_id=binding.environment_id,
+        argv=(
+            "/bin/sh",
+            "-lc",
+            'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 "$@"; '
+            'else exec python3 "$@"; fi',
+            "axrun-qualification",
+            *arguments,
+        ),
+        cwd=binding.working_directory,
+        inputs=tuple(inputs),
+        outputs=(OutputSpec(_OUTPUT, media_type="application/json", max_bytes=16 << 10),),
+        image_mounts=mounts,
+        resources=(
+            episode.inference_resources if role == "inference" else episode.verification_resources
+        ),
+        network_policy="deny_all",
+        timeout_seconds=min(300, episode.harness.timeout_seconds),
+        labels={"axrun.stage": "qualification", "axrun.qualification.role": role},
     )
 
 
 def _validate_checks(
-    raw: object, episode: ResolvedEpisode, working_directory: str
+    raw: object,
+    role: str,
+    binding: EnvironmentBinding,
+    requirements: QualificationRequirements,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ContractError("qualification output must be an object")
     checks = cast(dict[str, Any], raw)
     if set(checks) != {
         "schema_version",
+        "role",
         "base_commit",
         "git",
         "machine",
         "python",
         "working_directory",
+        "workspace_empty",
+        "archive_module",
+        "verifier_file",
         "claude",
     }:
         raise ContractError("qualification output has an invalid shape")
     if (
         checks["schema_version"] != 1
-        or checks["base_commit"] != task_config_string(episode, "base_commit")
-        or checks["working_directory"] != working_directory
+        or checks["role"] != role
+        or checks["working_directory"] != binding.working_directory
+        or not isinstance(checks["machine"], str)
+        or not isinstance(checks["python"], str)
     ):
-        raise ContractError("qualification output does not match the episode")
-    if not all(
-        isinstance(checks[key], str) and checks[key] for key in ("git", "machine", "python")
+        raise ContractError("qualification output does not match the target")
+    if requirements.task_mode == "git":
+        if (
+            checks["base_commit"] != requirements.base_commit
+            or not isinstance(checks["git"], str)
+            or checks["workspace_empty"] is not None
+        ):
+            raise ContractError("Git task qualification checks are invalid")
+    elif (
+        checks["base_commit"] is not None
+        or checks["git"] is not None
+        or checks["workspace_empty"] is not True
     ):
-        raise ContractError("qualification output contains invalid runtime versions")
+        raise ContractError("greenfield task qualification checks are invalid")
+    expected_archive = role == "inference" and requirements.archive_finalizer
+    expected_verifier = role == "verification" and bool(requirements.verifier_file)
+    if checks["archive_module"] is not expected_archive:
+        raise ContractError("candidate qualification checks are invalid")
+    if checks["verifier_file"] is not expected_verifier:
+        raise ContractError("verifier qualification checks are invalid")
     claude = checks["claude"]
-    if episode.harness.identity == "claude-code":
+    if role == "inference" and requirements.claude_mount_image:
         if not isinstance(claude, dict) or set(cast(dict[object, object], claude)) != {
             "entry",
             "mount_readonly",
@@ -222,24 +275,37 @@ def _validate_checks(
         ):
             raise ContractError("qualification output has an incompatible Claude runtime")
     elif claude is not None:
-        raise ContractError("non-Claude qualification unexpectedly reported a Claude runtime")
+        raise ContractError("qualification unexpectedly reported a Claude runtime")
     return checks
 
 
-def _persist(result: QualificationResult, state_root: Path) -> tuple[Path, str]:
-    path = (
-        state_root
-        / "qualifications"
-        / result.episode_id
-        / result.spec_digest
-        / f"{result.run_id}.json"
+def _environment_image(client: Any, environment_id: str) -> str:
+    image = str(client.get_environment(environment_id).spec.image.ref)
+    if not _is_digest_image(image):
+        raise ContractError("Environment task image must use an OCI sha256 digest")
+    return image
+
+
+def _is_digest_image(value: str) -> bool:
+    name, separator, digest = value.rpartition(_DIGEST_IMAGE)
+    return bool(name and separator and len(digest) == 64) and all(
+        character in "0123456789abcdef" for character in digest
     )
+
+
+def _sha256(value: str, name: str) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ContractError(f"{name} must be lowercase SHA-256")
+
+
+def _persist(result: QualificationResult, state_root: Path) -> tuple[Path, str]:
+    path = state_root / "qualifications" / result.episode_id / result.spec_digest / "result.json"
     payload = json.dumps(result.as_dict(), sort_keys=True, indent=2).encode() + b"\n"
     digest = canonical_digest(result.as_dict())
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         if path.read_bytes() != payload:
-            raise ContractError("qualification Run evidence already exists with different content")
+            raise ContractError("qualification evidence already exists with different content")
         return path, digest
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
@@ -252,7 +318,7 @@ def _persist(result: QualificationResult, state_root: Path) -> tuple[Path, str]:
 
 def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> QualificationResult:
     record = store.load(episode.episode_id)
-    if record is None or record.qualification is None:
+    if record is None or len(record.qualifications) != 2:
         raise ContractError("qualification record is incomplete")
     try:
         raw: object = json.loads(Path(record.qualification_result).read_text(encoding="utf-8"))
@@ -263,20 +329,44 @@ def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> 
     values = cast(dict[str, Any], raw)
     if canonical_digest(values) != record.qualification_result_digest:
         raise ContractError("qualification evidence digest mismatch")
+    raw_targets = values.get("targets")
+    if not isinstance(raw_targets, list):
+        raise ContractError("qualification targets must be an array")
+    target_values = cast(list[object], raw_targets)
     try:
-        result = QualificationResult(**values)
-    except TypeError as exc:
+        targets = tuple(
+            QualificationTargetResult(**cast(dict[str, Any], target))
+            for target in target_values
+            if isinstance(target, dict)
+        )
+        result = QualificationResult(
+            schema_version=int(values["schema_version"]),
+            episode_id=str(values["episode_id"]),
+            spec_digest=str(values["spec_digest"]),
+            targets=targets,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
         raise ContractError("qualification evidence has an invalid shape") from exc
-    if (
-        result.schema_version != 1
-        or result.episode_id != episode.episode_id
-        or result.spec_digest != episode.digest
-        or result.run_id != record.qualification.run_id
-        or result.allocation_id != record.qualification.allocation_id
-    ):
+    if len(targets) != len(target_values):
+        raise ContractError("qualification evidence has an invalid target")
+    if result.episode_id != episode.episode_id or result.spec_digest != episode.digest:
         raise ContractError("qualification evidence provenance mismatch")
-    working_directory = episode.harness.config.get("working_directory", "/workspace")
-    if not isinstance(working_directory, str):
-        raise ContractError("qualification working directory is invalid")
-    _validate_checks(result.checks, episode, working_directory)
+    requirements = resolve_qualification_requirements(episode)
+    for target, execution, (role, binding) in zip(
+        result.targets,
+        record.qualifications,
+        (
+            ("inference", episode.inference_environment),
+            ("verification", episode.verification_environment),
+        ),
+        strict=True,
+    ):
+        if (
+            target.role != role
+            or target.environment_id != binding.environment_id
+            or target.run_id != execution.run_id
+            or target.allocation_id != execution.allocation_id
+        ):
+            raise ContractError("qualification target provenance mismatch")
+        _validate_checks(target.checks, role, binding, requirements)
     return result

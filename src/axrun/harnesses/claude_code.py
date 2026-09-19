@@ -8,23 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from axrun.adapters._git import canonical_patch_export
 from axrun.errors import ContractError
 from axrun.models import (
+    CandidateCapturePlan,
     HarnessSpec,
     ImageMountSpec,
     InputFile,
     OutputSpec,
     ResolvedEpisode,
     StagePlan,
-    task_config_string,
 )
 
 _VERSION = "2.1.205"
 _MOUNT = "/__claude_code"
 _CLAUDE = f"{_MOUNT}/usr/local/bin/claude"
 _REMOTE_PORT = 8765
-_PATCH = "/outputs/candidate.patch"
 _TRAJECTORY = "/outputs/trajectory.jsonl"
 _LOG = "/outputs/harness.log"
 _USAGE = "/outputs/usage.json"
@@ -98,7 +96,7 @@ class ClaudeCodeHarness:
     requires_live_model_connection: bool = True
     requires_trajectory: bool = True
 
-    def plan(self, episode: ResolvedEpisode) -> StagePlan:
+    def plan(self, episode: ResolvedEpisode, capture: CandidateCapturePlan) -> StagePlan:
         if episode.harness.identity != self.name or episode.harness.version != self.version:
             raise ContractError(f"Claude Code adapter requires {self.name}@{self.version}")
         config = episode.harness.config
@@ -116,7 +114,6 @@ class ClaudeCodeHarness:
         configured_working_directory = _required_string(config, "working_directory")
         if configured_working_directory != working_directory:
             raise ContractError("Claude Code working_directory must match the inference binding")
-        base_commit = task_config_string(episode, "base_commit")
         disallowed_tools = _validate_disallowed_tools(config.get("disallowed_tools"))
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
@@ -168,16 +165,17 @@ class ClaudeCodeHarness:
             (
                 "set -eu",
                 "mkdir -p /outputs /run/axrun/claude-home",
-                f'test "$(git rev-parse HEAD)" = {shlex.quote(base_commit)}',
-                'test -z "$(git status --porcelain --untracked-files=all)"',
+                capture.setup_script,
                 "if [ -x /usr/bin/python3 ]; then "
                 "control_python=/usr/bin/python3; else control_python=python3; fi",
                 "set +e",
                 supervisor,
                 "agent_rc=$?",
+                "finalize_rc=0",
+                capture.finalize_script,
+                "finalize_rc=$?",
                 "set -e",
-                canonical_patch_export(base_commit, _PATCH),
-                'test "$patch_rc" -eq 0 || exit 125',
+                'test "$finalize_rc" -eq 0 || exit 125',
                 'exit "$agent_rc"',
             )
         )
@@ -208,6 +206,7 @@ class ClaudeCodeHarness:
             argv=("/bin/sh", "-lc", script),
             cwd=working_directory,
             inputs=(
+                *capture.inputs,
                 InputFile(episode.prompt_file, "/inputs/prompt.txt"),
                 InputFile(str(runtime_init), "/opt/axrun/axrun/__init__.py"),
                 InputFile(str(runtime_init), "/opt/axrun/axrun/fixtures/__init__.py"),
@@ -229,7 +228,7 @@ class ClaudeCodeHarness:
                 ),
             ),
             outputs=(
-                OutputSpec(_PATCH, media_type="text/x-diff", max_bytes=16 << 20),
+                *capture.outputs,
                 OutputSpec(_TRAJECTORY, media_type="application/x-ndjson", max_bytes=32 << 20),
                 OutputSpec(_LOG, media_type="text/plain", max_bytes=16 << 20),
                 OutputSpec(_USAGE, media_type="application/json", max_bytes=1 << 20),

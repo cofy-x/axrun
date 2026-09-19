@@ -36,7 +36,7 @@ def episode(tmp_path: Path) -> ResolvedEpisode:
         task=TaskSpec("git-worktree", "1", {"base_commit": "a" * 40}),
         inference_environment=EnvironmentBinding("env-i", image, "linux/amd64", "/workspace"),
         verification_environment=EnvironmentBinding("env-v", image, "linux/amd64", "/workspace"),
-        harness=HarnessSpec("static-patch", "1"),
+        harness=HarnessSpec("static-candidate", "1"),
         candidate=CandidateSpec("git-patch", "1"),
         verifier=VerifierSpec("command-verifier", "1"),
     )
@@ -59,7 +59,7 @@ def test_candidate_is_self_contained_and_detects_tampering(tmp_path: Path) -> No
         stage,
         destination=destination,
         required_outputs=(("patch", artifact.name),),
-        harness="static-patch",
+        harness="static-candidate",
         harness_version="1",
     )
     assert load_candidate(Path(bundle.root) / "candidate-manifest.json").digest == bundle.digest
@@ -86,7 +86,7 @@ def test_verifier_receives_only_candidate_and_digest(tmp_path: Path) -> None:
         StageResult(ExecutionRef("env-i", "run-i"), 0, "", (artifact,)),
         destination=tmp_path / "candidate",
         required_outputs=(("patch", artifact.name),),
-        harness="static-patch",
+        harness="static-candidate",
         harness_version="1",
     )
     plan = CommandVerifierAdapter().plan(episode(tmp_path), bundle)
@@ -117,7 +117,7 @@ def test_candidate_crash_before_atomic_publish_leaves_no_final_bundle(
             StageResult(ExecutionRef("env-i", "run-i"), 0, "", (artifact,)),
             destination=destination,
             required_outputs=(("patch", artifact.name),),
-            harness="static-patch",
+            harness="static-candidate",
             harness_version="1",
         )
     assert not list(destination.glob("sha256/*/candidate-manifest.json"))
