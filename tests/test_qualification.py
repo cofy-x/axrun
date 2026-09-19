@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,6 +89,7 @@ class Backend:
             "python": "3.12.11",
             "working_directory": "/workspace",
             "workspace_empty": None,
+            "workspace_files": None,
             "archive_module": False,
             "verifier_file": False,
             "claude": (
@@ -174,3 +177,58 @@ def test_qualification_rejects_environment_image_drift(tmp_path: Path) -> None:
             backend=Backend(),
             store=EpisodeStore(tmp_path / "state"),
         )
+
+
+def test_prepared_workspace_qualification_checks_exact_file_and_mode(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    executable = workspace / "executable"
+    executable.write_text("reference", encoding="utf-8")
+    executable.chmod(0o111)
+    output = tmp_path / "qualification.json"
+    fixture = Path(__file__).parents[1] / "src" / "axrun" / "fixtures" / "qualification" / "run.py"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(fixture),
+            "--role",
+            "inference",
+            "--workspace",
+            str(workspace),
+            "--require-exact-workspace-files",
+            "--required-workspace-file",
+            "111:executable",
+            "--output",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["workspace_empty"] is False
+    assert payload["workspace_files"] == [{"mode": 0o111, "path": "executable"}]
+
+    (workspace / "unexpected").mkdir()
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            str(fixture),
+            "--role",
+            "inference",
+            "--workspace",
+            str(workspace),
+            "--require-exact-workspace-files",
+            "--required-workspace-file",
+            "111:executable",
+            "--output",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert rejected.returncode != 0

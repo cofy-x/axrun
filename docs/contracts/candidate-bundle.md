@@ -104,6 +104,13 @@ offline verification contract.
 - the archive is rooted at the explicit task working directory;
 - `/inputs`, `/outputs`, `/run/axrun`, and harness outputs are outside that root.
 
+A resolver may declare a closed list of safe top-level, seed-owned files to remove immediately
+before capture. This is used when an inference image exposes a benchmark input inside the working
+directory that is not part of the candidate, such as ProgramBench's reference `executable`.
+Exclusions are materialized in CandidateSpec, accept only portable top-level names, and fail the
+candidate finalizer if removal is not possible. They are not glob patterns and cannot remove
+directories or paths outside the archive root.
+
 Creation and extraction both fail closed on:
 
 - symbolic links and special files, including devices, FIFOs, and sockets;

@@ -17,6 +17,7 @@ from axrun.adapters._candidate import load_candidate
 from axrun.axern_backend import AxernBackend
 from axrun.catalog import resolve_adapters, resolve_model_protocol
 from axrun.datasets import (
+    ProgramBenchCompatibilityResolver,
     SweBenchVerifiedResolver,
     SyntheticCodeTaskResolver,
     SyntheticGreenfieldResolver,
@@ -230,6 +231,27 @@ def _parser() -> argparse.ArgumentParser:
     greenfield.add_argument("--inference-environment", required=True)
     greenfield.add_argument("--verification-environment", required=True)
     greenfield.add_argument("--output", type=Path, required=True)
+    programbench = commands.add_parser(
+        "resolve-programbench-compatibility",
+        help="resolve the closed ProgramBench 1.2.4 calculator compatibility fixture",
+    )
+    programbench.add_argument("row", type=Path)
+    programbench.add_argument("--episode-id", required=True)
+    programbench.add_argument(
+        "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
+    )
+    programbench.add_argument(
+        "--candidate-variant", choices=("gold", "empty", "known-bad"), default="gold"
+    )
+    programbench.add_argument("--inference-image", required=True)
+    programbench.add_argument("--verification-image", required=True)
+    programbench.add_argument(
+        "--task-platform", choices=("linux/amd64", "linux/arm64"), required=True
+    )
+    _add_claude_arguments(programbench)
+    programbench.add_argument("--inference-environment", required=True)
+    programbench.add_argument("--verification-environment", required=True)
+    programbench.add_argument("--output", type=Path, required=True)
     swebench = commands.add_parser(
         "resolve-swebench-verified",
         help="resolve one official SWE-bench Verified enriched-v1 row",
@@ -375,6 +397,30 @@ def main(argv: list[str] | None = None) -> int:
                 else _claude_harness(args, working_directory="/workspace")
             )
             episode = SyntheticGreenfieldResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                source_dir=args.row.parent,
+                episode_id=args.episode_id,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
+                inference_image=args.inference_image,
+                verification_image=args.verification_image,
+                task_platform=args.task_platform,
+                harness=harness,
+            )
+            _write_episode(episode, args.output)
+            return 0
+        if args.command == "resolve-programbench-compatibility":
+            raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("ProgramBench compatibility row must be a JSON object")
+            harness = (
+                HarnessSpec(
+                    "static-candidate", "1", config={"candidate_variant": args.candidate_variant}
+                )
+                if args.harness == "static-candidate"
+                else _claude_harness(args, working_directory="/workspace")
+            )
+            episode = ProgramBenchCompatibilityResolver().resolve(
                 cast(dict[str, Any], raw_value),
                 source_dir=args.row.parent,
                 episode_id=args.episode_id,

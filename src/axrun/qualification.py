@@ -83,11 +83,11 @@ def qualify_episode(
             raise RecoveryRequiredError("episode started without qualification evidence")
     targets: list[QualificationTargetResult] = []
     executions: list[ExecutionRef] = []
-    requirements = resolve_qualification_requirements(episode)
     for role, binding in (
         ("inference", episode.inference_environment),
         ("verification", episode.verification_environment),
     ):
+        requirements = resolve_qualification_requirements(episode, role)
         image = _environment_image(client, binding.environment_id)
         if image != binding.image:
             raise ContractError(f"{role} Environment image differs from the resolved episode")
@@ -156,8 +156,14 @@ def _target_plan(
     mounts: tuple[ImageMountSpec, ...] = ()
     if requirements.task_mode == "git":
         arguments.extend(("--base-commit", requirements.base_commit))
-    else:
+    elif requirements.task_mode == "empty":
         arguments.append("--require-empty-workspace")
+    else:
+        arguments.append("--require-exact-workspace-files")
+        for requirement in requirements.workspace_files:
+            arguments.extend(
+                ("--required-workspace-file", f"{requirement.mode:o}:{requirement.path}")
+            )
     if role == "inference" and requirements.archive_finalizer:
         package_root = Path(__file__).parent
         inputs.extend(
@@ -225,6 +231,7 @@ def _validate_checks(
         "python",
         "working_directory",
         "workspace_empty",
+        "workspace_files",
         "archive_module",
         "verifier_file",
         "claude",
@@ -243,14 +250,28 @@ def _validate_checks(
             checks["base_commit"] != requirements.base_commit
             or not isinstance(checks["git"], str)
             or checks["workspace_empty"] is not None
+            or checks["workspace_files"] is not None
         ):
             raise ContractError("Git task qualification checks are invalid")
-    elif (
+    elif requirements.task_mode == "empty" and (
         checks["base_commit"] is not None
         or checks["git"] is not None
         or checks["workspace_empty"] is not True
+        or checks["workspace_files"] is not None
     ):
         raise ContractError("greenfield task qualification checks are invalid")
+    elif requirements.task_mode == "prepared":
+        expected = [
+            {"mode": requirement.mode, "path": requirement.path}
+            for requirement in requirements.workspace_files
+        ]
+        if (
+            checks["base_commit"] is not None
+            or checks["git"] is not None
+            or checks["workspace_empty"] is not False
+            or checks["workspace_files"] != expected
+        ):
+            raise ContractError("prepared task qualification checks are invalid")
     expected_archive = role == "inference" and requirements.archive_finalizer
     expected_verifier = role == "verification" and bool(requirements.verifier_file)
     if checks["archive_module"] is not expected_archive:
@@ -351,7 +372,6 @@ def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> 
         raise ContractError("qualification evidence has an invalid target")
     if result.episode_id != episode.episode_id or result.spec_digest != episode.digest:
         raise ContractError("qualification evidence provenance mismatch")
-    requirements = resolve_qualification_requirements(episode)
     for target, execution, (role, binding) in zip(
         result.targets,
         record.qualifications,
@@ -361,6 +381,7 @@ def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> 
         ),
         strict=True,
     ):
+        requirements = resolve_qualification_requirements(episode, role)
         if (
             target.role != role
             or target.environment_id != binding.environment_id

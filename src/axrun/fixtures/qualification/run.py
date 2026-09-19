@@ -22,6 +22,8 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--base-commit")
     parser.add_argument("--require-empty-workspace", action="store_true")
+    parser.add_argument("--require-exact-workspace-files", action="store_true")
+    parser.add_argument("--required-workspace-file", action="append", default=[])
     parser.add_argument("--archive-module", type=Path)
     parser.add_argument("--verifier-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -33,6 +35,7 @@ def main() -> int:
         raise RuntimeError("working directory is missing")
     head = git = None
     workspace_empty = None
+    workspace_files = None
     if args.base_commit:
         head = _output(["git", "rev-parse", "HEAD"], cwd=args.workspace)
         git = _output(["git", "--version"])
@@ -44,6 +47,33 @@ def main() -> int:
         workspace_empty = next(args.workspace.iterdir(), None) is None
         if not workspace_empty:
             raise RuntimeError("greenfield workspace is not empty")
+    elif args.require_exact_workspace_files:
+        expected: list[dict[str, object]] = []
+        expected_paths: set[str] = set()
+        for value in args.required_workspace_file:
+            mode_value, separator, path_value = value.partition(":")
+            if not separator or not mode_value or not path_value:
+                raise RuntimeError("qualified workspace file declaration is invalid")
+            relative = Path(path_value)
+            if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 1:
+                raise RuntimeError("qualified workspace file path is invalid")
+            path = args.workspace / relative
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError("qualified workspace file is missing")
+            mode = int(mode_value, 8)
+            if path.stat().st_mode & 0o777 != mode:
+                raise RuntimeError("qualified workspace file mode differs")
+            expected_paths.add(relative.as_posix())
+            expected.append({"mode": mode, "path": relative.as_posix()})
+        actual_paths = {
+            item.relative_to(args.workspace).as_posix() for item in args.workspace.rglob("*")
+        }
+        if actual_paths != expected_paths or any(
+            item.is_symlink() for item in args.workspace.rglob("*")
+        ):
+            raise RuntimeError("qualified workspace contains unexpected entries")
+        workspace_empty = False
+        workspace_files = expected
     else:
         raise RuntimeError("task qualification policy is missing")
     archive_module = args.archive_module is not None
@@ -61,6 +91,7 @@ def main() -> int:
         "python": platform.python_version(),
         "working_directory": str(args.workspace),
         "workspace_empty": workspace_empty,
+        "workspace_files": workspace_files,
         "archive_module": archive_module,
         "verifier_file": verifier_file,
         "claude": None,

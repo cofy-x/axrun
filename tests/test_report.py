@@ -91,6 +91,7 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
         "python": "3.12.11",
         "working_directory": "/workspace",
         "workspace_empty": None,
+        "workspace_files": None,
         "archive_module": False,
         "verifier_file": False,
         "claude": None,

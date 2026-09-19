@@ -16,8 +16,11 @@ class GitWorktreeTaskAdapter:
     name: str
     version: str = "1"
 
-    def qualification_requirements(self, episode: ResolvedEpisode) -> TaskQualificationRequirements:
+    def qualification_requirements(
+        self, episode: ResolvedEpisode, role: str
+    ) -> TaskQualificationRequirements:
         self._validate(episode)
+        _validate_role(role)
         return TaskQualificationRequirements(
             mode="git", base_commit=task_config_string(episode, "base_commit")
         )
@@ -34,7 +37,15 @@ class EmptyWorkspaceTaskAdapter:
     name: str
     version: str = "1"
 
-    def qualification_requirements(self, episode: ResolvedEpisode) -> TaskQualificationRequirements:
+    def qualification_requirements(
+        self, episode: ResolvedEpisode, role: str
+    ) -> TaskQualificationRequirements:
         if (episode.task.identity, episode.task.version) != (self.name, self.version):
             raise ContractError(f"task adapter requires {self.name}@{self.version}")
+        _validate_role(role)
         return TaskQualificationRequirements(mode="empty")
+
+
+def _validate_role(role: str) -> None:
+    if role not in {"inference", "verification"}:
+        raise ContractError("task qualification role is invalid")

@@ -137,6 +137,29 @@ workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
 
 This contract is sufficient groundwork for a ProgramBench single-instance adapter and may cover a file-only Terminal-Bench subset. It does not represent services, package installation, system configuration, background processes, or VM state; full Terminal-Bench support still requires a public immutable Allocation snapshot-to-fresh-Allocation capability from Axern. Openbench remains a research and parity input, never an Axrun runtime dependency. Axrun does not claim full ProgramBench or Terminal-Bench support. A mini-SWE-agent readonly mount should be considered only if future official-baseline parity requires it; it is not a prerequisite for using Claude Code.
 
+The repository now includes a closed ProgramBench 1.2.4 calculator compatibility fixture. It uses
+ProgramBench's own `testorg__calculator.abc1234` fixture identity, not an official benchmark task,
+and therefore is not leaderboard evidence. It proves an execute-only seed reference, explicit
+seed-owned exclusion from `workspace-archive@1`, different inference/verification Environments,
+offline compilation, partial scoring, and deterministic passed/failed verdicts:
+
+```bash
+uv run axrun resolve-programbench-compatibility \
+  fixtures/programbench/calculator-v1/row.json \
+  --episode-id programbench-calculator-gold \
+  --candidate-variant gold \
+  --inference-image REGISTRY/INFERENCE@sha256:DIGEST \
+  --verification-image REGISTRY/VERIFICATION@sha256:DIGEST \
+  --task-platform linux/amd64 \
+  --inference-environment INFERENCE_ENVIRONMENT_ID \
+  --verification-environment VERIFICATION_ENVIRONMENT_ID \
+  --output /tmp/programbench-calculator-gold.json
+```
+
+Expanding to a real ProgramBench instance requires a fixed official cleanroom image, test-blob
+revision, and parity evidence against the official evaluator; Axrun does not reinterpret observed
+tests as an equivalent score.
+
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
 business verdict. Every other non-zero Claude terminal subtype remains fail-closed infrastructure

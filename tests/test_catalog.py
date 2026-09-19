@@ -81,7 +81,7 @@ def test_greenfield_qualification_is_no_git_and_stage_specific(tmp_path: Path) -
         candidate=CandidateSpec("workspace-archive", "1"),
         verifier=VerifierSpec("synthetic-greenfield", "1", config={"verifier_file": str(verifier)}),
     )
-    requirements = resolve_qualification_requirements(episode)
+    requirements = resolve_qualification_requirements(episode, "inference")
     assert isinstance(resolve_adapters(episode).task, EmptyWorkspaceTaskAdapter)
     assert requirements.task_mode == "empty" and requirements.base_commit == ""
     assert requirements.archive_finalizer is True

@@ -20,15 +20,36 @@ from axrun.trajectories.bundle import TrajectoryBundle
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceFileRequirement:
+    path: str
+    mode: int
+
+    def __post_init__(self) -> None:
+        relative = Path(self.path)
+        if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 1:
+            raise ContractError("qualified workspace file path must be a safe top-level path")
+        if not 0 <= self.mode <= 0o777:
+            raise ContractError(
+                "qualified workspace file mode must contain ordinary permission bits"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class TaskQualificationRequirements:
     mode: str
     base_commit: str = ""
+    workspace_files: tuple[WorkspaceFileRequirement, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.mode not in {"git", "empty"}:
+        if self.mode not in {"git", "empty", "prepared"}:
             raise ContractError("unsupported task qualification mode")
         if (self.mode == "git") != bool(self.base_commit):
             raise ContractError("Git qualification requires exactly one base commit")
+        if (self.mode == "prepared") != bool(self.workspace_files):
+            raise ContractError("prepared qualification requires workspace files")
+        paths = tuple(item.path for item in self.workspace_files)
+        if len(paths) != len(set(paths)):
+            raise ContractError("qualified workspace file paths must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +75,7 @@ class TaskAdapter(Protocol):
     def version(self) -> str: ...
 
     def qualification_requirements(
-        self, episode: ResolvedEpisode
+        self, episode: ResolvedEpisode, role: str
     ) -> TaskQualificationRequirements: ...
 
 

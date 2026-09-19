@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from axrun.adapters._candidate import persist_candidate
 from axrun.adapters.base import CandidateQualificationRequirements
@@ -18,6 +20,8 @@ from axrun.models import (
     ResolvedEpisode,
     StageResult,
 )
+
+_TOP_LEVEL_PATH = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,15 +41,25 @@ class WorkspaceArchiveCandidateAdapter:
         module = Path(__file__).with_name("archive.py")
         errors = package_root / "errors.py"
         source = episode.candidate.config.get("source_directory")
+        excluded = _excluded_paths(episode.candidate.config.get("exclude_paths", []))
+        workspace = shlex.quote(episode.inference_environment.working_directory)
+        remove_excluded = tuple(
+            "rm -f -- "
+            + shlex.quote(f"{episode.inference_environment.working_directory}/{relative}")
+            for relative in excluded
+        )
         inputs = [
             InputFile(str(module), "/opt/axrun/axrun/candidates/archive.py"),
             InputFile(str(errors), "/opt/axrun/axrun/errors.py"),
         ]
         setup_script = ""
         if source is None:
-            script = (
-                "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
-                f"{episode.inference_environment.working_directory} /outputs/workspace.tar"
+            script = "\n".join(
+                (
+                    *remove_excluded,
+                    "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
+                    f"{workspace} /outputs/workspace.tar",
+                )
             )
         elif isinstance(source, str) and source:
             source_root = Path(source).resolve()
@@ -66,17 +80,20 @@ class WorkspaceArchiveCandidateAdapter:
                         _sha256(path),
                     )
                 )
-            workspace = shlex.quote(episode.inference_environment.working_directory)
             setup_script = "\n".join(
                 (
+                    *remove_excluded,
                     f'test -z "$(find {workspace} -mindepth 1 -maxdepth 1 -print -quit)"',
                     "mkdir -p /run/axrun/static-source",
                     f"cp -R /run/axrun/static-source/. {workspace}/",
                 )
             )
-            script = (
-                "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
-                f"{workspace} /outputs/workspace.tar"
+            script = "\n".join(
+                (
+                    *remove_excluded,
+                    "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
+                    f"{workspace} /outputs/workspace.tar",
+                )
             )
         else:
             raise ContractError("workspace-archive source_directory must be a non-empty string")
@@ -109,6 +126,9 @@ class WorkspaceArchiveCandidateAdapter:
     def _validate(self, episode: ResolvedEpisode) -> None:
         if episode.candidate.identity != self.name or episode.candidate.version != self.version:
             raise ContractError("workspace archive candidate adapter requires workspace-archive@1")
+        unknown = set(episode.candidate.config) - {"source_directory", "exclude_paths"}
+        if unknown:
+            raise ContractError(f"unknown workspace-archive config: {', '.join(sorted(unknown))}")
 
 
 def _sha256(path: Path) -> str:
@@ -117,3 +137,25 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _excluded_paths(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ContractError("workspace-archive exclude_paths must be an array")
+    paths: list[str] = []
+    for item in cast(list[object], value):
+        if not isinstance(item, str):
+            raise ContractError("workspace-archive exclude_paths must contain strings")
+        relative = Path(item)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or len(relative.parts) != 1
+            or not relative.parts
+            or not _TOP_LEVEL_PATH.fullmatch(item)
+        ):
+            raise ContractError("workspace-archive exclude_paths must be safe top-level paths")
+        paths.append(relative.as_posix())
+    if len(paths) != len(set(paths)):
+        raise ContractError("workspace-archive exclude_paths contains duplicates")
+    return tuple(sorted(paths))

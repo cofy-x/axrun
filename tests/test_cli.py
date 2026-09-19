@@ -117,3 +117,31 @@ def test_qualification_accepts_a_resolved_episode_file() -> None:
 
     assert args.command == "qualify"
     assert str(args.episode) == "episode.json"
+
+
+def test_programbench_compatibility_resolver_is_explicit() -> None:
+    args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        [
+            "resolve-programbench-compatibility",
+            "row.json",
+            "--episode-id",
+            "pb",
+            "--candidate-variant",
+            "known-bad",
+            "--inference-image",
+            f"example.invalid/inference@sha256:{'a' * 64}",
+            "--verification-image",
+            f"example.invalid/verification@sha256:{'b' * 64}",
+            "--task-platform",
+            "linux/amd64",
+            "--inference-environment",
+            "env-i",
+            "--verification-environment",
+            "env-v",
+            "--output",
+            "episode.json",
+        ]
+    )
+
+    assert args.command == "resolve-programbench-compatibility"
+    assert args.candidate_variant == "known-bad"

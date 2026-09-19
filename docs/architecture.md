@@ -106,7 +106,20 @@ The repository-owned synthetic resolver demonstrates this boundary without intro
 
 The greenfield resolver proves the orthogonal case: an empty no-Git inference image, a distinct verification image, static or Claude harness, `workspace-archive@1`, and an offline verifier consuming only role `workspace`. Its gold candidate passes, while empty and known-bad workspaces produce valid failed verdicts. The fixture images support amd64 and arm64; benchmark acceptance remains canonical on amd64, while arm64 supports local Axern source-cluster development.
 
-These contracts are sufficient to begin a narrow ProgramBench adapter without adopting its optional baseline harness. A file-only Terminal-Bench subset may also reuse workspace archives, but service, package, system-configuration, process, and VM-state tasks require a future public immutable Allocation snapshot boundary. Openbench is read-only research and parity input rather than a runtime dependency. Axrun intentionally has no dataset platform, scheduler, general workflow engine, plugin marketplace, or second real harness.
+The first ProgramBench-shaped integration is deliberately limited to ProgramBench 1.2.4's own
+`testorg__calculator.abc1234` compatibility fixture. Inference qualification proves the workspace
+contains exactly one execute-only reference `executable`; verification qualification proves a
+different Environment starts empty. The candidate finalizer removes that seed-owned reference and
+publishes only the reconstructed project, then the fresh verifier removes any stale executable,
+runs `compile.sh` offline, and grades behavior. This proves composition but is not one of the 200
+official tasks and is not leaderboard evidence. A real instance still requires fixed official
+cleanroom and evaluation images, test-blob revision, and official-evaluator parity.
+
+A file-only Terminal-Bench subset may also reuse workspace archives, but service, package,
+system-configuration, process, and VM-state tasks require a future public immutable Allocation
+snapshot boundary. Openbench is read-only research and parity input rather than a runtime
+dependency. Axrun intentionally has no dataset platform, scheduler, general workflow engine,
+plugin marketplace, or second real harness.
 
 The first benchmark resolver is intentionally narrower than the contract. It accepts only the
 official enriched-v1 row for `django__django-12419`, validates its fixed repository, base commit,

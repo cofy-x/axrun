@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "dataset_identity": "axrun.programbench-compatibility",
+  "dataset_version": "programbench-1.2.4-fixture-1",
+  "instance_id": "testorg__calculator.abc1234",
+  "repository": "testorg/calculator",
+  "commit": "abc1234567890abcdef1234567890abcdef123456",
+  "language": "bash",
+  "difficulty": "easy",
+  "problem_statement_file": "problem.md",
+  "problem_statement_sha256": "30bf79c863280e2b1710585d564e68190b2c3c7737348274b5e730bb0aa30317",
+  "tests_metadata_file": "tests.json",
+  "tests_metadata_sha256": "97c55b592abef182b7b2cc40cbc301ab7b2325a70b49872070552f755f5d616a",
+  "inference_image": {
+    "dockerfile": "Dockerfile.inference",
+    "dockerfile_sha256": "91afabd23488adf18a2d4c759dd26d6ac7174c91fcaefc1c027a81745642ea43",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "reference": "axrun-programbench-calculator-inference:1"
+  },
+  "verification_image": {
+    "dockerfile": "Dockerfile.verification",
+    "dockerfile_sha256": "fee2b3db2cb16984e9c8fad90c2eefd0075c65f04adb8e809d84440a56ab280d",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "reference": "axrun-programbench-calculator-verification:1"
+  },
+  "candidates": {
+    "gold": {
+      "directory": "candidates/gold",
+      "files": {
+        "calculator.py": "80aa2c84d69945b778403b89fb973addce62587c54bd7d136e070b0705d934a7",
+        "compile.sh": "fda316a854d383d882b466cdfdb930ec11a4396f7575467e685f9c6410324cb4"
+      }
+    },
+    "empty": null,
+    "known-bad": {
+      "directory": "candidates/known-bad",
+      "files": {
+        "calculator.py": "f66be709a771c1af1819a798cd74e6618f74074160b8aa36af04bf72da03c6ed",
+        "compile.sh": "fda316a854d383d882b466cdfdb930ec11a4396f7575467e685f9c6410324cb4"
+      }
+    }
+  },
+  "verifier_file": "verifier/run_verifier.py",
+  "verifier_sha256": "7428122367b063b99df44f1b823227c78e77088d1ce177c629ae2b3d597bbffa"
+}

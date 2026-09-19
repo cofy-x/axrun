@@ -12,6 +12,7 @@ from typing import cast
 from axrun.adapters import (
     CommandVerifierAdapter,
     GreenfieldVerifierAdapter,
+    ProgramBenchVerifierAdapter,
     StaticCandidateHarness,
     SweBenchVerifiedVerifierAdapter,
     SyntheticVerifierAdapter,
@@ -22,6 +23,7 @@ from axrun.adapters.base import (
     TaskAdapter,
     TrajectoryAdapter,
     VerifierAdapter,
+    WorkspaceFileRequirement,
 )
 from axrun.candidates import GitPatchCandidateAdapter, WorkspaceArchiveCandidateAdapter
 from axrun.errors import ContractError
@@ -29,7 +31,7 @@ from axrun.harnesses import ClaudeCodeHarness
 from axrun.models import HarnessRuntimeRequirements, ResolvedEpisode
 from axrun.proxy.base import ModelProtocol
 from axrun.proxy.protocols import AnthropicProtocol
-from axrun.tasks import EmptyWorkspaceTaskAdapter, GitWorktreeTaskAdapter
+from axrun.tasks import EmptyWorkspaceTaskAdapter, GitWorktreeTaskAdapter, ProgramBenchTaskAdapter
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 
 
@@ -47,15 +49,18 @@ class AdapterSelection:
 class QualificationRequirements:
     task_mode: str
     base_commit: str = ""
+    workspace_files: tuple[WorkspaceFileRequirement, ...] = ()
     archive_finalizer: bool = False
     verifier_file: str = ""
     claude_mount_image: str = ""
 
     def __post_init__(self) -> None:
-        if self.task_mode not in {"git", "empty"}:
+        if self.task_mode not in {"git", "empty", "prepared"}:
             raise ContractError("unsupported task qualification mode")
         if (self.task_mode == "git") != bool(self.base_commit):
             raise ContractError("Git qualification requires exactly one base commit")
+        if (self.task_mode == "prepared") != bool(self.workspace_files):
+            raise ContractError("prepared qualification requires workspace files")
 
 
 def resolve_adapters(episode: ResolvedEpisode) -> AdapterSelection:
@@ -67,15 +72,20 @@ def resolve_adapters(episode: ResolvedEpisode) -> AdapterSelection:
     return AdapterSelection(task, inference, candidate, verifier, trajectory, runtime)
 
 
-def resolve_qualification_requirements(episode: ResolvedEpisode) -> QualificationRequirements:
+def resolve_qualification_requirements(
+    episode: ResolvedEpisode, role: str
+) -> QualificationRequirements:
+    if role not in {"inference", "verification"}:
+        raise ContractError("qualification role is invalid")
     selection = resolve_adapters(episode)
-    task = selection.task.qualification_requirements(episode)
+    task = selection.task.qualification_requirements(episode, role)
     harness = selection.inference.qualification_requirements(episode)
     candidate = selection.candidate.qualification_requirements(episode)
     verifier = selection.verifier.qualification_requirements(episode)
     return QualificationRequirements(
         task_mode=task.mode,
         base_commit=task.base_commit,
+        workspace_files=task.workspace_files,
         archive_finalizer=candidate.archive_finalizer,
         verifier_file=verifier.verifier_file,
         claude_mount_image=harness.claude_mount_image,
@@ -92,6 +102,8 @@ def resolve_task(episode: ResolvedEpisode) -> TaskAdapter:
         return GitWorktreeTaskAdapter(name=key[0])
     if key == ("axrun.synthetic.greenfield-task", "1"):
         return EmptyWorkspaceTaskAdapter(name=key[0])
+    if key == ("programbench", "1"):
+        return ProgramBenchTaskAdapter()
     raise ContractError(f"unsupported task adapter: {key[0]}@{key[1]}")
 
 
@@ -125,6 +137,8 @@ def resolve_verifier(episode: ResolvedEpisode) -> VerifierAdapter:
         return SweBenchVerifiedVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
     if key == ("synthetic-greenfield", "1"):
         return GreenfieldVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
+    if key == ("programbench", "1"):
+        return ProgramBenchVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
     if key == ("command-verifier", "1"):
         value = episode.verifier.config.get("command", ["/opt/axrun/run-verifier"])
         if (
