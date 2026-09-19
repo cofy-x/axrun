@@ -160,6 +160,24 @@ Expanding to a real ProgramBench instance requires a fixed official cleanroom im
 revision, and parity evidence against the official evaluator; Axrun does not reinterpret observed
 tests as an equivalent score.
 
+Stage-zero work now locks the real `xorg62__tty-clock.f2f847c` instance from ProgramBench 1.2.4:
+its six-branch denominator, ignore decisions, hidden-blob revision/digests, and official
+`linux/amd64` cleanroom platform manifest are content-addressed. The resolver can materialize and
+validate this contract, but the closed catalog intentionally refuses to run it. ProgramBench's
+official evaluator commits the complete candidate-specific post-compile container and starts each
+test branch from that state; released `axern-sdk==0.9.1` has no public Allocation
+snapshot/commit-to-Environment operation. A workspace archive is not an equivalent substitute.
+See [the stage-zero validation](docs/validation/2026-09-19-programbench-official-tty-clock-stage-zero.md)
+and run the public-SDK reproducer with:
+
+```bash
+uv run python tools/reproducers/programbench_post_compile_snapshot.py
+# exit 2 means the required public capability is absent
+```
+
+No official ProgramBench score, deterministic parity, or Claude acceptance is claimed until that
+capability exists and the official evaluator can be reproduced without weakening branch isolation.
+
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
 business verdict. Every other non-zero Claude terminal subtype remains fail-closed infrastructure

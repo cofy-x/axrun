@@ -115,6 +115,16 @@ runs `compile.sh` offline, and grades behavior. This proves composition but is n
 official tasks and is not leaderboard evidence. A real instance still requires fixed official
 cleanroom and evaluation images, test-blob revision, and official-evaluator parity.
 
+The subsequent official-instance stage-zero audit locks `xorg62__tty-clock.f2f847c`, the upstream
+1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
+the complete expected/ignored test metadata. It deliberately stops before registering executable
+task or verifier adapters. The official evaluator snapshots the whole post-compile container and
+starts every branch from it; `axern-sdk==0.9.1` exposes path archives but no public operation that
+turns Allocation state into an immutable Environment for fresh Allocations. Re-uploading only
+`/workspace` would lose candidate build effects outside that path and is not official parity. The
+locked resolver therefore produces a reviewable contract whose unknown catalog identities fail
+closed, and the repository includes a public-SDK-only reproducer for the capability gap.
+
 A file-only Terminal-Bench subset may also reuse workspace archives, but service, package,
 system-configuration, process, and VM-state tasks require a future public immutable Allocation
 snapshot boundary. Openbench is read-only research and parity input rather than a runtime
