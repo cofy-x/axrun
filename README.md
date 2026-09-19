@@ -4,6 +4,7 @@ Axrun is a thin, recoverable episode runner built on the released [Axern](https:
 
 ```text
 ResolvedEpisode
+  -> model-free qualification Run / Allocation
   -> inference Run / Allocation
   -> sealed canonical trajectory + patch
   -> immutable TrajectoryBundle + CandidateBundle
@@ -20,6 +21,13 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
 Axrun includes a small `axrun.synthetic.code-task@1` fixture for deterministic qualification. It is not a dataset registry or download service. The gold and known-bad candidates pass through the same immutable CandidateBundle and fresh verification Run boundary used by remote execution.
 
 The fixture seed is a repository-owned [task image](fixtures/synthetic/code-task-v1/README.md), not a set of files uploaded into an arbitrary Environment. Its Dockerfile installs Git and Python, creates `/workspace` as a clean repository, and asserts the exact base commit during the image build. Build and import the variant matching the Axern node, then create both selected Axern Environments from the imported digest. Inference and verification may reference the same immutable Environment definition; Axrun still creates an independent Run and Allocation for each stage. The task image and the separate Claude Code rootfs both support amd64 and arm64.
+
+Before any inference, `run` performs (or reuses) a bounded qualification Run with deny-all
+networking and no model credential. It requires digest-pinned, identical task images for the two
+selected Environments, checks the clean Git base and control Python, and—for Claude—checks the
+fixed Claude/Node versions and read-only mount ABI. The sealed qualification evidence and its
+Run/Allocation are bound to the episode while it is still `new`; inference cannot start without
+that evidence.
 
 Resolve either candidate into canonical episode JSON with:
 
@@ -89,6 +97,12 @@ Model IDs are opaque strings. The primary model and four Claude model-selection 
 
 The credential is read only from the selected caller environment variable when the per-stage `ModelProxy` is constructed. It is never copied into the episode or StagePlan. A fixed non-secret `ANTHROPIC_AUTH_TOKEN` sentinel satisfies Claude Code's client-side configuration and is stripped by the Anthropic protocol adapter before the proxy injects the real upstream credential as `x-api-key`.
 
+Claude runs offline with `WebFetch` and `WebSearch` explicitly disabled by default through Claude
+Code's `--disallowedTools` contract. `--claude-disallowed-tools` records a deterministic explicit
+replacement; passing the option with no values deliberately removes the default tool restriction.
+This tool policy is separate from Axern's deny-all network policy, which remains the sandbox
+enforcement boundary.
+
 Canonical trajectories and candidate code have separate ownership. `CandidateBundle v1` contains
 only verifier-required files; Claude currently contributes only `candidate.patch`.
 `TrajectoryBundle v1` contains canonical `trajectory.jsonl` plus its derived `usage.json`, with an
@@ -131,11 +145,15 @@ Axrun pins the released `axern-sdk==0.9.1`; it does not use an Axern source chec
 ```bash
 uv sync --all-groups
 uv run axrun validate episode.json
+uv run axrun --context-file ~/.config/axern/config.json qualify episode.json
 uv run axrun --context-file ~/.config/axern/config.json run episode.json
 uv run axrun status EPISODE_ID
 uv run axrun --context-file ~/.config/axern/config.json wait EPISODE_ID
+uv run axrun --context-file ~/.config/axern/config.json resume EPISODE_ID
 uv run axrun --context-file ~/.config/axern/config.json cancel EPISODE_ID
 uv run axrun inspect EPISODE_ID
+uv run axrun verify-record EPISODE_ID
+uv run axrun report EPISODE_ID --format markdown --output acceptance.md
 uv run axrun export EPISODE_ID ./exported-result
 ```
 
@@ -147,17 +165,23 @@ Without `--context-file`, remote commands use the explicit Axern SDK environment
 
 ## Credentials and network access
 
-Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. One short-lived `ModelProxy` is created per inference stage. Its Anthropic protocol adapter exposes only `/v1/messages` and `/v1/messages/count_tokens`, with either no query or exactly `beta=true`, from a bounded loopback listener. Unknown paths, queries, and fragments fail closed. The adapter strips sandbox authentication headers and injects the real credential only on the caller-side upstream hop. Safe in-memory request summaries contain metadata and a stable reason code but no headers or bodies, distinguishing local protocol rejection, upstream transport failure, and upstream HTTP response. `ModelTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz`, and performs a protocol-owned model preflight from inside that Allocation before releasing the staged process. Failed stages may persist only the allowlisted safe summary and stable reason code in Axrun's diagnostic record; successful request detail is not added to CandidateBundle, trajectory, or sealed output. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
+Provider credentials belong to the caller process and are not accepted by `ResolvedEpisode`, projected as sandbox environment variables, or persisted in records and bundles. One short-lived `ModelProxy` is created per inference stage. Its Anthropic protocol adapter exposes only `/v1/messages` and `/v1/messages/count_tokens`, with either no query or exactly `beta=true`, from a bounded loopback listener. Unknown paths, queries, and fragments fail closed. The adapter strips sandbox authentication headers and injects the real credential only on the caller-side upstream hop. Safe in-memory request summaries contain metadata and a stable reason code but no headers or bodies, distinguishing local protocol rejection, upstream timeout/transport failure, and upstream HTTP response. Connect and response bounds are explicit caller options (`--model-connect-timeout-seconds` and `--model-response-timeout-seconds`). `ModelTunnelLifecycle` creates one finite-lived, Allocation-scoped Tunnel after the Run and Allocation identities have been persisted, proves `/healthz`, and performs a protocol-owned model preflight from inside that Allocation before releasing the staged process. Failed stages may persist only the allowlisted safe summary and stable reason code in Axrun's diagnostic record; successful request detail is not added to CandidateBundle, trajectory, or sealed output. The connector token and TunnelSession are held in memory and discarded during unconditional cleanup; neither is a durable episode fact.
 
 ## Persistence, recovery, and cancellation
 
-Each episode has an immutable normalized `spec.json` and a small `execution.json`. Candidate,
+Each episode has an immutable normalized `spec.json` and a small `execution.json`. Qualification, candidate,
 trajectory, and result manifests are atomically published and digest checked. The execution record
 stores only trajectory manifest path and digest, never the trajectory body. `inspect` exposes those
 references, while `export` writes CandidateBundle, optional TrajectoryBundle, and
 VerificationResult as separate outputs. Stage Run IDs are stored immediately after creation.
 `recover` and `wait` query only those public Run IDs; they never create another Run for an in-flight
 stage. A different specification digest cannot reuse an episode ID.
+
+`resume` is the explicit reconciliation command after a caller restart: it queries the persisted
+authoritative Run and never synthesizes a replacement. `verify-record` independently rechecks the
+complete qualification, bundle, execution-provenance, and result chain. `report` emits that safe
+acceptance summary as canonical JSON or Markdown without candidate content, trajectories, secrets,
+or Tunnel state.
 
 For a running Claude stage, `execution.json` stores only the canonical local progress path and its
 latest revision. The closed progress record excludes prompts, message content, tool arguments and
@@ -166,7 +190,7 @@ infrastructure diagnostic and never a benchmark `failed` verdict.
 
 The local lock covers state transitions and the bounded cancel control call, not the lifetime of a remote Run. Consequently another process can inspect or cancel a running episode. Once `completed`, `failed`, or `cancelled` is committed, late stage results cannot replace it.
 
-Axrun cancellation requests cancellation of the active Axern Run; it does not treat a dropped stdout connection as workload cancellation. Axern retains ownership of Run termination and Allocation cleanup.
+Axrun cancellation requests cancellation of the active Axern Run; it does not treat a dropped stdout connection or caller wait timeout as workload cancellation. `status` exposes the latest safe progress reason, including model request in flight, tool activity, missing heartbeat, and model idle. The operator can then `resume`/`wait` the same Run or explicitly `cancel` it. Axern retains ownership of Run termination and Allocation cleanup.
 
 ## Development and verified boundary
 

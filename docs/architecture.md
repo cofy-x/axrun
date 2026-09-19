@@ -7,6 +7,7 @@ Axrun is caller-side orchestration. Axern remains the sole owner of Environment,
 | Fact | Owner | Durable location |
 | --- | --- | --- |
 | Canonical seed, harness and verifier selection | Axrun resolver/caller | immutable `spec.json` |
+| Task image and mount qualification evidence | Axrun + Axern Run | content-verified qualification record |
 | Task repository, tools and base commit | task OCI image | Axern Environment rootfs |
 | Run specification, lifecycle and terminal exit | Axern | Run |
 | Concrete sandbox identity | Axern | Allocation |
@@ -17,7 +18,7 @@ Axrun is caller-side orchestration. Axern remains the sole owner of Environment,
 | Accepted verdict and score | Axrun | content-addressed VerificationResult |
 
 The execution record stores only the specification digest, public Run/Allocation references,
-phase, CandidateBundle and TrajectoryBundle manifest references/digests, result reference, and
+phase, qualification evidence, CandidateBundle and TrajectoryBundle manifest references/digests, result reference, and
 diagnosis. It never embeds trajectory events. Allocation status is queried from Axern and is never
 copied into a second local state machine.
 
@@ -33,6 +34,14 @@ running/candidate_ready -> cancelled
 The Run ID is persisted from the backend's binding callback before further data operations. A crash in a running phase is recovered by querying that Run, downloading sealed outputs again, and committing the next boundary. A crash after CandidateBundle publication but before the record update reuses the already verified bundle for the same episode, task, Run and harness. Verification always has a different Run ID.
 
 The file lock protects short local transitions. It is not held while waiting for a remote Run. Cancellation serializes its bounded Axern control call with terminal publication so a late stage result cannot overwrite the accepted local cancellation.
+
+Qualification is a precondition on `new`, not another inference phase. A bounded, model-free,
+deny-all Run confirms that inference and verification Environments resolve to the same immutable
+task image, that the workspace has the expected clean Git base, and that a suitable control Python
+exists. Claude episodes additionally prove Claude 2.1.205, Node 22.23.2, the canonical mount/entry,
+and read-only ImageMount behavior. Its sealed result digest and public Run/Allocation are committed
+before inference may bind a Run. Repeating qualification reuses the bound evidence instead of
+spending another Run.
 
 ## Output and isolation boundary
 
@@ -112,7 +121,7 @@ Episode schemas and StagePlans contain no provider credential or Tunnel token fi
 
 The backend persists the Run ID, waits for the unique Allocation, persists that Allocation ID, starts the proxy and connector, and performs Allocation-originated `/healthz` and protocol-owned model preflights before writing the input-ready marker. Setup failure cancels the unreleased Run. Normal completion and all post-release exits revoke the Tunnel and stop the proxy without treating Tunnel closure itself as Run cancellation. The short-lived connector token is never persisted, so a caller restart cannot silently reconstruct live model access or create a replacement inference Run; recovery must inspect the original Run and require an explicit operator decision if it is still live.
 
-Model failures use a deliberately narrow diagnostic path rather than a telemetry subsystem. The proxy distinguishes `proxy_protocol_rejected`, `proxy_upstream_error`, and `upstream_response`; the lifecycle distinguishes `tunnel_health_failed` and `tunnel_model_preflight_failed`. A failed Axrun record may retain only method, protocol, allowed path/query, status, byte counts, latency, opaque model ID, numeric usage summary, and stable reason code. Headers, bodies, credentials, and Tunnel tokens are rejected by the durable diagnostic allowlist. Successful request summaries remain process-local.
+Model failures use a deliberately narrow diagnostic path rather than a telemetry subsystem. The proxy distinguishes `proxy_protocol_rejected`, `proxy_upstream_timeout`, `proxy_upstream_error`, and `upstream_response`; the lifecycle distinguishes `tunnel_health_failed` and `tunnel_model_preflight_failed`. Connect and response time limits are explicit caller-side ModelProxy bounds. A failed Axrun record may retain only method, protocol, allowed path/query, status, byte counts, latency, opaque model ID, numeric usage summary, and stable reason code. Headers, bodies, credentials, and Tunnel tokens are rejected by the durable diagnostic allowlist. Successful request summaries remain process-local.
 
 ## Runtime progress boundary
 
@@ -135,3 +144,10 @@ TrajectoryBundle, or verification. Run completion stops the observer before Tunn
 cleanup is idempotent. Invalid observed progress terminalizes the episode as an explicit
 infrastructure failure. Successful publication still requires sealed-output length and SHA-256
 verification before any immutable bundle is created.
+
+`status` and `inspect` provide the safe snapshot without controlling the Run. `wait` and `resume`
+reconcile only the persisted Run identity; an expired caller wait does not imply cancellation.
+`cancel` is the sole explicit operator path that requests cancellation. Completed acceptance can
+be reconstructed by `verify-record`, which rechecks qualification evidence, bundle files and
+manifests, execution provenance, fresh verification identity, and VerificationResult linkage;
+`report` serializes only that verified summary.
