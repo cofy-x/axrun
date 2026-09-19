@@ -286,6 +286,7 @@ class EpisodeRecord:
     trajectory_digest: str = ""
     progress_path: str = ""
     progress_revision: int = 0
+    inference_termination_reason: str = ""
     verification: ExecutionRef | None = None
     verification_result: str = ""
     verification_result_digest: str = ""

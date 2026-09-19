@@ -192,6 +192,7 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
     assert f"/candidates/sha256/{record.candidate_digest}/" in record.candidate_manifest
     assert f"/sha256/{record.verification_result_digest}/" in record.verification_result
     assert record.trajectory_manifest == "" and record.trajectory_digest == ""
+    assert record.inference_termination_reason == "completed"
     assert runner.run(episode(tmp_path), inference=Inference(), verifier=Verifier()) == result
     assert len(backend.executions) == 2
 
@@ -276,6 +277,7 @@ def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch
     record = runner.inspect("with-trajectory")
     bundle = load_trajectory_bundle(Path(record.trajectory_manifest))
     assert bundle.digest == record.trajectory_digest and bundle.event_count == 1
+    assert record.inference_termination_reason == "unknown"
     candidate = load_candidate(Path(record.candidate_manifest))
     assert [item.declared_path for item in candidate.files] == ["/outputs/candidate.patch"]
     verification_plan = backend.plans[1]

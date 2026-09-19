@@ -70,6 +70,7 @@ class EpisodeStore:
             trajectory_digest=str(raw.get("trajectory_digest", "")),
             progress_path=str(raw.get("progress_path", "")),
             progress_revision=int(raw.get("progress_revision", 0)),
+            inference_termination_reason=str(raw.get("inference_termination_reason", "")),
             verification=_optional_execution(raw.get("verification")),
             verification_result=str(raw.get("verification_result", "")),
             verification_result_digest=str(raw.get("verification_result_digest", "")),

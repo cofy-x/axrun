@@ -27,6 +27,7 @@ from axrun.models import (
 )
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import TrajectoryBundle
+from axrun.trajectories.schema import load_trajectory_jsonl
 
 
 class EpisodeRunner:
@@ -51,7 +52,7 @@ class EpisodeRunner:
                 return self._load_verification(record)
             if record.phase != EpisodePhase.NEW:
                 raise RecoveryRequiredError(
-                    f"episode is {record.phase.value}; use wait or inspect it"
+                    f"episode is {record.phase.value}; use resume or inspect it"
                 )
             record.phase = EpisodePhase.INFERENCE_RUNNING
             self.store.save(record)
@@ -246,6 +247,9 @@ class EpisodeRunner:
             if trajectory is not None:
                 record.trajectory_manifest = str(Path(trajectory.root) / "trajectory-manifest.json")
                 record.trajectory_digest = trajectory.digest
+                record.inference_termination_reason = _trajectory_termination_reason(trajectory)
+            else:
+                record.inference_termination_reason = "completed"
             record.phase = EpisodePhase.CANDIDATE_READY
             record.diagnostic_code = ""
             record.message = ""
@@ -389,3 +393,15 @@ def _safe_failure_message(details: dict[str, object], *, fallback: str) -> str:
         return fallback
     safe = safe_diagnostic_details(details)
     return json.dumps(safe, sort_keys=True, separators=(",", ":"))
+
+
+def _trajectory_termination_reason(bundle: TrajectoryBundle) -> str:
+    events = load_trajectory_jsonl(Path(bundle.root) / bundle.trajectory.bundle_path)
+    final = next((event for event in reversed(events) if event.kind == "final_result"), None)
+    if final is None:
+        return "unknown"
+    if final.data.get("status") == "success":
+        return "completed"
+    if final.data.get("stop_reason") == "max_turns":
+        return "max_turns"
+    return "agent_error"

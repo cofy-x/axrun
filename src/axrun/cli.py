@@ -272,9 +272,10 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("status", "inspect", "cancel"):
         command = commands.add_parser(name)
         command.add_argument("episode_id")
-    wait = commands.add_parser("wait")
-    wait.add_argument("episode_id")
-    wait.add_argument("--timeout", type=float)
+    for name in ("wait", "resume"):
+        recovery = commands.add_parser(name)
+        recovery.add_argument("episode_id")
+        recovery.add_argument("--timeout", type=float)
     export = commands.add_parser("export")
     export.add_argument("episode_id")
     export.add_argument("destination", type=Path)
@@ -422,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 episode = store.load_spec(args.episode_id)
                 inference, verifier = _adapters(episode)
-                if args.command == "wait":
+                if args.command in {"wait", "resume"}:
                     result = runner.wait(
                         args.episode_id,
                         inference=inference,

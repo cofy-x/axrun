@@ -267,7 +267,7 @@ def test_claude_visible_user_message_and_failed_result_mapping(tmp_path: Path) -
             "subtype": "error_max_turns",
             "is_error": True,
             "result": "Stopped",
-            "stop_reason": "max_turns",
+            "stop_reason": "tool_use",
             "usage": {},
         },
     ]

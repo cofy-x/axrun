@@ -475,12 +475,17 @@ def _map_result(native: dict[str, object], emitter: _Emitter) -> None:
     parent = emitter.last_assistant_event
     emitter.usage(native.get("usage"), source_id="final-result", model=model, parent=parent)
     is_error = native.get("is_error") is True or native.get("subtype") not in {"success", None}
+    stop_reason = (
+        "max_turns"
+        if native.get("subtype") == "error_max_turns"
+        else _optional_string(native.get("stop_reason"))
+    )
     emitter.emit(
         "final_result",
         "runtime",
         {
             "status": "error" if is_error else "success",
-            "stop_reason": _optional_string(native.get("stop_reason")),
+            "stop_reason": stop_reason,
             "content": _optional_string(native.get("result")),
         },
         timestamp=_optional_string(native.get("timestamp")),

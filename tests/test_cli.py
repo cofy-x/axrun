@@ -70,3 +70,13 @@ def test_model_credential_environment_option_defaults_to_axrun_name() -> None:
     )
 
     assert args.model_credential_env == "AXRUN_MODEL_CREDENTIAL"
+
+
+def test_resume_is_an_explicit_recovery_command() -> None:
+    args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        ["resume", "episode-id", "--timeout", "12"]
+    )
+
+    assert args.command == "resume"
+    assert args.episode_id == "episode-id"
+    assert args.timeout == 12.0
