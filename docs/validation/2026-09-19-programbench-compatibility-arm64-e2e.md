@@ -51,9 +51,41 @@ networking in a fresh Run/Allocation and exited zero; empty and known-bad are le
 failures, not infrastructure failures. `verify-record` returned `integrity_verified=true` for all
 three episodes.
 
-No model lifecycle, credential, Tunnel, trajectory, or model proxy participated in this model-free
-acceptance. After completion the source cluster reported zero running or active Allocations and zero
-running containers.
+## Real Claude Code composition
+
+Episode `programbench-calculator-claude-arm64-20260919-01` used Claude Code 2.1.205 from readonly
+rootfs mount
+`index.docker.io/library/axrun-claude-code-rootfs@sha256:66688f9bef794b63a3104588a19b3e6c09091b6729dc4082cd1bf0d0664f2633`.
+It used the same provider-neutral DeepSeek configuration as the accepted greenfield vertical and a
+caller-only `DEEPSEEK_API_KEY`; no credential value is recorded here.
+
+- inference: `run-adf75c63-3628-451b-8502-41149d5e4b29` /
+  `alloc-1b9da627-3ae0-4349-87c4-ff2b1ef8bc81`
+- verification: `run-ea7b66c2-d5ac-46b5-b6d3-4d039662dffc` /
+  `alloc-19c0b86a-a0e2-420c-bf19-e703251e5088`
+- CandidateBundle: `cec006fbdd75fec3aae64db4884b22c57cc33c376e923f59972d9f095b58c1f3`
+- TrajectoryBundle: `223e03a9ccaf0549541cbc7d1f0293d5db4d23e17917d2d4e8b64a242212d9f7`
+  with 169 canonical events
+- VerificationResult: `7cf870139e2b3396c2a72c78498aaeff48e6a074112458e13350a8da84099800`
+- terminal reason: `max_turns`
+- verdict: legitimate failed / 0.0 / `programbench_behavior_failed`
+
+The agent exhausted 40 turns without publishing `compile.sh`; the candidate archive was empty after
+the seed reference exclusion. This is a model/task outcome, not a model transport, Axern, capture,
+or verifier infrastructure failure. It proves that the unchanged Claude harness, ModelProxy/Tunnel,
+canonical trajectory, workspace candidate, and fresh verifier compose with the new task adapter,
+but it does not claim the model solved the fixture.
+
+| Sealed output | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `workspace.tar` | 10,240 | `84ff92691f909a05b224e1c56abb4864f01b4f8e3c854e4bb4c7baf1d3f6d652` |
+| `trajectory.jsonl` | 81,888 | `52f1fa858e6b211776beeed5d97f2677931b794b5932deec53ecb520a22788bd` |
+| `harness.log` | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `usage.json` | 148 | `de76e8c83aac6ac3ab614a3a82c276b12a431400ddf2845f0f23436ccd524124` |
+
+`verify-record` returned `integrity_verified=true`. A fixed-value credential scan of the caller
+state directory returned zero matches. After all four episodes, the source cluster reported zero
+running or active Allocations and zero running containers, confirming lifecycle cleanup.
 
 ## Reproduction
 
