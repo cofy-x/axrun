@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from axrun.adapters.base import HarnessQualificationRequirements
 from axrun.errors import ContractError
 from axrun.models import (
     CandidateCapturePlan,
+    HarnessRuntimeRequirements,
     HarnessSpec,
     ImageMountSpec,
     InputFile,
@@ -96,9 +98,25 @@ class ClaudeCodeHarness:
     requires_live_model_connection: bool = True
     requires_trajectory: bool = True
 
+    @property
+    def runtime_requirements(self) -> HarnessRuntimeRequirements:
+        return HarnessRuntimeRequirements(
+            model_protocol="anthropic-compatible",
+            requires_model_tunnel=True,
+            trajectory_adapter="claude-code",
+            progress_adapter="claude-code",
+        )
+
+    def qualification_requirements(
+        self, episode: ResolvedEpisode
+    ) -> HarnessQualificationRequirements:
+        self._validate(episode)
+        return HarnessQualificationRequirements(
+            claude_mount_image=_required_string(episode.harness.config, "mount_image")
+        )
+
     def plan(self, episode: ResolvedEpisode, capture: CandidateCapturePlan) -> StagePlan:
-        if episode.harness.identity != self.name or episode.harness.version != self.version:
-            raise ContractError(f"Claude Code adapter requires {self.name}@{self.version}")
+        self._validate(episode)
         config = episode.harness.config
         image = _required_string(config, "mount_image")
         model = _required_string(config, "model")
@@ -240,6 +258,10 @@ class ClaudeCodeHarness:
             timeout_seconds=episode.harness.timeout_seconds,
             labels={"axrun.stage": "inference", "axrun.agent": self.name},
         )
+
+    def _validate(self, episode: ResolvedEpisode) -> None:
+        if episode.harness.identity != self.name or episode.harness.version != self.version:
+            raise ContractError(f"Claude Code adapter requires {self.name}@{self.version}")
 
 
 def _required_string(config: dict[str, Any], key: str) -> str:

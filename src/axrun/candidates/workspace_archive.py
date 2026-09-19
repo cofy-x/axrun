@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from axrun.adapters._candidate import persist_candidate
+from axrun.adapters.base import CandidateQualificationRequirements
 from axrun.errors import ContractError
 from axrun.models import (
     CandidateBundle,
@@ -24,9 +25,14 @@ class WorkspaceArchiveCandidateAdapter:
     version: str = "1"
     name: str = "workspace-archive"
 
+    def qualification_requirements(
+        self, episode: ResolvedEpisode
+    ) -> CandidateQualificationRequirements:
+        self._validate(episode)
+        return CandidateQualificationRequirements(archive_finalizer=True)
+
     def capture_plan(self, episode: ResolvedEpisode) -> CandidateCapturePlan:
-        if episode.candidate.identity != self.name or episode.candidate.version != self.version:
-            raise ContractError("workspace archive candidate adapter requires workspace-archive@1")
+        self._validate(episode)
         package_root = Path(__file__).parents[1]
         module = Path(__file__).with_name("archive.py")
         errors = package_root / "errors.py"
@@ -90,6 +96,7 @@ class WorkspaceArchiveCandidateAdapter:
     def build(
         self, episode: ResolvedEpisode, result: StageResult, *, destination: Path
     ) -> CandidateBundle:
+        self._validate(episode)
         return persist_candidate(
             episode,
             result,
@@ -98,6 +105,10 @@ class WorkspaceArchiveCandidateAdapter:
             harness=episode.harness.identity,
             harness_version=episode.harness.version,
         )
+
+    def _validate(self, episode: ResolvedEpisode) -> None:
+        if episode.candidate.identity != self.name or episode.candidate.version != self.version:
+            raise ContractError("workspace archive candidate adapter requires workspace-archive@1")
 
 
 def _sha256(path: Path) -> str:

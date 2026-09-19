@@ -22,6 +22,7 @@ from axrun.models import (
     TaskSpec,
     VerifierSpec,
 )
+from axrun.tasks import EmptyWorkspaceTaskAdapter, GitWorktreeTaskAdapter
 
 
 def _episode(tmp_path: Path) -> ResolvedEpisode:
@@ -49,6 +50,7 @@ def test_static_catalog_resolution_is_deterministic_and_model_free(tmp_path: Pat
     episode = _episode(tmp_path)
     first = resolve_adapters(episode)
     second = resolve_adapters(episode)
+    assert isinstance(first.task, GitWorktreeTaskAdapter)
     assert isinstance(first.inference, StaticCandidateHarness)
     assert isinstance(first.candidate, GitPatchCandidateAdapter)
     assert first.runtime == second.runtime
@@ -80,6 +82,7 @@ def test_greenfield_qualification_is_no_git_and_stage_specific(tmp_path: Path) -
         verifier=VerifierSpec("synthetic-greenfield", "1", config={"verifier_file": str(verifier)}),
     )
     requirements = resolve_qualification_requirements(episode)
+    assert isinstance(resolve_adapters(episode).task, EmptyWorkspaceTaskAdapter)
     assert requirements.task_mode == "empty" and requirements.base_commit == ""
     assert requirements.archive_finalizer is True
     assert requirements.verifier_file == str(verifier)
@@ -94,6 +97,8 @@ def test_greenfield_qualification_is_no_git_and_stage_specific(tmp_path: Path) -
         ("candidate", CandidateSpec("git-patch", "wrong")),
         ("verifier", VerifierSpec("unknown", "1")),
         ("verifier", VerifierSpec("command-verifier", "wrong")),
+        ("task", TaskSpec("unknown", "1")),
+        ("task", TaskSpec("git-worktree", "wrong")),
     ],
 )
 def test_catalog_unknown_identity_or_version_fails_closed(

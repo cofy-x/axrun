@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from axrun.adapters.base import VerifierQualificationRequirements
 from axrun.errors import ContractError, InfrastructureError
 from axrun.models import (
     CandidateBundle,
@@ -31,6 +32,14 @@ class CommandVerifierAdapter:
     timeout_seconds: int = 7200
     network_policy: str = "deny_all"
     name: str = "command-verifier"
+
+    def qualification_requirements(
+        self, episode: ResolvedEpisode
+    ) -> VerifierQualificationRequirements:
+        value = episode.verifier.config.get("verifier_file", "")
+        if not isinstance(value, str):
+            raise ContractError("verifier qualification file must be a string")
+        return VerifierQualificationRequirements(verifier_file=value)
 
     def plan(self, episode: ResolvedEpisode, candidate: CandidateBundle) -> StagePlan:
         patch = next(

@@ -19,6 +19,7 @@ from axrun.adapters import (
 from axrun.adapters.base import (
     CandidateAdapter,
     InferenceAdapter,
+    TaskAdapter,
     TrajectoryAdapter,
     VerifierAdapter,
 )
@@ -28,11 +29,13 @@ from axrun.harnesses import ClaudeCodeHarness
 from axrun.models import HarnessRuntimeRequirements, ResolvedEpisode
 from axrun.proxy.base import ModelProtocol
 from axrun.proxy.protocols import AnthropicProtocol
+from axrun.tasks import EmptyWorkspaceTaskAdapter, GitWorktreeTaskAdapter
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 
 
 @dataclass(frozen=True, slots=True)
 class AdapterSelection:
+    task: TaskAdapter
     inference: InferenceAdapter
     candidate: CandidateAdapter
     verifier: VerifierAdapter
@@ -56,46 +59,40 @@ class QualificationRequirements:
 
 
 def resolve_adapters(episode: ResolvedEpisode) -> AdapterSelection:
+    task = resolve_task(episode)
     inference, runtime = resolve_harness(episode)
     candidate = resolve_candidate(episode)
     verifier = resolve_verifier(episode)
     trajectory = resolve_trajectory(runtime, episode.harness.version)
-    return AdapterSelection(inference, candidate, verifier, trajectory, runtime)
+    return AdapterSelection(task, inference, candidate, verifier, trajectory, runtime)
 
 
 def resolve_qualification_requirements(episode: ResolvedEpisode) -> QualificationRequirements:
     selection = resolve_adapters(episode)
-    task_key = (episode.task.identity, episode.task.version)
-    if task_key in {
+    task = selection.task.qualification_requirements(episode)
+    harness = selection.inference.qualification_requirements(episode)
+    candidate = selection.candidate.qualification_requirements(episode)
+    verifier = selection.verifier.qualification_requirements(episode)
+    return QualificationRequirements(
+        task_mode=task.mode,
+        base_commit=task.base_commit,
+        archive_finalizer=candidate.archive_finalizer,
+        verifier_file=verifier.verifier_file,
+        claude_mount_image=harness.claude_mount_image,
+    )
+
+
+def resolve_task(episode: ResolvedEpisode) -> TaskAdapter:
+    key = (episode.task.identity, episode.task.version)
+    if key in {
         ("git-worktree", "1"),
         ("axrun.synthetic.code-task", "1"),
         ("swebench-verified", "1"),
     }:
-        base_commit = episode.task.config.get("base_commit")
-        if not isinstance(base_commit, str) or not base_commit:
-            raise ContractError("Git task qualification requires base_commit")
-        task_mode = "git"
-    elif task_key == ("axrun.synthetic.greenfield-task", "1"):
-        base_commit = ""
-        task_mode = "empty"
-    else:
-        raise ContractError(f"unsupported task qualification: {task_key[0]}@{task_key[1]}")
-    verifier_file = episode.verifier.config.get("verifier_file", "")
-    if not isinstance(verifier_file, str):
-        raise ContractError("verifier qualification file must be a string")
-    mount_image = ""
-    if selection.runtime.requires_model_tunnel:
-        value = episode.harness.config.get("mount_image")
-        if not isinstance(value, str) or not value:
-            raise ContractError("model-backed harness qualification requires a mount image")
-        mount_image = value
-    return QualificationRequirements(
-        task_mode=task_mode,
-        base_commit=base_commit,
-        archive_finalizer=selection.candidate.name == "workspace-archive",
-        verifier_file=verifier_file,
-        claude_mount_image=mount_image,
-    )
+        return GitWorktreeTaskAdapter(name=key[0])
+    if key == ("axrun.synthetic.greenfield-task", "1"):
+        return EmptyWorkspaceTaskAdapter(name=key[0])
+    raise ContractError(f"unsupported task adapter: {key[0]}@{key[1]}")
 
 
 def resolve_harness(
@@ -103,14 +100,11 @@ def resolve_harness(
 ) -> tuple[InferenceAdapter, HarnessRuntimeRequirements]:
     key = (episode.harness.identity, episode.harness.version)
     if key == ("static-candidate", "1"):
-        return StaticCandidateHarness(), HarnessRuntimeRequirements()
+        adapter = StaticCandidateHarness()
+        return adapter, adapter.runtime_requirements
     if key == ("claude-code", "2.1.205"):
-        return ClaudeCodeHarness(), HarnessRuntimeRequirements(
-            model_protocol="anthropic-compatible",
-            requires_model_tunnel=True,
-            trajectory_adapter="claude-code",
-            progress_adapter="claude-code",
-        )
+        adapter = ClaudeCodeHarness()
+        return adapter, adapter.runtime_requirements
     raise ContractError(f"unsupported harness adapter: {key[0]}@{key[1]}")
 
 

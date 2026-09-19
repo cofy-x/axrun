@@ -7,6 +7,7 @@ from pathlib import Path
 
 from axrun.adapters._candidate import persist_candidate
 from axrun.adapters._git import canonical_patch_export
+from axrun.adapters.base import CandidateQualificationRequirements
 from axrun.errors import ContractError
 from axrun.models import (
     CandidateBundle,
@@ -24,9 +25,14 @@ class GitPatchCandidateAdapter:
     version: str = "1"
     name: str = "git-patch"
 
+    def qualification_requirements(
+        self, episode: ResolvedEpisode
+    ) -> CandidateQualificationRequirements:
+        self._validate(episode)
+        return CandidateQualificationRequirements()
+
     def capture_plan(self, episode: ResolvedEpisode) -> CandidateCapturePlan:
-        if episode.candidate.identity != self.name or episode.candidate.version != self.version:
-            raise ContractError("Git patch candidate adapter requires git-patch@1")
+        self._validate(episode)
         base_commit = task_config_string(episode, "base_commit")
         source = episode.candidate.config.get("source_file")
         inputs: tuple[InputFile, ...] = ()
@@ -63,8 +69,7 @@ class GitPatchCandidateAdapter:
         *,
         destination: Path,
     ) -> CandidateBundle:
-        if episode.candidate.identity != self.name or episode.candidate.version != self.version:
-            raise ContractError("Git patch candidate adapter requires git-patch@1")
+        self._validate(episode)
         return persist_candidate(
             episode,
             result,
@@ -73,3 +78,7 @@ class GitPatchCandidateAdapter:
             harness=episode.harness.identity,
             harness_version=episode.harness.version,
         )
+
+    def _validate(self, episode: ResolvedEpisode) -> None:
+        if episode.candidate.identity != self.name or episode.candidate.version != self.version:
+            raise ContractError("Git patch candidate adapter requires git-patch@1")
