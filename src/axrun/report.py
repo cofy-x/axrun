@@ -10,6 +10,7 @@ from axrun.adapters._candidate import load_candidate
 from axrun.errors import ContractError
 from axrun.models import EpisodePhase
 from axrun.progress.store import ProgressStore
+from axrun.qualification import load_qualification_result
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import load_trajectory_bundle
 
@@ -24,6 +25,12 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
     candidate = None
     trajectory = None
     result = None
+    qualification = None
+
+    if bool(record.qualification_result) != bool(record.qualification_result_digest):
+        raise ContractError("qualification evidence record is incomplete")
+    if record.qualification_result:
+        qualification = load_qualification_result(store, episode)
 
     if bool(record.candidate_manifest) != bool(record.candidate_digest):
         raise ContractError("CandidateBundle record is incomplete")
@@ -89,7 +96,7 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         progress_revision = progress.revision
 
     if record.phase == EpisodePhase.COMPLETED and (
-        candidate is None or result is None or record.verification is None
+        qualification is None or candidate is None or result is None or record.verification is None
     ):
         raise ContractError("completed episode is missing accepted outputs")
 
@@ -108,6 +115,12 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
             "identity": episode.verifier.identity,
             "version": episode.verifier.version,
         },
+        "qualification": _execution(record.qualification),
+        "qualification_result_digest": record.qualification_result_digest,
+        "qualified_environment_image": (
+            qualification.environment_image if qualification is not None else ""
+        ),
+        "qualification_checks": qualification.checks if qualification is not None else {},
         "inference": _execution(record.inference),
         "inference_termination_reason": record.inference_termination_reason,
         "progress_revision": progress_revision,
@@ -137,6 +150,11 @@ def report_markdown(report: dict[str, Any]) -> str:
         f"- Task: `{report['task_id']}`",
         f"- Spec digest: `{report['spec_digest']}`",
         f"- Seed digest: `{report['seed_digest']}`",
+        "- Qualification Run / Allocation: "
+        f"`{report['qualification']['run_id']}` / "
+        f"`{report['qualification']['allocation_id']}`",
+        f"- Qualification evidence: `{report['qualification_result_digest']}`",
+        f"- Qualified task image: `{report['qualified_environment_image']}`",
         f"- Inference Run / Allocation: `{inference['run_id']}` / `{inference['allocation_id']}`",
         f"- Inference termination: `{report['inference_termination_reason']}`",
         f"- Progress revision: `{report['progress_revision']}`",

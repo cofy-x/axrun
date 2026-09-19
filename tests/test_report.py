@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,7 +18,9 @@ from axrun.models import (
     StageResult,
     VerificationResult,
     VerifierSpec,
+    canonical_digest,
 )
+from axrun.qualification import QualificationResult
 from axrun.report import REPORT_FORMAT, report_markdown, verify_record
 from axrun.store import EpisodeStore
 
@@ -74,7 +77,33 @@ def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
         1.0,
     )
     result_path, result_digest = store.save_result(result)
+    qualification = QualificationResult(
+        1,
+        episode.episode_id,
+        episode.digest,
+        f"registry.example/task@sha256:{'e' * 64}",
+        "run-qualification",
+        "alloc-qualification",
+        "f" * 64,
+        {
+            "schema_version": 1,
+            "base_commit": episode.base_commit,
+            "git": "git version 2.51.0",
+            "machine": "aarch64",
+            "python": "3.12.11",
+            "working_directory": "/workspace",
+            "claude": None,
+        },
+    )
+    qualification_path = tmp_path / "qualification.json"
+    qualification_path.write_text(
+        json.dumps(qualification.as_dict(), sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
     record.phase = EpisodePhase.COMPLETED
+    record.qualification = ExecutionRef("env-inference", "run-qualification", "alloc-qualification")
+    record.qualification_result = str(qualification_path)
+    record.qualification_result_digest = canonical_digest(qualification.as_dict())
     record.inference = ExecutionRef("env-inference", "run-inference", "alloc-inference")
     record.inference_termination_reason = "completed"
     record.candidate_manifest = str(Path(candidate.root) / "candidate-manifest.json")
@@ -95,6 +124,7 @@ def test_verify_record_rechecks_full_completed_digest_chain(tmp_path: Path) -> N
     assert report["integrity_verified"] is True
     assert report["verdict"] == "passed" and report["score"] == 1.0
     assert report["inference_termination_reason"] == "completed"
+    assert report["qualification"]["run_id"] == "run-qualification"
     assert report["inference"]["run_id"] == "run-inference"
     assert report["verification"]["run_id"] == "run-verification"
     assert "CandidateBundle" in report_markdown(report)

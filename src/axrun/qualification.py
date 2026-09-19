@@ -9,15 +9,18 @@ from pathlib import Path
 from typing import Any, cast
 
 from axrun.backend import ExecutionBackend
-from axrun.errors import ContractError, InfrastructureError
+from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
+    EpisodePhase,
     ExecutionRef,
     ImageMountSpec,
     InputFile,
     OutputSpec,
     ResolvedEpisode,
     StagePlan,
+    canonical_digest,
 )
+from axrun.store import EpisodeStore
 
 _OUTPUT = "/outputs/qualification.json"
 _DIGEST_IMAGE = "@sha256:"
@@ -34,6 +37,22 @@ class QualificationResult:
     output_sha256: str
     checks: dict[str, Any]
 
+    def __post_init__(self) -> None:
+        if self.schema_version != 1 or not self.episode_id:
+            raise ContractError("invalid qualification result identity")
+        for name, value in (
+            ("spec_digest", self.spec_digest),
+            ("output_sha256", self.output_sha256),
+        ):
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ContractError(f"qualification {name} must be lowercase SHA-256")
+        if (
+            not _is_digest_image(self.environment_image)
+            or not self.run_id
+            or not self.allocation_id
+        ):
+            raise ContractError("qualification execution provenance is invalid")
+
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -43,9 +62,15 @@ def qualify_episode(
     *,
     client: Any,
     backend: ExecutionBackend,
-    state_root: Path,
+    store: EpisodeStore,
 ) -> QualificationResult:
     """Qualify immutable environment and runtime prerequisites without a model secret."""
+    with store.lock(episode.episode_id):
+        record = store.initialize(episode)
+        if record.qualification_result:
+            return load_qualification_result(store, episode)
+        if record.phase != EpisodePhase.NEW:
+            raise RecoveryRequiredError("episode started without qualification evidence")
     inference_image = _environment_image(client, episode.inference_environment_id)
     verification_image = _environment_image(client, episode.verification_environment_id)
     if inference_image != verification_image:
@@ -93,7 +118,7 @@ def qualify_episode(
 
     stage = backend.execute(
         plan,
-        artifact_dir=state_root / "qualification-artifacts" / episode.episode_id,
+        artifact_dir=store.root / "qualification-artifacts" / episode.episode_id,
         on_bound=bound,
     )
     if stage.exit_code != 0:
@@ -117,7 +142,17 @@ def qualify_episode(
         output_sha256=artifact.sha256,
         checks=checks,
     )
-    _persist(result, state_root)
+    result_path, result_digest = _persist(result, store.root)
+    with store.lock(episode.episode_id):
+        record = store.initialize(episode)
+        if record.phase != EpisodePhase.NEW:
+            raise RecoveryRequiredError("episode advanced before qualification was committed")
+        if record.qualification_result:
+            return load_qualification_result(store, episode)
+        record.qualification = stage.execution
+        record.qualification_result = str(result_path)
+        record.qualification_result_digest = result_digest
+        store.save(record)
     return result
 
 
@@ -184,7 +219,7 @@ def _validate_checks(
     return checks
 
 
-def _persist(result: QualificationResult, state_root: Path) -> None:
+def _persist(result: QualificationResult, state_root: Path) -> tuple[Path, str]:
     path = (
         state_root
         / "qualifications"
@@ -193,14 +228,48 @@ def _persist(result: QualificationResult, state_root: Path) -> None:
         / f"{result.run_id}.json"
     )
     payload = json.dumps(result.as_dict(), sort_keys=True, indent=2).encode() + b"\n"
+    digest = canonical_digest(result.as_dict())
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         if path.read_bytes() != payload:
             raise ContractError("qualification Run evidence already exists with different content")
-        return
+        return path, digest
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_bytes(payload)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+    return path, digest
+
+
+def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> QualificationResult:
+    record = store.load(episode.episode_id)
+    if record is None or record.qualification is None:
+        raise ContractError("qualification record is incomplete")
+    try:
+        raw: object = json.loads(Path(record.qualification_result).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContractError("qualification evidence is not valid JSON") from exc
+    if not isinstance(raw, dict):
+        raise ContractError("qualification evidence must be an object")
+    values = cast(dict[str, Any], raw)
+    if canonical_digest(values) != record.qualification_result_digest:
+        raise ContractError("qualification evidence digest mismatch")
+    try:
+        result = QualificationResult(**values)
+    except TypeError as exc:
+        raise ContractError("qualification evidence has an invalid shape") from exc
+    if (
+        result.schema_version != 1
+        or result.episode_id != episode.episode_id
+        or result.spec_digest != episode.digest
+        or result.run_id != record.qualification.run_id
+        or result.allocation_id != record.qualification.allocation_id
+    ):
+        raise ContractError("qualification evidence provenance mismatch")
+    working_directory = episode.harness.config.get("working_directory", "/workspace")
+    if not isinstance(working_directory, str):
+        raise ContractError("qualification working directory is invalid")
+    _validate_checks(result.checks, episode, working_directory)
+    return result

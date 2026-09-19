@@ -17,6 +17,7 @@ from axrun.models import (
     VerifierSpec,
 )
 from axrun.qualification import qualify_episode
+from axrun.store import EpisodeStore
 
 _TASK_IMAGE = f"registry.example/task@sha256:{'a' * 64}"
 _CLAUDE_IMAGE = f"registry.example/claude@sha256:{'b' * 64}"
@@ -111,7 +112,10 @@ class Backend:
 def test_qualification_is_model_free_deny_all_and_digest_pinned(tmp_path: Path) -> None:
     backend = Backend()
     result = qualify_episode(
-        _episode(tmp_path), client=Client(), backend=backend, state_root=tmp_path / "state"
+        _episode(tmp_path),
+        client=Client(),
+        backend=backend,
+        store=EpisodeStore(tmp_path / "state"),
     )
 
     assert result.run_id == "run-qualification"
@@ -138,7 +142,7 @@ def test_qualification_rejects_mutable_environment_image(tmp_path: Path) -> None
             _episode(tmp_path),
             client=Client("registry.example/task:latest"),
             backend=Backend(),
-            state_root=tmp_path / "state",
+            store=EpisodeStore(tmp_path / "state"),
         )
 
 
@@ -149,5 +153,5 @@ def test_qualification_rejects_environment_image_drift(tmp_path: Path) -> None:
             _episode(tmp_path),
             client=Client(other),
             backend=Backend(),
-            state_root=tmp_path / "state",
+            store=EpisodeStore(tmp_path / "state"),
         )

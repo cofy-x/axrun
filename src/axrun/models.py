@@ -279,6 +279,9 @@ class EpisodeRecord:
     episode_id: str
     spec_digest: str
     phase: EpisodePhase = EpisodePhase.NEW
+    qualification: ExecutionRef | None = None
+    qualification_result: str = ""
+    qualification_result_digest: str = ""
     inference: ExecutionRef | None = None
     candidate_manifest: str = ""
     candidate_digest: str = ""
