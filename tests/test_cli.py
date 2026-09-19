@@ -93,3 +93,12 @@ def test_report_commands_are_local_and_explicit() -> None:
     assert verify.command == "verify-record"
     assert report.command == "report"
     assert report.format == "markdown"
+
+
+def test_qualification_accepts_a_resolved_episode_file() -> None:
+    args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        ["qualify", "episode.json"]
+    )
+
+    assert args.command == "qualify"
+    assert str(args.episode) == "episode.json"

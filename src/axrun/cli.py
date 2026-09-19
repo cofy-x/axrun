@@ -38,6 +38,7 @@ from axrun.models import (
 from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
+from axrun.qualification import qualify_episode
 from axrun.report import canonical_report_json, report_markdown, verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
@@ -270,6 +271,10 @@ def _parser() -> argparse.ArgumentParser:
     swebench.add_argument("--output", type=Path, required=True)
     run = commands.add_parser("run", help="execute inference and isolated verification")
     run.add_argument("episode", type=Path)
+    qualify = commands.add_parser(
+        "qualify", help="run bounded model-free image and mount qualification"
+    )
+    qualify.add_argument("episode", type=Path)
     for name in ("status", "inspect", "cancel"):
         command = commands.add_parser(name)
         command.add_argument("episode_id")
@@ -433,9 +438,28 @@ def main(argv: list[str] | None = None) -> int:
         client = _client(args)
         try:
             runner = _runner(args, client)
+            if args.command == "qualify":
+                episode = _episode(args.episode)
+                inference, _ = _adapters(episode)
+                inference.plan(episode)
+                result = qualify_episode(
+                    episode,
+                    client=client,
+                    backend=runner.backend,
+                    state_root=store.root,
+                )
+                _print(result.as_dict())
+                return 0
             if args.command == "run":
                 episode = _episode(args.episode)
                 inference, verifier = _adapters(episode)
+                inference.plan(episode)
+                qualify_episode(
+                    episode,
+                    client=client,
+                    backend=runner.backend,
+                    state_root=store.root,
+                )
                 result = runner.run(
                     episode,
                     inference=inference,
