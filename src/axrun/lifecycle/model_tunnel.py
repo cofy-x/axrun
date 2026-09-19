@@ -103,8 +103,7 @@ class ModelTunnelLifecycle:
     def _wait_for_preflight(self, allocation: Any, session: Any) -> None:
         bound_addr = str(session.bound_addr or f"127.0.0.1:{session.remote_port}")
         deadline = time.monotonic() + self._ready_timeout_seconds
-        health_command = [
-            "/usr/bin/python3",
+        health_command = _control_python(
             "-c",
             (
                 "import sys,urllib.request; "
@@ -112,7 +111,7 @@ class ModelTunnelLifecycle:
                 "assert r.status==200 and r.read()==b'ok\\n'"
             ),
             bound_addr,
-        ]
+        )
         while time.monotonic() < deadline:
             connector = self._connector
             if connector is not None and connector.error is not None:
@@ -134,8 +133,7 @@ class ModelTunnelLifecycle:
         preflight = self._proxy.preflight(self._model)
         body_path = "/run/axrun/model-preflight-body"
         allocation.write_file(body_path, preflight.body)
-        command = [
-            "/usr/bin/python3",
+        command = _control_python(
             "-c",
             (
                 "import json,pathlib,sys,urllib.request; "
@@ -150,7 +148,7 @@ class ModelTunnelLifecycle:
             body_path,
             json.dumps(dict(preflight.headers), sort_keys=True, separators=(",", ":")),
             str(preflight.expected_status),
-        ]
+        )
         try:
             allocation.exec(
                 command,
@@ -164,3 +162,14 @@ class ModelTunnelLifecycle:
             if not details:
                 details = {"reason_code": "tunnel_model_preflight_failed"}
             raise DiagnosedInfrastructureError("tunnel_model_preflight_failed", details) from exc
+
+
+def _control_python(*arguments: str) -> list[str]:
+    """Prefer benchmark system Python while supporting Python base task images."""
+    return [
+        "/bin/sh",
+        "-lc",
+        'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 "$@"; else exec python3 "$@"; fi',
+        "axrun-control",
+        *arguments,
+    ]

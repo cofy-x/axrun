@@ -78,7 +78,8 @@ def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
     assert events[2][0] == "connector"
     assert events[3] == "connector-start"
     assert events[4][0] == "preflight"
-    assert events[4][1][0] == "/usr/bin/python3"
+    assert events[4][1][0] == "/bin/sh"
+    assert "/usr/bin/python3" in events[4][1][2]
     assert events[5] == ("proxy-preflight", "test-model")
     assert events[6] == (
         "preflight-body",
@@ -86,7 +87,8 @@ def test_tunnel_lifecycle_uses_ephemeral_token_and_is_idempotent() -> None:
         b'{"model":"test-model"}',
     )
     assert events[7][0] == "preflight"
-    assert events[7][1][0] == "/usr/bin/python3"
+    assert events[7][1][0] == "/bin/sh"
+    assert "/usr/bin/python3" in events[7][1][2]
     assert "/v1/messages" in events[7][1]
     assert b'{"model":"test-model"}' not in repr(events[7]).encode()
     assert events[8][0] == "revoke"
