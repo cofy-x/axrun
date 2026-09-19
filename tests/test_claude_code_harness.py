@@ -128,6 +128,7 @@ def test_claude_harness_composes_workspace_archive_without_candidate_semantics()
     assert "git " not in script and "candidate.patch" not in script
     assert "/outputs/workspace.tar" in [output.path for output in plan.outputs]
     assert "archive.py create /workspace /outputs/workspace.tar" in script
+    assert "PYTHONPATH=/opt/axrun" in script
 
 
 def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> None:

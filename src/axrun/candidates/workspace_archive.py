@@ -27,13 +27,18 @@ class WorkspaceArchiveCandidateAdapter:
     def capture_plan(self, episode: ResolvedEpisode) -> CandidateCapturePlan:
         if episode.candidate.identity != self.name or episode.candidate.version != self.version:
             raise ContractError("workspace archive candidate adapter requires workspace-archive@1")
+        package_root = Path(__file__).parents[1]
         module = Path(__file__).with_name("archive.py")
+        errors = package_root / "errors.py"
         source = episode.candidate.config.get("source_directory")
-        inputs = [InputFile(str(module), "/opt/axrun/candidates/archive.py")]
+        inputs = [
+            InputFile(str(module), "/opt/axrun/axrun/candidates/archive.py"),
+            InputFile(str(errors), "/opt/axrun/axrun/errors.py"),
+        ]
         setup_script = ""
         if source is None:
             script = (
-                "python3 /opt/axrun/candidates/archive.py create "
+                "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
                 f"{episode.inference_environment.working_directory} /outputs/workspace.tar"
             )
         elif isinstance(source, str) and source:
@@ -64,7 +69,7 @@ class WorkspaceArchiveCandidateAdapter:
                 )
             )
             script = (
-                "python3 /opt/axrun/candidates/archive.py create "
+                "PYTHONPATH=/opt/axrun python3 /opt/axrun/axrun/candidates/archive.py create "
                 f"{workspace} /outputs/workspace.tar"
             )
         else:
