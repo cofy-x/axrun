@@ -134,6 +134,8 @@ def _model_lifecycle(
         upstream_url=upstream_url,
         credential=credential,
         protocol=AnthropicProtocol(),
+        connect_timeout_seconds=args.model_connect_timeout_seconds,
+        read_timeout_seconds=args.model_response_timeout_seconds,
     )
     model = episode.harness.config.get("model")
     if not isinstance(model, str) or not model:
@@ -236,6 +238,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--namespace", default="default")
     parser.add_argument("--model-upstream-url", default="")
     parser.add_argument("--model-credential-env", default="AXRUN_MODEL_CREDENTIAL")
+    parser.add_argument("--model-connect-timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--model-response-timeout-seconds", type=float, default=300.0)
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="validate a ResolvedEpisode JSON file")
     validate.add_argument("episode", type=Path)

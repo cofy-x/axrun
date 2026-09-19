@@ -21,6 +21,8 @@ def test_model_credential_is_read_from_selected_caller_environment(
     args = SimpleNamespace(
         model_upstream_url="https://api.deepseek.com/anthropic",
         model_credential_env="DEEPSEEK_API_KEY",
+        model_connect_timeout_seconds=10.0,
+        model_response_timeout_seconds=300.0,
     )
     episode = SimpleNamespace(
         episode_id="episode",
@@ -47,6 +49,8 @@ def test_missing_selected_model_credential_names_variable_not_value(
     args = SimpleNamespace(
         model_upstream_url="https://api.deepseek.com/anthropic",
         model_credential_env="DEEPSEEK_API_KEY",
+        model_connect_timeout_seconds=10.0,
+        model_response_timeout_seconds=300.0,
     )
     episode = SimpleNamespace(
         episode_id="episode",
@@ -70,6 +74,8 @@ def test_model_credential_environment_option_defaults_to_axrun_name() -> None:
     )
 
     assert args.model_credential_env == "AXRUN_MODEL_CREDENTIAL"
+    assert args.model_connect_timeout_seconds == 10.0
+    assert args.model_response_timeout_seconds == 300.0
 
 
 def test_resume_is_an_explicit_recovery_command() -> None:

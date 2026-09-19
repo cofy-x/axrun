@@ -57,8 +57,18 @@ class ModelProxy:
             )
         if not credential:
             raise ContractError("model proxy credential is required")
-        if min(max_request_bytes, max_response_bytes, max_concurrent_requests) <= 0:
-            raise ContractError("model proxy byte bounds must be positive")
+        if (
+            min(
+                connect_timeout_seconds,
+                request_read_timeout_seconds,
+                read_timeout_seconds,
+                max_request_bytes,
+                max_response_bytes,
+                max_concurrent_requests,
+            )
+            <= 0
+        ):
+            raise ContractError("model proxy time, byte, and concurrency bounds must be positive")
         self._upstream = parsed
         self._credential = credential
         self._protocol = protocol
@@ -231,10 +241,10 @@ class ModelProxy:
         reason_code = "proxy_upstream_error"
         try:
             connection.request("POST", upstream_path, body=body, headers=dict(request.headers))
-            response = connection.getresponse()
-            collector = self._protocol.usage_collector(response.getheader("content-type", ""))
             if connection.sock is not None:
                 connection.sock.settimeout(self._read_timeout_seconds)
+            response = connection.getresponse()
+            collector = self._protocol.usage_collector(response.getheader("content-type", ""))
             status = response.status
             reason_code = "upstream_response"
             content_length = response.getheader("content-length")
@@ -258,6 +268,13 @@ class ModelProxy:
                 collector.feed(chunk)
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
+        except TimeoutError:
+            status = 504
+            reason_code = "proxy_upstream_timeout"
+            handler.close_connection = True
+            if not handler.wfile.closed and not headers_sent:
+                with suppress(OSError):
+                    handler.send_error(504)
         except (OSError, ValueError, http.client.HTTPException, InfrastructureError):
             handler.close_connection = True
             if not handler.wfile.closed and not headers_sent:

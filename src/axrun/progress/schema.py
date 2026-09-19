@@ -25,7 +25,13 @@ _MODEL_PATHS = frozenset(
     }
 )
 _REASON_CODES = frozenset(
-    {"", "proxy_protocol_rejected", "proxy_upstream_error", "upstream_response"}
+    {
+        "",
+        "proxy_protocol_rejected",
+        "proxy_upstream_error",
+        "proxy_upstream_timeout",
+        "upstream_response",
+    }
 )
 _STATE_CODES = frozenset(
     {

@@ -4,12 +4,23 @@ import http.client
 import json
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
+
+
+def test_model_proxy_rejects_nonpositive_time_bounds() -> None:
+    with pytest.raises(ValueError, match="time, byte, and concurrency"):
+        ModelProxy(
+            upstream_url="http://127.0.0.1:1",
+            credential="caller-secret",
+            protocol=AnthropicProtocol(),
+            read_timeout_seconds=0,
+        )
 
 
 def test_model_proxy_health_is_local_and_credentials_are_not_observable() -> None:
@@ -283,4 +294,44 @@ def test_model_proxy_classifies_upstream_connection_error_without_credential() -
     summary = proxy.last_summary
     assert summary is not None
     assert summary.status == 502 and summary.reason_code == "proxy_upstream_error"
+    assert "caller-secret" not in repr(summary.as_safe_dict())
+
+
+def test_model_proxy_classifies_upstream_response_timeout() -> None:
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["content-length"]))
+            time.sleep(0.2)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    host, port = upstream.server_address[:2]
+    proxy = ModelProxy(
+        upstream_url=f"http://{host}:{port}",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+        read_timeout_seconds=0.05,
+    )
+    proxy.start()
+    proxy_host, proxy_port = proxy.local_target.split(":")
+    connection = http.client.HTTPConnection(proxy_host, int(proxy_port), timeout=2)
+    try:
+        connection.request("POST", "/v1/messages", body=b'{"model":"test-model"}')
+        response = connection.getresponse()
+        assert response.status == 504
+        response.read()
+    finally:
+        connection.close()
+        proxy.stop()
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=2)
+
+    summary = proxy.last_summary
+    assert summary is not None
+    assert summary.status == 504 and summary.reason_code == "proxy_upstream_timeout"
     assert "caller-secret" not in repr(summary.as_safe_dict())
