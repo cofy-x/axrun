@@ -145,3 +145,23 @@ def test_programbench_compatibility_resolver_is_explicit() -> None:
 
     assert args.command == "resolve-programbench-compatibility"
     assert args.candidate_variant == "known-bad"
+
+
+def test_programbench_official_stage_zero_resolver_is_explicit() -> None:
+    args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        [
+            "resolve-programbench-official",
+            "row.json",
+            "--episode-id",
+            "pb-official",
+            "--inference-environment",
+            "env-i",
+            "--verification-environment",
+            "env-v",
+            "--output",
+            "episode.json",
+        ]
+    )
+
+    assert args.command == "resolve-programbench-official"
+    assert args.harness == "static-candidate"

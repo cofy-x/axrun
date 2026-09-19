@@ -18,6 +18,7 @@ from axrun.axern_backend import AxernBackend
 from axrun.catalog import resolve_adapters, resolve_model_protocol
 from axrun.datasets import (
     ProgramBenchCompatibilityResolver,
+    ProgramBenchOfficialSingleResolver,
     SweBenchVerifiedResolver,
     SyntheticCodeTaskResolver,
     SyntheticGreenfieldResolver,
@@ -252,6 +253,22 @@ def _parser() -> argparse.ArgumentParser:
     programbench.add_argument("--inference-environment", required=True)
     programbench.add_argument("--verification-environment", required=True)
     programbench.add_argument("--output", type=Path, required=True)
+    programbench_official = commands.add_parser(
+        "resolve-programbench-official",
+        help=(
+            "resolve the locked ProgramBench 1.2.4 tty-clock contract; execution fails "
+            "closed until Axern exposes post-compile Allocation snapshots"
+        ),
+    )
+    programbench_official.add_argument("row", type=Path)
+    programbench_official.add_argument("--episode-id", required=True)
+    programbench_official.add_argument(
+        "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
+    )
+    _add_claude_arguments(programbench_official)
+    programbench_official.add_argument("--inference-environment", required=True)
+    programbench_official.add_argument("--verification-environment", required=True)
+    programbench_official.add_argument("--output", type=Path, required=True)
     swebench = commands.add_parser(
         "resolve-swebench-verified",
         help="resolve one official SWE-bench Verified enriched-v1 row",
@@ -429,6 +446,25 @@ def main(argv: list[str] | None = None) -> int:
                 inference_image=args.inference_image,
                 verification_image=args.verification_image,
                 task_platform=args.task_platform,
+                harness=harness,
+            )
+            _write_episode(episode, args.output)
+            return 0
+        if args.command == "resolve-programbench-official":
+            raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("ProgramBench official row must be a JSON object")
+            harness = (
+                HarnessSpec("static-candidate", "1")
+                if args.harness == "static-candidate"
+                else _claude_harness(args, working_directory="/workspace")
+            )
+            episode = ProgramBenchOfficialSingleResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                source_dir=args.row.parent,
+                episode_id=args.episode_id,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
                 harness=harness,
             )
             _write_episode(episode, args.output)
