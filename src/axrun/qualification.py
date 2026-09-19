@@ -83,8 +83,7 @@ def qualify_episode(
     if not isinstance(working_directory, str) or not working_directory.startswith("/"):
         raise ContractError("qualification working directory must be absolute")
     fixture = Path(__file__).parent / "fixtures" / "qualification" / "run.py"
-    argv = [
-        "/usr/bin/python3",
+    qualification_args = [
         "/opt/axrun/qualification.py",
         "--workspace",
         working_directory,
@@ -99,10 +98,17 @@ def qualify_episode(
         if not isinstance(image, str) or not _is_digest_image(image):
             raise ContractError("Claude qualification requires a digest-pinned mount image")
         mounts = (ImageMountSpec(image=image, target="/__claude_code", readonly=True),)
-        argv.append("--claude")
+        qualification_args.append("--claude")
+    argv = (
+        "/bin/sh",
+        "-lc",
+        'if [ -x /usr/bin/python3 ]; then exec /usr/bin/python3 "$@"; else exec python3 "$@"; fi',
+        "axrun-qualification",
+        *qualification_args,
+    )
     plan = StagePlan(
         environment_id=episode.inference_environment_id,
-        argv=tuple(argv),
+        argv=argv,
         cwd=working_directory,
         inputs=(InputFile(str(fixture), "/opt/axrun/qualification.py"),),
         outputs=(OutputSpec(_OUTPUT, media_type="application/json", max_bytes=16 << 10),),
