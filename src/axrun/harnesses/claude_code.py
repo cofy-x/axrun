@@ -6,7 +6,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from axrun.adapters._candidate import persist_candidate
 from axrun.adapters._git import canonical_patch_export
@@ -32,6 +32,8 @@ _LOG = "/outputs/harness.log"
 _USAGE = "/outputs/usage.json"
 _PROGRESS = "/run/axrun/progress.json"
 _DIGEST_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_OFFLINE_DISALLOWED_TOOLS = ("WebFetch", "WebSearch")
 _CONFIG_KEYS = frozenset(
     {
         "mount_image",
@@ -44,6 +46,7 @@ _CONFIG_KEYS = frozenset(
         "auto_compact_window",
         "max_turns",
         "working_directory",
+        "disallowed_tools",
     }
 )
 _MODEL_ALIAS_KEYS = (
@@ -78,6 +81,9 @@ def resolve_claude_code_spec(harness: HarnessSpec) -> HarnessSpec:
     if not isinstance(working_directory, str) or not working_directory.startswith("/"):
         raise ContractError("Claude Code working_directory must be an absolute path")
     config["working_directory"] = working_directory
+    config["disallowed_tools"] = list(
+        _validate_disallowed_tools(config.get("disallowed_tools", _OFFLINE_DISALLOWED_TOOLS))
+    )
     _validate_optional_runtime_config(config)
     return HarnessSpec(
         identity=harness.identity,
@@ -111,6 +117,7 @@ class ClaudeCodeHarness:
         working_directory = _required_string(config, "working_directory")
         if not working_directory.startswith("/"):
             raise ContractError("Claude Code working_directory must be an absolute path")
+        disallowed_tools = _validate_disallowed_tools(config.get("disallowed_tools"))
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
         runtime_supervisor = package_root / "fixtures" / "claude" / "runtime_supervisor.py"
@@ -130,16 +137,17 @@ class ClaudeCodeHarness:
         ):
             if not source.is_file():
                 raise ContractError(f"packaged Claude trajectory runtime is missing: {source.name}")
-        command = " ".join(
-            (
-                shlex.quote(_CLAUDE),
-                "-p",
-                "--output-format stream-json",
-                "--verbose",
-                f"--max-turns {max_turns}",
-                "--dangerously-skip-permissions",
-            )
-        )
+        command_parts = [
+            shlex.quote(_CLAUDE),
+            "-p",
+            "--output-format stream-json",
+            "--verbose",
+            f"--max-turns {max_turns}",
+            "--dangerously-skip-permissions",
+        ]
+        if disallowed_tools:
+            command_parts.extend(("--disallowedTools", *(shlex.quote(v) for v in disallowed_tools)))
+        command = " ".join(command_parts)
         supervisor = " ".join(
             (
                 "PYTHONPATH=/opt/axrun",
@@ -272,3 +280,16 @@ def _validate_optional_runtime_config(config: dict[str, Any]) -> None:
         or auto_compact_window <= 0
     ):
         raise ContractError("Claude Code auto_compact_window must be a positive integer")
+
+
+def _validate_disallowed_tools(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ContractError("Claude Code disallowed_tools must be an array")
+    tools: list[str] = []
+    for raw_tool in cast(list[object] | tuple[object, ...], value):
+        if not isinstance(raw_tool, str) or not _TOOL_NAME.fullmatch(raw_tool):
+            raise ContractError("Claude Code disallowed_tools contains an invalid tool name")
+        tools.append(raw_tool)
+    if len(tools) != len(set(tools)):
+        raise ContractError("Claude Code disallowed_tools contains duplicates")
+    return tuple(sorted(tools))

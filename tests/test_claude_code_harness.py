@@ -6,7 +6,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from axrun.datasets import SyntheticCodeTaskResolver
+from axrun.errors import ContractError
 from axrun.harnesses import ClaudeCodeHarness
 from axrun.models import Artifact, ExecutionRef, HarnessSpec, ResolvedEpisode, StageResult
 
@@ -43,6 +46,7 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert episode.harness.config["default_sonnet_model"] == "test-model[1m]"
     assert episode.harness.config["default_haiku_model"] == "test-model"
     assert episode.harness.config["subagent_model"] == "test-model"
+    assert episode.harness.config["disallowed_tools"] == ["WebFetch", "WebSearch"]
     plan = ClaudeCodeHarness().plan(episode)
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
@@ -65,6 +69,7 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     assert plan.network_policy == "deny_all"
     assert "credential-must-stay-in-memory" not in repr(plan)
     assert "/__claude_code/usr/local/bin/claude" in plan.argv[-1]
+    assert "--disallowedTools WebFetch WebSearch" in plan.argv[-1]
     assert [item.path for item in plan.outputs] == [
         "/outputs/candidate.patch",
         "/outputs/trajectory.jsonl",
@@ -128,6 +133,7 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         "subagent_model": "opaque-model-id",
         "max_turns": 40,
         "working_directory": "/workspace",
+        "disallowed_tools": ["WebFetch", "WebSearch"],
     }
     plan = ClaudeCodeHarness().plan(episode)
     assert {
@@ -137,6 +143,33 @@ def test_claude_model_alias_defaults_are_materialized_in_resolved_episode() -> N
         plan.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
         plan.env["CLAUDE_CODE_SUBAGENT_MODEL"],
     } == {"opaque-model-id"}
+
+
+def test_claude_disallowed_tools_are_explicit_deterministic_and_may_be_empty() -> None:
+    episode = _episode()
+    config = dict(episode.harness.config, disallowed_tools=["WebSearch", "WebFetch"])
+    resolved = replace(
+        episode,
+        harness=HarnessSpec("claude-code", "2.1.205", config=config),
+    )
+    assert "--disallowedTools WebFetch WebSearch" in ClaudeCodeHarness().plan(resolved).argv[-1]
+
+    enabled = replace(
+        episode,
+        harness=HarnessSpec(
+            "claude-code", "2.1.205", config=dict(episode.harness.config, disallowed_tools=[])
+        ),
+    )
+    assert "--disallowedTools" not in ClaudeCodeHarness().plan(enabled).argv[-1]
+
+
+@pytest.mark.parametrize("value", [["WebSearch", "WebSearch"], ["bad tool"], "WebSearch"])
+def test_claude_disallowed_tools_fail_closed(value: object) -> None:
+    episode = _episode()
+    config = dict(episode.harness.config, disallowed_tools=value)
+    invalid = replace(episode, harness=HarnessSpec("claude-code", "2.1.205", config=config))
+    with pytest.raises(ContractError, match="disallowed_tools"):
+        ClaudeCodeHarness().plan(invalid)
 
 
 def test_claude_working_directory_is_explicit_and_must_be_absolute() -> None:

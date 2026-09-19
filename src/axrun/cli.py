@@ -292,6 +292,13 @@ def _add_claude_arguments(parser: argparse.ArgumentParser) -> None:
         "--claude-effort-level", choices=("low", "medium", "high", "max"), default=""
     )
     parser.add_argument("--claude-auto-compact-window", type=int, default=0)
+    parser.add_argument(
+        "--claude-disallowed-tools",
+        nargs="*",
+        default=None,
+        metavar="TOOL",
+        help="Claude built-in tools to disable; defaults to WebFetch and WebSearch offline",
+    )
     parser.add_argument("--max-turns", type=int, default=40)
 
 
@@ -304,6 +311,8 @@ def _claude_harness(args: argparse.Namespace, *, working_directory: str) -> Harn
         "max_turns": args.max_turns,
         "working_directory": working_directory,
     }
+    if args.claude_disallowed_tools is not None:
+        config["disallowed_tools"] = args.claude_disallowed_tools
     for argument, key in (
         (args.claude_default_opus_model, "default_opus_model"),
         (args.claude_default_sonnet_model, "default_sonnet_model"),
