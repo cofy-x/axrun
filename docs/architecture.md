@@ -8,11 +8,12 @@ Axrun is caller-side orchestration. Axern remains the sole owner of Environment,
 | --- | --- | --- |
 | Canonical seed, harness and verifier selection | Axrun resolver/caller | immutable `spec.json` |
 | Task image and mount qualification evidence | Axrun + Axern Run | content-verified qualification record |
-| Task repository, tools and base commit | task OCI image | Axern Environment rootfs |
+| Task semantics and adapter-owned configuration | Axrun dataset adapter | immutable `spec.json` |
+| Task repository, tools and optional base commit | task OCI image | Axern Environment rootfs |
 | Run specification, lifecycle and terminal exit | Axern | Run |
 | Concrete sandbox identity | Axern | Allocation |
 | Inference workspace | Axern runtime | allocation-local filesystem |
-| Accepted candidate patch | Axrun | content-verified CandidateBundle |
+| Accepted typed candidate artifacts | Axrun | content-verified CandidateBundle |
 | Canonical trajectory and usage | Axrun | content-verified TrajectoryBundle |
 | Benchmark grading semantics | verifier image | verifier command |
 | Accepted verdict and score | Axrun | content-addressed VerificationResult |
@@ -35,18 +36,22 @@ The Run ID is persisted from the backend's binding callback before further data 
 
 The file lock protects short local transitions. It is not held while waiting for a remote Run. Cancellation serializes its bounded Axern control call with terminal publication so a late stage result cannot overwrite the accepted local cancellation.
 
-Qualification is a precondition on `new`, not another inference phase. A bounded, model-free,
-deny-all Run confirms that inference and verification Environments resolve to the same immutable
-task image, that the workspace has the expected clean Git base, and that a suitable control Python
-exists. Claude episodes additionally prove Claude 2.1.205, Node 22.23.2, the canonical mount/entry,
+Qualification is a precondition on `new`, not another inference phase. Both stage bindings name an
+exact OCI image, platform and working directory; inference and verification may deliberately use
+different immutable images. A bounded, model-free, deny-all Run checks the task adapter's runtime
+contract. Git tasks currently check the clean base and a suitable control Python. Claude episodes
+additionally prove Claude 2.1.205, Node 22.23.2, the canonical mount/entry,
 and read-only ImageMount behavior. Its sealed result digest and public Run/Allocation are committed
 before inference may bind a Run. Repeating qualification reuses the bound evidence instead of
 spending another Run.
 
 ## Output and isolation boundary
 
-Inference declares an adapter-specific bounded output set. Code-task adapters include a candidate
-patch; live Claude additionally declares canonical trajectory, harness log, and usage outputs.
+Inference declares an adapter-specific bounded output set. Candidate production is a separate
+adapter contract: the harness runs the agent while the candidate adapter interprets sealed outputs.
+Each CandidateBundle records candidate identity/version, and each file has a unique semantic role;
+verifiers select roles rather than guessing filenames. Code-task adapters currently use `git-patch@1`;
+live Claude additionally declares canonical trajectory, harness log, and usage outputs.
 Claude's native stream-json is temporary Allocation state and is normalized before sealing. Axrun
 accepts declared files only through Axern's sealed-output API and independently rechecks downloaded
 length and SHA-256.
@@ -86,7 +91,7 @@ trajectory.
 
 ## Dataset boundary
 
-Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields. Static qualification and Claude Code use the same adapter-neutral episode contract.
+Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. The contract contains `TaskSpec`, stage-specific `EnvironmentBinding`, `HarnessSpec`, `CandidateSpec`, and `VerifierSpec`. Git commits belong only to Git task configuration; they are not core episode or CandidateBundle fields. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields.
 
 Resolvers also materialize harness defaults that affect execution semantics. For Claude Code, one primary model fills any omitted Opus, Sonnet, Haiku, and subagent aliases, and the default turn limit and absolute working directory are made explicit before `spec.json` is written. The reusable harness canonicalizer owns this validation so later dataset resolvers do not duplicate Claude runtime semantics. The harness adapter therefore receives five explicit opaque model IDs and does not reinterpret missing aliases while building a StagePlan.
 

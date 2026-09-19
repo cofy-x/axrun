@@ -16,7 +16,7 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
 
 ## Canonical episode contracts
 
-`ResolvedEpisode v1` selects harness and verifier adapters by explicit identity/version, carries adapter-owned validated configuration, and binds the execution to a lowercase SHA-256 `seed_digest`. A dataset-native row is parsed exactly once by an explicit resolver; inference and verification consume the resulting canonical episode rather than reparsing the original row.
+`ResolvedEpisode v1` selects task, harness, candidate and verifier adapters by explicit identity/version, carries adapter-owned validated configuration, binds each stage to an exact image/platform/working-directory contract, and binds the input to a lowercase SHA-256 `seed_digest`. Git and `base_commit` are task-adapter details rather than core fields. A dataset-native row is parsed exactly once by an explicit resolver; inference and verification consume the resulting canonical episode rather than reparsing the original row.
 
 Axrun includes a small `axrun.synthetic.code-task@1` fixture for deterministic qualification. It is not a dataset registry or download service. The gold and known-bad candidates pass through the same immutable CandidateBundle and fresh verification Run boundary used by remote execution.
 
@@ -35,6 +35,8 @@ Resolve either candidate into canonical episode JSON with:
 uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
   --episode-id synthetic-gold \
   --candidate-file gold.patch \
+  --task-image REGISTRY/TASK@sha256:DIGEST \
+  --task-platform linux/amd64 \
   --inference-environment ENVIRONMENT_ID \
   --verification-environment ENVIRONMENT_ID \
   --output /tmp/synthetic-gold.json
@@ -103,8 +105,9 @@ replacement; passing the option with no values deliberately removes the default 
 This tool policy is separate from Axern's deny-all network policy, which remains the sandbox
 enforcement boundary.
 
-Canonical trajectories and candidate code have separate ownership. `CandidateBundle v1` contains
-only verifier-required files; Claude currently contributes only `candidate.patch`.
+Canonical trajectories and candidate code have separate ownership. `CandidateBundle v1` records
+the candidate adapter identity/version and contains only verifier-required files with unique semantic
+roles; Claude currently produces the sealed output consumed by `git-patch@1`.
 `TrajectoryBundle v1` contains canonical `trajectory.jsonl` plus its derived `usage.json`, with an
 independent content-addressed manifest. Static patch episodes have no TrajectoryBundle. The fresh
 verifier never receives trajectory, usage, harness logs, ModelProxy summaries, or the inference
