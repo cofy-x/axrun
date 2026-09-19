@@ -80,3 +80,16 @@ def test_resume_is_an_explicit_recovery_command() -> None:
     assert args.command == "resume"
     assert args.episode_id == "episode-id"
     assert args.timeout == 12.0
+
+
+def test_report_commands_are_local_and_explicit() -> None:
+    verify = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        ["verify-record", "episode-id"]
+    )
+    report = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        ["report", "episode-id", "--format", "markdown", "--output", "report.md"]
+    )
+
+    assert verify.command == "verify-record"
+    assert report.command == "report"
+    assert report.format == "markdown"

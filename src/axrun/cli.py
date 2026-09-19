@@ -38,6 +38,7 @@ from axrun.models import (
 from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
+from axrun.report import canonical_report_json, report_markdown, verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
@@ -279,6 +280,12 @@ def _parser() -> argparse.ArgumentParser:
     export = commands.add_parser("export")
     export.add_argument("episode_id")
     export.add_argument("destination", type=Path)
+    verify = commands.add_parser("verify-record")
+    verify.add_argument("episode_id")
+    report = commands.add_parser("report")
+    report.add_argument("episode_id")
+    report.add_argument("--format", choices=("json", "markdown"), default="json")
+    report.add_argument("--output", type=Path)
     return parser
 
 
@@ -403,6 +410,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "export":
             _print({"path": str(_export(store, args.episode_id, args.destination))})
+            return 0
+        if args.command in {"verify-record", "report"}:
+            report = verify_record(store, args.episode_id)
+            if args.command == "verify-record":
+                _print(report)
+                return 0
+            payload = (
+                report_markdown(report)
+                if args.format == "markdown"
+                else canonical_report_json(report)
+            )
+            if args.output is None:
+                print(payload, end="")
+            else:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                if args.output.exists():
+                    raise ContractError(f"report output already exists: {args.output}")
+                args.output.write_text(payload, encoding="utf-8")
+                _print({"path": str(args.output)})
             return 0
         client = _client(args)
         try:
