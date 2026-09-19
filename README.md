@@ -4,9 +4,9 @@ Axrun is a thin, recoverable episode runner built on the released [Axern](https:
 
 ```text
 ResolvedEpisode
-  -> model-free qualification Run / Allocation
+  -> stage-specific model-free qualification Runs / Allocations
   -> inference Run / Allocation
-  -> sealed canonical trajectory + patch
+  -> candidate finalization in the inference Allocation
   -> immutable TrajectoryBundle + CandidateBundle
   -> fresh verification Run / Allocation
   -> sealed VerificationResult
@@ -18,16 +18,13 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
 
 `ResolvedEpisode v1` selects task, harness, candidate and verifier adapters by explicit identity/version, carries adapter-owned validated configuration, binds each stage to an exact image/platform/working-directory contract, and binds the input to a lowercase SHA-256 `seed_digest`. Git and `base_commit` are task-adapter details rather than core fields. A dataset-native row is parsed exactly once by an explicit resolver; inference and verification consume the resulting canonical episode rather than reparsing the original row.
 
-Axrun includes a small `axrun.synthetic.code-task@1` fixture for deterministic qualification. It is not a dataset registry or download service. The gold and known-bad candidates pass through the same immutable CandidateBundle and fresh verification Run boundary used by remote execution.
+Axrun core is not a Git patch runner. `HarnessSpec` selects how an agent is launched and how harness-native logs, usage, and trajectory are collected; `CandidateSpec` independently selects how the result is finalized and published. The curated catalog currently composes `claude-code@2.1.205` or model-free `static-candidate@1` with `git-patch@1` or `workspace-archive@1`. Unknown identity/version pairs fail closed; there are no dynamic entry points or runtime-downloaded adapters.
+
+Axrun includes small Git and no-Git synthetic fixtures for deterministic qualification. They are not a dataset registry or download service. Gold, empty, and known-bad candidates pass through the same sealed-output, immutable CandidateBundle, and fresh verification boundary used by remote execution.
 
 The fixture seed is a repository-owned [task image](fixtures/synthetic/code-task-v1/README.md), not a set of files uploaded into an arbitrary Environment. Its Dockerfile installs Git and Python, creates `/workspace` as a clean repository, and asserts the exact base commit during the image build. Build and import the variant matching the Axern node, then create both selected Axern Environments from the imported digest. Inference and verification may reference the same immutable Environment definition; Axrun still creates an independent Run and Allocation for each stage. The task image and the separate Claude Code rootfs both support amd64 and arm64.
 
-Before any inference, `run` performs (or reuses) a bounded qualification Run with deny-all
-networking and no model credential. It requires digest-pinned, identical task images for the two
-selected Environments, checks the clean Git base and control Python, and—for Claude—checks the
-fixed Claude/Node versions and read-only mount ABI. The sealed qualification evidence and its
-Run/Allocation are bound to the episode while it is still `new`; inference cannot start without
-that evidence.
+Before inference, `run` performs or reuses bounded inference- and verification-side qualification Runs with deny-all networking and no model credential. Each target binds its exact Environment ID, OCI digest, platform, working directory, public Run/Allocation, sealed evidence digest, and adapter-owned checks. Git tasks check the clean base; greenfield tasks check an empty working directory without requiring Git; archive and verifier runtimes are checked only in the stages that use them; Claude checks its fixed runtime and read-only mount only on inference. Inference and verification images may differ.
 
 Resolve either candidate into canonical episode JSON with:
 
@@ -43,6 +40,20 @@ uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
 ```
 
 The synthetic verifier does not upload or reconstruct the repository. In its fresh Allocation it verifies the task image's clean base commit, receives only the immutable CandidateBundle patch plus the Axrun-owned verifier entrypoint, applies the patch, runs `unittest` with deny-all networking, and publishes a normal passed or failed `VerificationResult`.
+
+The [greenfield fixture](fixtures/synthetic/greenfield-task-v1/README.md) starts with an empty, no-Git `/workspace`, archives the complete created project deterministically, and verifies it in a distinct verification Environment. Resolve a deterministic candidate with exact image digests:
+
+```bash
+uv run axrun resolve-greenfield fixtures/synthetic/greenfield-task-v1/row.json \
+  --episode-id greenfield-gold \
+  --candidate-variant gold \
+  --inference-image REGISTRY/INFERENCE@sha256:DIGEST \
+  --verification-image REGISTRY/VERIFICATION@sha256:DIGEST \
+  --task-platform linux/amd64 \
+  --inference-environment INFERENCE_ENVIRONMENT_ID \
+  --verification-environment VERIFICATION_ENVIRONMENT_ID \
+  --output /tmp/greenfield-gold.json
+```
 
 Axrun also contains one deliberately closed SWE-bench Verified vertical for
 `django__django-12419`. `SweBenchVerifiedResolver` accepts exactly the official enriched-v1
@@ -71,7 +82,7 @@ packaged grader; it has deny-all networking and no inference mount, process, Tun
 
 ## Supported harness paths
 
-The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits `candidate.patch`, canonical `trajectory.jsonl`, `harness.log`, and `usage.json` as bounded declared outputs. Claude's native stream-json remains an Allocation-local temporary file. A Claude-specific adapter maps it into the strict provider-neutral `axrun.trajectory@1` contract before sealing. It uses the same synthetic seed and fresh no-network verifier as the static patch qualification path. Resolve a live synthetic episode with:
+The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits canonical `trajectory.jsonl`, `harness.log`, and `usage.json` plus the outputs declared by the selected CandidateAdapter. It contains no Git base, diff, patch, or workspace-archive implementation. The candidate finalizer runs after the agent in the same inference Allocation; finalization failure is infrastructure failure, including after an agent budget terminal state. Claude's native stream-json remains Allocation-local and its adapter maps it into `axrun.trajectory@1` before sealing.
 
 ```bash
 uv run axrun resolve-synthetic fixtures/synthetic/code-task-v1/row.json \
@@ -105,13 +116,17 @@ replacement; passing the option with no values deliberately removes the default 
 This tool policy is separate from Axern's deny-all network policy, which remains the sandbox
 enforcement boundary.
 
-Canonical trajectories and candidate code have separate ownership. `CandidateBundle v1` records
+Canonical trajectories and candidates have separate ownership. `CandidateBundle v1` records
 the candidate adapter identity/version and contains only verifier-required files with unique semantic
-roles; Claude currently produces the sealed output consumed by `git-patch@1`.
+roles. `git-patch@1` publishes role `patch`; `workspace-archive@1` publishes role `workspace` as `application/x-tar`. Claude can compose with either contract.
 `TrajectoryBundle v1` contains canonical `trajectory.jsonl` plus its derived `usage.json`, with an
-independent content-addressed manifest. Static patch episodes have no TrajectoryBundle. The fresh
+independent content-addressed manifest. Static candidate episodes have no TrajectoryBundle. The fresh
 verifier never receives trajectory, usage, harness logs, ModelProxy summaries, or the inference
 workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
+
+`workspace-archive@1` sorts paths, fixes ownership and mtime, preserves ordinary permission bits, and rejects symlinks, devices, FIFOs, sockets, absolute paths, traversal, duplicate entries, oversized paths, excessive entries, archives over 64 MiB, and extracted payloads over 512 MiB. Extraction repeats the closed validation in the fresh verification Allocation. The archive never includes `/inputs`, `/outputs`, `/run/axrun`, model transport state, or harness outputs because its root is the explicit task working directory.
+
+This contract is sufficient groundwork for a ProgramBench single-instance adapter and may cover a file-only Terminal-Bench subset. It does not represent services, package installation, system configuration, background processes, or VM state; full Terminal-Bench support still requires a public immutable Allocation snapshot-to-fresh-Allocation capability from Axern. Openbench remains a research and parity input, never an Axrun runtime dependency. Axrun does not claim full ProgramBench or Terminal-Bench support. A mini-SWE-agent readonly mount should be considered only if future official-baseline parity requires it; it is not a prerequisite for using Claude Code.
 
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
@@ -206,11 +221,11 @@ uv run pytest
 uv build
 ```
 
-The test suite covers the canonical episode and trajectory v1 contracts, Claude native-event
+The test suite covers the canonical episode and trajectory v1 contracts, static catalog fail-closed resolution, Claude native-event
 mapping, raw-thinking exclusion, trajectory size bounds, independent CandidateBundle and
 TrajectoryBundle atomic publication, one-pass dataset resolution, task-image workspace contracts,
 dual-platform Claude rootfs source contracts, real gold/known-bad patch application in fresh
-simulated image workspaces, recovery without duplicate Runs, fresh verification identity, bounded
+simulated image workspaces, deterministic greenfield gold/empty/known-bad archive verification, archive security limits, recovery without duplicate Runs, fresh verification identity, bounded
 output capture, and deterministic cancellation races. Live Axern image-mount truth paths, a model
 endpoint, and benchmark verifier E2E remain explicit deployment acceptance tests rather than
 claims made from source tests.

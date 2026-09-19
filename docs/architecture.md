@@ -36,22 +36,14 @@ The Run ID is persisted from the backend's binding callback before further data 
 
 The file lock protects short local transitions. It is not held while waiting for a remote Run. Cancellation serializes its bounded Axern control call with terminal publication so a late stage result cannot overwrite the accepted local cancellation.
 
-Qualification is a precondition on `new`, not another inference phase. Both stage bindings name an
-exact OCI image, platform and working directory; inference and verification may deliberately use
-different immutable images. A bounded, model-free, deny-all Run checks the task adapter's runtime
-contract. Git tasks currently check the clean base and a suitable control Python. Claude episodes
-additionally prove Claude 2.1.205, Node 22.23.2, the canonical mount/entry,
-and read-only ImageMount behavior. Its sealed result digest and public Run/Allocation are committed
-before inference may bind a Run. Repeating qualification reuses the bound evidence instead of
-spending another Run.
+Qualification is a precondition on `new`, not another inference phase. The static catalog composes task, harness, candidate, and verifier requirements into separate bounded inference and verification targets. Each target binds the exact Environment, OCI digest, platform, working directory, public Run/Allocation, sealed evidence digest, and checks. Git requirements apply only to Git tasks; no-Git greenfield tasks require an empty working directory. Claude mount checks apply only to inference, the archive finalizer is checked only where candidate capture occurs, and verifier prerequisites are checked in the verification Environment. Qualification is deny-all, model-free, credential-free, and reusable only for the identical episode contract.
 
 ## Output and isolation boundary
 
 Inference declares an adapter-specific bounded output set. Candidate production is a separate
-adapter contract: the harness runs the agent while the candidate adapter interprets sealed outputs.
+adapter contract: `CandidateCapturePlan` contributes bounded setup, packaged inputs, a post-agent finalizer, and declared outputs to the harness plan. The harness invokes that contract without inspecting CandidateSpec or knowing Git/archive semantics; the CandidateAdapter then interprets independently verified sealed outputs.
 Each CandidateBundle records candidate identity/version, and each file has a unique semantic role;
-verifiers select roles rather than guessing filenames. Code-task adapters currently use `git-patch@1`;
-live Claude additionally declares canonical trajectory, harness log, and usage outputs.
+verifiers select roles rather than guessing filenames. `git-patch@1` owns clean-base validation and canonical patch export. `workspace-archive@1` owns deterministic whole-workspace capture and publishes role `workspace`. Claude composes with either candidate adapter and separately declares canonical trajectory, harness log, and usage outputs.
 Claude's native stream-json is temporary Allocation state and is normalized before sealing. Axrun
 accepts declared files only through Axern's sealed-output API and independently rechecks downloaded
 length and SHA-256.
@@ -62,6 +54,8 @@ them into a temporary directory, validates every event and relationship, fsyncs 
 and atomically publishes by canonical digest. Static inference produces no fake empty trajectory.
 
 Verification gets a fresh Run/Allocation rooted in the same immutable task image contract and receives only the CandidateBundle payload plus the Axrun-owned verifier entrypoint. It gets no inference filesystem, process, Secret projection, TunnelSession or runtime identity. Its default network policy is deny-all. The verifier output must name the exact CandidateBundle digest before Axrun publishes the result.
+
+The archive v1 format is an uncompressed deterministic PAX tar with stable path order, uid/gid zero, empty owner names, mtime zero, and preserved ordinary permission bits. Creation and extraction reject symlinks and special files, absolute/non-canonical/traversing/duplicate paths, more than 10,000 entries, paths over 240 characters, archives over 64 MiB, and extracted payloads over 512 MiB. Output must live outside the archive root. Fresh verification manually extracts only validated files and directories and rejects pre-existing symlink traversal.
 
 ## Trajectory boundary
 
@@ -96,6 +90,10 @@ Dataset-native rows never enter the runner or execution backend. An explicitly s
 Resolvers also materialize harness defaults that affect execution semantics. For Claude Code, one primary model fills any omitted Opus, Sonnet, Haiku, and subagent aliases, and the default turn limit and absolute working directory are made explicit before `spec.json` is written. The reusable harness canonicalizer owns this validation so later dataset resolvers do not duplicate Claude runtime semantics. The harness adapter therefore receives five explicit opaque model IDs and does not reinterpret missing aliases while building a StagePlan.
 
 The repository-owned synthetic resolver demonstrates this boundary without introducing a dataset service. The raw row declares and content-checks the task-image build inputs; the resulting image owns the Git repository, required tools and fixed base commit. Its deterministic inference adapter seals a chosen fixture patch. Its verifier receives only the CandidateBundle and verifier entrypoint in a fresh Allocation rooted in that task image, checks the clean base commit, applies the patch, runs an offline test contract, and returns either a valid passed or valid failed result.
+
+The greenfield resolver proves the orthogonal case: an empty no-Git inference image, a distinct verification image, static or Claude harness, `workspace-archive@1`, and an offline verifier consuming only role `workspace`. Its gold candidate passes, while empty and known-bad workspaces produce valid failed verdicts. The fixture images support amd64 and arm64; benchmark acceptance remains canonical on amd64, while arm64 supports local Axern source-cluster development.
+
+These contracts are sufficient to begin a narrow ProgramBench adapter without adopting its optional baseline harness. A file-only Terminal-Bench subset may also reuse workspace archives, but service, package, system-configuration, process, and VM-state tasks require a future public immutable Allocation snapshot boundary. Openbench is read-only research and parity input rather than a runtime dependency. Axrun intentionally has no dataset platform, scheduler, general workflow engine, plugin marketplace, or second real harness.
 
 The first benchmark resolver is intentionally narrower than the contract. It accepts only the
 official enriched-v1 row for `django__django-12419`, validates its fixed repository, base commit,
