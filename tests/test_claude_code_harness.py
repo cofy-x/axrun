@@ -50,7 +50,8 @@ def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Pa
     plan = ClaudeCodeHarness().plan(episode)
     assert plan.image_mounts[0].target == "/__claude_code"
     assert plan.image_mounts[0].image.endswith(f"@sha256:{'a' * 64}")
-    assert "PYTHONPATH=/opt/axrun /usr/bin/python3" in plan.argv[2]
+    assert "control_python=/usr/bin/python3; else control_python=python3" in plan.argv[2]
+    assert 'PYTHONPATH=/opt/axrun "$control_python"' in plan.argv[2]
     assert "/opt/axrun/axrun/fixtures/claude/runtime_supervisor.py" in plan.argv[2]
     assert "--progress /run/axrun/progress.json" in plan.argv[2]
     assert "--native /run/axrun/claude-raw.jsonl" in plan.argv[2]

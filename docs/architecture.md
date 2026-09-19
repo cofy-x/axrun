@@ -106,8 +106,10 @@ The task image and harness image have separate ownership. An Environment is crea
 
 Axrun-owned control code does not run under the repository's benchmark interpreter. The closed
 arm64 Django task image retains Conda Python 3.6 for official tests and separately provides
-`/usr/bin/python3` for Tunnel probes and trajectory normalization. Harness plans name that system
-path explicitly, preventing task-level `PATH` activation from changing the control runtime.
+`/usr/bin/python3` for Tunnel probes and trajectory normalization. Axrun control launchers prefer
+that system path, preventing task-level `PATH` activation from changing the control runtime, and
+fall back to the task-image `python3` only for qualified Python base images such as the synthetic
+fixture.
 
 ## SDK boundary
 

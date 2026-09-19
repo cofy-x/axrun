@@ -151,7 +151,7 @@ class ClaudeCodeHarness:
         supervisor = " ".join(
             (
                 "PYTHONPATH=/opt/axrun",
-                "/usr/bin/python3",
+                '"$control_python"',
                 "/opt/axrun/axrun/fixtures/claude/runtime_supervisor.py",
                 "--prompt /inputs/prompt.txt",
                 "--native /run/axrun/claude-raw.jsonl",
@@ -170,6 +170,8 @@ class ClaudeCodeHarness:
                 "mkdir -p /outputs /run/axrun/claude-home",
                 f'test "$(git rev-parse HEAD)" = {shlex.quote(episode.base_commit)}',
                 'test -z "$(git status --porcelain --untracked-files=all)"',
+                "if [ -x /usr/bin/python3 ]; then "
+                "control_python=/usr/bin/python3; else control_python=python3; fi",
                 "set +e",
                 supervisor,
                 "agent_rc=$?",
