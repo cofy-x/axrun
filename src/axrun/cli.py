@@ -450,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
                     episode,
                     client=client,
                     backend=runner.backend,
-                    state_root=store.root,
+                    store=store,
                 )
                 _print(result.as_dict())
                 return 0
@@ -462,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                     episode,
                     client=client,
                     backend=runner.backend,
-                    state_root=store.root,
+                    store=store,
                 )
                 result = runner.run(
                     episode,
