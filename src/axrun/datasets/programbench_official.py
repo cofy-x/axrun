@@ -51,9 +51,9 @@ _CAPABILITY = "post-compile-allocation-snapshot-v1"
 class ProgramBenchOfficialSingleResolver:
     """Resolve only the immutable tty-clock contract; execution remains fail-closed.
 
-    Axern SDK 0.9.1 cannot yet turn the candidate-specific post-compile Allocation state into an
-    immutable Environment used by fresh branch Allocations. The closed catalog intentionally has
-    no adapters for the task/verifier identities emitted here.
+    Axern SDK 0.10.0 exposes the required Run rootfs result and derived Environment contract. The
+    closed catalog still has no adapters for the task/verifier identities emitted here: official
+    evaluator orchestration and parity must be implemented before this contract becomes runnable.
     """
 
     identity = _IDENTITY
@@ -174,7 +174,7 @@ class ProgramBenchOfficialSingleResolver:
                 "dataset_version": self.version,
                 "programbench_instance": _INSTANCE,
                 "programbench_official_instance": "true",
-                "programbench_stage_zero": "blocked_public_snapshot_capability",
+                "programbench_stage_zero": "public_snapshot_capability_validated",
             },
         )
 

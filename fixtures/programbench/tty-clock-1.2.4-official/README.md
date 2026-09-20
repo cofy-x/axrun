@@ -10,7 +10,9 @@ Hugging Face revision, sizes, and independently verified SHA-256 digests. The of
 image is identified by its `linux/amd64` platform manifest digest, never by the mutable v6 tag at
 runtime.
 
-This lock is not a runnable official verifier. ProgramBench 1.2.4 commits the candidate-specific
-post-compile container and starts every branch from that committed state. `axern-sdk==0.9.1` has
-no public Allocation snapshot/commit-to-Environment operation, so Axrun fails closed before
-claiming official score parity.
+This lock is not yet a runnable official verifier. ProgramBench 1.2.4 commits the
+candidate-specific post-compile container and starts every branch from that committed state.
+`axern-sdk==0.10.0` now exposes a successful Run's immutable rootfs result as a derived
+Environment, and the live SDK validation proves fresh Runs do not share later mutations. Axrun
+still fails closed until its benchmark-owned verifier orchestration and official evaluator parity
+are implemented.

@@ -120,14 +120,14 @@ def test_official_resolver_rejects_shape_asset_and_identity_drift(tmp_path: Path
         )
 
 
-def test_official_episode_is_not_runnable_without_public_snapshot_capability() -> None:
+def test_official_episode_remains_closed_until_verifier_adapter_is_implemented() -> None:
     with pytest.raises(
         ContractError, match="unsupported task adapter: programbench-official-single@1"
     ):
         resolve_adapters(_episode())
 
 
-def test_sdk_reproducer_proves_released_surface_is_missing_snapshot() -> None:
+def test_sdk_reproducer_proves_released_surface_supports_derived_environment() -> None:
     script = (
         Path(__file__).parents[1]
         / "tools"
@@ -140,16 +140,20 @@ def test_sdk_reproducer_proves_released_surface_is_missing_snapshot() -> None:
         capture_output=True,
         text=True,
     )
-    assert completed.returncode == 2
+    assert completed.returncode == 0
     report = json.loads(completed.stdout)
-    assert report["axern_sdk_version"] == "0.9.1"
-    assert report["supported"] is False
-    assert report["missing_capability"] == "post-compile-allocation-snapshot-v1"
-    assert report["state_operations"] == []
-    assert report["create_environment_state_sources"] == []
-    assert report["create_run_state_sources"] == []
-    assert "upload_archive" in report["public_allocation_client_methods"]
+    assert report["schema_version"] == 2
+    assert report["axern_sdk_version"] == "0.10.0"
+    assert report["supported"] is True
+    assert report["capability"] == "post-compile-allocation-snapshot-v1"
+    assert report["missing_capability"] == ""
+    assert report["create_run_rootfs_snapshot"] == {"default": False, "present": True}
+    assert report["wait_rootfs_snapshot"] == {
+        "parameters": ["self", "run_id", "timeout"],
+        "present": True,
+    }
     assert "create_run" in report["public_axern_client_methods"]
+    assert "wait_rootfs_snapshot" in report["public_axern_client_methods"]
 
 
 def test_reproducer_imports_only_public_sdk_symbols() -> None:
@@ -160,6 +164,6 @@ def test_reproducer_imports_only_public_sdk_symbols() -> None:
         / "programbench_post_compile_snapshot.py"
     )
     source = script.read_text(encoding="utf-8")
-    assert "from axern_sdk import AllocationClient, AxernClient" in source
+    assert "from axern_sdk import AxernClient" in source
     assert "_pb2" not in source
     assert "axern." not in source

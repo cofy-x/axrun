@@ -11,58 +11,51 @@ import json
 from importlib.metadata import version
 from typing import Any
 
-from axern_sdk import AllocationClient, AxernClient
+from axern_sdk import AxernClient
 
-_REQUIRED_VERSION = "0.9.1"
-_STATE_OPERATIONS = frozenset(
-    {
-        "clone",
-        "clone_allocation",
-        "commit",
-        "commit_image",
-        "create_environment_from_allocation",
-        "create_environment_from_snapshot",
-        "snapshot",
-        "snapshot_allocation",
-    }
-)
+_REQUIRED_VERSION = "0.10.0"
+_CAPABILITY = "post-compile-allocation-snapshot-v1"
 
 
 def audit_public_sdk() -> dict[str, Any]:
     client_methods = _public_methods(AxernClient)
-    allocation_methods = _public_methods(AllocationClient)
-    create_environment_parameters = set(
-        inspect.signature(AxernClient.create_environment).parameters
-    )
-    create_run_parameters = set(inspect.signature(AxernClient.create_run).parameters)
-    state_operations = sorted(_STATE_OPERATIONS & (client_methods | allocation_methods))
-    environment_sources = sorted(
-        {"allocation_id", "snapshot_id", "parent_allocation_id"} & create_environment_parameters
-    )
-    run_sources = sorted(
-        {"allocation_id", "snapshot_id", "parent_allocation_id"} & create_run_parameters
-    )
+    create_run_signature = inspect.signature(AxernClient.create_run)
+    snapshot_parameter = create_run_signature.parameters.get("rootfs_snapshot")
+    wait_method = getattr(AxernClient, "wait_rootfs_snapshot", None)
+    wait_signature = inspect.signature(wait_method) if callable(wait_method) else None
     sdk_version = version("axern-sdk")
-    supported = bool(state_operations or environment_sources or run_sources)
+    supported = (
+        snapshot_parameter is not None
+        and snapshot_parameter.default is False
+        and wait_signature is not None
+        and "run_id" in wait_signature.parameters
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "axern_sdk_version": sdk_version,
         "required_axern_sdk_version": _REQUIRED_VERSION,
+        "capability": _CAPABILITY,
         "required_semantics": (
-            "commit one candidate-specific post-compile Allocation state and create every "
-            "test branch in a fresh Allocation rooted in that immutable state"
+            "request rootfs sealing for one successful candidate-specific compile Run, wait for "
+            "its immutable derived Environment, and create every test branch as a fresh Run"
         ),
         "supported": supported,
-        "state_operations": state_operations,
-        "create_environment_state_sources": environment_sources,
-        "create_run_state_sources": run_sources,
+        "create_run_rootfs_snapshot": {
+            "present": snapshot_parameter is not None,
+            "default": snapshot_parameter.default if snapshot_parameter is not None else None,
+        },
+        "wait_rootfs_snapshot": {
+            "present": wait_signature is not None,
+            "parameters": list(wait_signature.parameters) if wait_signature is not None else [],
+        },
         "public_axern_client_methods": sorted(client_methods),
-        "public_allocation_client_methods": sorted(allocation_methods),
         "evidence": (
-            "sealed files and archives can move declared path content, but no public operation "
-            "turns complete post-compile Allocation state into an immutable Environment"
+            "AxernClient.create_run explicitly requests rootfs sealing and "
+            "AxernClient.wait_rootfs_snapshot returns the derived Environment result"
+            if supported
+            else "the released public client lacks the exact rootfs sealing request/wait contract"
         ),
-        "missing_capability": ("post-compile-allocation-snapshot-v1" if not supported else ""),
+        "missing_capability": ("" if supported else _CAPABILITY),
     }
 
 

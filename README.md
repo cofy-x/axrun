@@ -163,20 +163,24 @@ tests as an equivalent score.
 Stage-zero work now locks the real `xorg62__tty-clock.f2f847c` instance from ProgramBench 1.2.4:
 its six-branch denominator, ignore decisions, hidden-blob revision/digests, and official
 `linux/amd64` cleanroom platform manifest are content-addressed. The resolver can materialize and
-validate this contract, but the closed catalog intentionally refuses to run it. ProgramBench's
-official evaluator commits the complete candidate-specific post-compile container and starts each
-test branch from that state; released `axern-sdk==0.9.1` has no public Allocation
-snapshot/commit-to-Environment operation. A workspace archive is not an equivalent substitute.
-See [the stage-zero validation](docs/validation/2026-09-19-programbench-official-tty-clock-stage-zero.md)
+validate this contract, but the closed catalog intentionally refuses to run it until the official
+verifier adapter and parity suite exist. ProgramBench's official evaluator commits the complete
+candidate-specific post-compile container and starts each test branch from that state.
+`axern-sdk==0.10.0` now exposes the required successful-Run rootfs result as an immutable derived
+Environment; live validation also proves two fresh Runs preserve the sealed state without sharing
+later mutations. A workspace archive remains an invalid substitute for this boundary. See the
+historical [stage-zero validation](docs/validation/2026-09-19-programbench-official-tty-clock-stage-zero.md),
+the [0.10.0 capability validation](docs/validation/2026-09-20-axern-sdk-0.10.0-derived-environment.md),
 and run the public-SDK reproducer with:
 
 ```bash
 uv run python tools/reproducers/programbench_post_compile_snapshot.py
-# exit 2 means the required public capability is absent
+# exit 0 means the exact 0.10.0 request/wait contract is present
 ```
 
-No official ProgramBench score, deterministic parity, or Claude acceptance is claimed until that
-capability exists and the official evaluator can be reproduced without weakening branch isolation.
+No official ProgramBench score, deterministic parity, or Claude acceptance is claimed until the
+benchmark-owned multi-Run verifier orchestration reproduces the official evaluator without
+weakening branch isolation.
 
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
@@ -208,7 +212,7 @@ An unresolved result is a valid `failed` verdict. Transport errors, missing outp
 
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.9.1`; it does not use an Axern source checkout or private generated modules.
+Axrun pins the released `axern-sdk==0.10.0`; it does not use an Axern source checkout or private generated modules.
 
 ```bash
 uv sync --all-groups

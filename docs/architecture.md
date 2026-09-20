@@ -119,17 +119,20 @@ The subsequent official-instance stage-zero audit locks `xorg62__tty-clock.f2f84
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
 the complete expected/ignored test metadata. It deliberately stops before registering executable
 task or verifier adapters. The official evaluator snapshots the whole post-compile container and
-starts every branch from it; `axern-sdk==0.9.1` exposes path archives but no public operation that
-turns Allocation state into an immutable Environment for fresh Allocations. Re-uploading only
-`/workspace` would lose candidate build effects outside that path and is not official parity. The
-locked resolver therefore produces a reviewable contract whose unknown catalog identities fail
-closed, and the repository includes a public-SDK-only reproducer for the capability gap.
+starts every branch from it. `axern-sdk==0.10.0` exposes that boundary as an explicitly requested
+successful-Run rootfs result whose content-addressed image backs an ordinary derived Environment.
+Fresh Runs from that Environment receive isolated writable layers. Re-uploading only `/workspace`
+would still lose candidate build effects outside that path and is not official parity. The locked
+resolver therefore remains fail closed while Axrun adds benchmark-owned compile/branch
+orchestration and proves parity; the public-SDK-only reproducer now audits the exact request/wait
+contract rather than guessing from method names.
 
-A file-only Terminal-Bench subset may also reuse workspace archives, but service, package,
-system-configuration, process, and VM-state tasks require a future public immutable Allocation
-snapshot boundary. Openbench is read-only research and parity input rather than a runtime
-dependency. Axrun intentionally has no dataset platform, scheduler, general workflow engine,
-plugin marketplace, or second real harness.
+A file-only Terminal-Bench subset may also reuse workspace archives. Tasks that preserve package
+or system-file changes across finite setup and test phases may use the 0.10.0 rootfs-result
+boundary, but mounts, secrets, processes, sockets, kernel state, and services are deliberately not
+captured and require benchmark-specific modeling. Openbench is read-only research and parity input
+rather than a runtime dependency. Axrun intentionally has no dataset platform, scheduler, general
+workflow engine, plugin marketplace, or second real harness.
 
 The first benchmark resolver is intentionally narrower than the contract. It accepts only the
 official enriched-v1 row for `django__django-12419`, validates its fixed repository, base commit,
