@@ -23,6 +23,7 @@ def main() -> int:
     parser.add_argument("--base-commit")
     parser.add_argument("--require-empty-workspace", action="store_true")
     parser.add_argument("--require-exact-workspace-files", action="store_true")
+    parser.add_argument("--require-workspace-files", action="store_true")
     parser.add_argument("--required-workspace-file", action="append", default=[])
     parser.add_argument("--archive-module", type=Path)
     parser.add_argument("--verifier-file", type=Path)
@@ -47,7 +48,7 @@ def main() -> int:
         workspace_empty = next(args.workspace.iterdir(), None) is None
         if not workspace_empty:
             raise RuntimeError("greenfield workspace is not empty")
-    elif args.require_exact_workspace_files:
+    elif args.require_exact_workspace_files or args.require_workspace_files:
         expected: list[dict[str, object]] = []
         expected_paths: set[str] = set()
         for value in args.required_workspace_file:
@@ -68,9 +69,12 @@ def main() -> int:
         actual_paths = {
             item.relative_to(args.workspace).as_posix() for item in args.workspace.rglob("*")
         }
-        if actual_paths != expected_paths or any(
-            item.is_symlink() for item in args.workspace.rglob("*")
-        ):
+        paths_match = (
+            actual_paths == expected_paths
+            if args.require_exact_workspace_files
+            else expected_paths <= actual_paths
+        )
+        if not paths_match or any(item.is_symlink() for item in args.workspace.rglob("*")):
             raise RuntimeError("qualified workspace contains unexpected entries")
         workspace_empty = False
         workspace_files = expected

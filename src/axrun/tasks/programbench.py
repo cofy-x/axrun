@@ -72,6 +72,6 @@ class ProgramBenchOfficialTaskAdapter:
         if role not in {"inference", "verification"}:
             raise ContractError("task qualification role is invalid")
         return TaskQualificationRequirements(
-            mode="prepared",
+            mode="prepared_contains",
             workspace_files=(WorkspaceFileRequirement("executable", 0o111),),
         )

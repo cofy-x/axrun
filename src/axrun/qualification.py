@@ -158,8 +158,11 @@ def _target_plan(
         arguments.extend(("--base-commit", requirements.base_commit))
     elif requirements.task_mode == "empty":
         arguments.append("--require-empty-workspace")
-    else:
-        arguments.append("--require-exact-workspace-files")
+    elif requirements.task_mode in {"prepared", "prepared_contains"}:
+        if requirements.task_mode == "prepared":
+            arguments.append("--require-exact-workspace-files")
+        else:
+            arguments.append("--require-workspace-files")
         for requirement in requirements.workspace_files:
             arguments.extend(
                 ("--required-workspace-file", f"{requirement.mode:o}:{requirement.path}")
@@ -260,7 +263,7 @@ def _validate_checks(
         or checks["workspace_files"] is not None
     ):
         raise ContractError("greenfield task qualification checks are invalid")
-    elif requirements.task_mode == "prepared":
+    elif requirements.task_mode in {"prepared", "prepared_contains"}:
         expected = [
             {"mode": requirement.mode, "path": requirement.path}
             for requirement in requirements.workspace_files

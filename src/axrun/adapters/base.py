@@ -41,11 +41,11 @@ class TaskQualificationRequirements:
     workspace_files: tuple[WorkspaceFileRequirement, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.mode not in {"git", "empty", "prepared"}:
+        if self.mode not in {"git", "empty", "prepared", "prepared_contains"}:
             raise ContractError("unsupported task qualification mode")
         if (self.mode == "git") != bool(self.base_commit):
             raise ContractError("Git qualification requires exactly one base commit")
-        if (self.mode == "prepared") != bool(self.workspace_files):
+        if (self.mode in {"prepared", "prepared_contains"}) != bool(self.workspace_files):
             raise ContractError("prepared qualification requires workspace files")
         paths = tuple(item.path for item in self.workspace_files)
         if len(paths) != len(set(paths)):

@@ -179,6 +179,39 @@ def test_qualification_rejects_environment_image_drift(tmp_path: Path) -> None:
         )
 
 
+def test_prepared_contains_qualification_allows_locked_seed_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    executable = workspace / "executable"
+    executable.write_text("reference")
+    executable.chmod(0o111)
+    (workspace / "source.c").write_text("int main(void) { return 0; }\n")
+    output = tmp_path / "qualification.json"
+    script = Path(__file__).parents[1] / "src" / "axrun" / "fixtures" / "qualification" / "run.py"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--role",
+            "inference",
+            "--workspace",
+            str(workspace),
+            "--require-workspace-files",
+            "--required-workspace-file",
+            "111:executable",
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(output.read_text())["workspace_files"] == [
+        {"mode": 0o111, "path": "executable"}
+    ]
+
+
 def test_prepared_workspace_qualification_checks_exact_file_and_mode(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
