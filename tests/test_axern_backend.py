@@ -72,6 +72,32 @@ def test_backend_creates_run_without_private_execution_identity(
     assert client.kwargs["limit_memory"] == "2Gi"
     assert [value.run_id for value in bound] == ["run-1", "run-1"]
     assert bound[-1].allocation_id == "alloc-1"
+    assert client.kwargs["rootfs_snapshot"] is False
+
+
+def test_backend_waits_for_public_rootfs_result_after_success(tmp_path: Path, monkeypatch) -> None:
+    execution = ExecutionRef("base-env", "run-compile", "alloc-compile")
+    stage = SimpleNamespace(execution=execution, exit_code=0)
+
+    class Client:
+        def wait_rootfs_snapshot(self, run_id, timeout):
+            assert run_id == "run-compile" and timeout > 120
+            return SimpleNamespace(
+                environment_id="derived-env",
+                image_ref=f"registry.invalid/rootfs@sha256:{'a' * 64}",
+                platform_os="linux",
+                platform_arch="amd64",
+            )
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(backend, "_execute", lambda *_args, **_kwargs: stage)
+    result, environment_id = backend.execute_rootfs(
+        StagePlan("base-env", ("true",), "/workspace", (), timeout_seconds=300),
+        artifact_dir=tmp_path,
+        on_bound=lambda _execution: None,
+    )
+    assert result is stage
+    assert environment_id == "derived-env"
 
 
 def test_output_capture_has_per_stream_bound(tmp_path: Path) -> None:

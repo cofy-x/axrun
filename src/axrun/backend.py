@@ -10,6 +10,28 @@ from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import ExecutionRef, StagePlan, StageResult
 
 
+class RootfsExecutionBackend(Protocol):
+    def execute_rootfs(
+        self,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+        on_bound: Callable[[ExecutionRef], None],
+    ) -> tuple[StageResult, str]:
+        """Execute a finite Run and return its ready derived Environment ID."""
+        ...
+
+    def recover_rootfs(
+        self,
+        execution: ExecutionRef,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+    ) -> tuple[StageResult, str] | None:
+        """Recover a finite Run and its ready rootfs result."""
+        ...
+
+
 class ExecutionBackend(Protocol):
     def execute(
         self,

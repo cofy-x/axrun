@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol, cast
 
 from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import (
@@ -33,6 +35,18 @@ from axrun.models import (
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import TrajectoryBundle
 from axrun.trajectories.schema import load_trajectory_jsonl
+
+
+class _MultiRunVerifier(Protocol):
+    def verify(
+        self,
+        episode: ResolvedEpisode,
+        candidate: CandidateBundle,
+        *,
+        backend: ExecutionBackend,
+        state_root: Path,
+        on_primary_bound: Callable[[ExecutionRef], None],
+    ) -> tuple[VerificationResult, ExecutionRef]: ...
 
 
 class EpisodeRunner:
@@ -117,6 +131,8 @@ class EpisodeRunner:
             except ContractError as exc:
                 self._record_failure(episode_id, exc)
                 raise
+            if bool(getattr(verifier, "multi_run", False)):
+                return self._run_multi_verification(episode, bundle, verifier)
             plan = verifier.plan(episode, bundle)
             destination = self.store.root / "artifacts" / episode_id / "verification"
         stage = self.backend.recover(execution, plan, artifact_dir=destination)
@@ -272,7 +288,6 @@ class EpisodeRunner:
     def _start_verification(
         self, episode: ResolvedEpisode, candidate: CandidateBundle, adapter: VerifierAdapter
     ) -> VerificationResult:
-        plan = adapter.plan(episode, candidate)
         with self.store.lock(episode.episode_id):
             record = self._required_record(episode.episode_id)
             if record.phase != EpisodePhase.CANDIDATE_READY:
@@ -280,6 +295,9 @@ class EpisodeRunner:
             record.phase = EpisodePhase.VERIFICATION_RUNNING
             self.store.save(record)
         try:
+            if bool(getattr(adapter, "multi_run", False)):
+                return self._run_multi_verification(episode, candidate, adapter)
+            plan = adapter.plan(episode, candidate)
             destination = self.store.root / "artifacts" / episode.episode_id / "verification"
             stage = self.backend.execute(
                 plan,
@@ -293,6 +311,62 @@ class EpisodeRunner:
         except Exception as exc:
             self._record_failure(episode.episode_id, exc)
             raise
+
+    def _run_multi_verification(
+        self,
+        episode: ResolvedEpisode,
+        candidate: CandidateBundle,
+        adapter: VerifierAdapter,
+    ) -> VerificationResult:
+        raw_verify = getattr(adapter, "verify", None)
+        if not callable(raw_verify):
+            raise ContractError("multi-Run verifier does not implement verify")
+        multi = cast(_MultiRunVerifier, adapter)
+        try:
+            verification, primary = multi.verify(
+                episode,
+                candidate,
+                backend=self.backend,
+                state_root=self.store.root,
+                on_primary_bound=lambda execution: self._bind(
+                    episode.episode_id, EpisodePhase.VERIFICATION_RUNNING, execution
+                ),
+            )
+            return self._finish_multi_verification(
+                episode.episode_id,
+                verification,
+                primary,
+            )
+        except Exception as exc:
+            self._record_failure(episode.episode_id, exc)
+            raise
+
+    def _finish_multi_verification(
+        self,
+        episode_id: str,
+        verification: VerificationResult,
+        primary: ExecutionRef,
+    ) -> VerificationResult:
+        with self.store.lock(episode_id):
+            record = self._required_record(episode_id)
+            self._require_execution(record, EpisodePhase.VERIFICATION_RUNNING, primary)
+            if verification.candidate_digest != record.candidate_digest:
+                record.phase = EpisodePhase.FAILED
+                record.diagnostic_code = "AXRUN_CANDIDATE_MISMATCH"
+                record.message = "VerificationResult references the wrong CandidateBundle"
+                record.completed_at = _now()
+                self.store.save(record)
+                raise ContractError("VerificationResult references the wrong CandidateBundle")
+            result_path, result_digest = self.store.save_result(verification)
+            record.verification = primary
+            record.verification_result = str(result_path)
+            record.verification_result_digest = result_digest
+            record.phase = EpisodePhase.COMPLETED
+            record.diagnostic_code = verification.diagnostic_code
+            record.message = ""
+            record.completed_at = verification.completed_at
+            self.store.save(record)
+        return verification
 
     def _finish_verification(
         self, episode_id: str, stage: StageResult, adapter: VerifierAdapter

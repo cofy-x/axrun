@@ -26,6 +26,56 @@ class AxernBackend:
         on_bound: Callable[[ExecutionRef], None],
         lifecycle: PreStartLifecycle | None = None,
     ) -> StageResult:
+        return self._execute(
+            plan,
+            artifact_dir=artifact_dir,
+            on_bound=on_bound,
+            lifecycle=lifecycle,
+            rootfs_snapshot=False,
+        )
+
+    def execute_rootfs(
+        self,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+        on_bound: Callable[[ExecutionRef], None],
+    ) -> tuple[StageResult, str]:
+        result = self._execute(
+            plan,
+            artifact_dir=artifact_dir,
+            on_bound=on_bound,
+            lifecycle=None,
+            rootfs_snapshot=True,
+        )
+        if result.exit_code != 0:
+            return result, ""
+        try:
+            snapshot = self.client.wait_rootfs_snapshot(
+                result.execution.run_id,
+                timeout=plan.timeout_seconds + 120.0,
+            )
+        except Exception as exc:
+            raise InfrastructureError("rootfs result did not become ready") from exc
+        environment_id = str(getattr(snapshot, "environment_id", ""))
+        image_ref = str(getattr(snapshot, "image_ref", ""))
+        platform_os = str(getattr(snapshot, "platform_os", ""))
+        platform_arch = str(getattr(snapshot, "platform_arch", ""))
+        if not environment_id or "@sha256:" not in image_ref:
+            raise InfrastructureError("rootfs result has an invalid derived Environment identity")
+        if (platform_os, platform_arch) != ("linux", "amd64"):
+            raise InfrastructureError("rootfs result platform is not linux/amd64")
+        return result, environment_id
+
+    def _execute(
+        self,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+        on_bound: Callable[[ExecutionRef], None],
+        lifecycle: PreStartLifecycle | None,
+        rootfs_snapshot: bool,
+    ) -> StageResult:
         sdk = _sdk_types()
         ready_marker = "/run/axrun/inputs-ready"
         wrapper = 'while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
@@ -54,6 +104,7 @@ class AxernBackend:
             "limit_cpu": plan.resources.limit_cpu,
             "limit_memory": plan.resources.limit_memory,
             "limit_ephemeral_storage": plan.resources.limit_ephemeral_storage,
+            "rootfs_snapshot": rootfs_snapshot,
         }
         if plan.image_mounts:
             kwargs["image_mounts"] = [
@@ -146,6 +197,35 @@ class AxernBackend:
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
         )
+
+    def recover_rootfs(
+        self,
+        execution: ExecutionRef,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+    ) -> tuple[StageResult, str] | None:
+        result = self.recover(execution, plan, artifact_dir=artifact_dir)
+        if result is None:
+            return None
+        if result.exit_code != 0:
+            return result, ""
+        try:
+            snapshot = self.client.wait_rootfs_snapshot(
+                execution.run_id,
+                timeout=plan.timeout_seconds + 120.0,
+            )
+        except Exception as exc:
+            raise InfrastructureError("rootfs result did not become ready") from exc
+        environment_id = str(getattr(snapshot, "environment_id", ""))
+        image_ref = str(getattr(snapshot, "image_ref", ""))
+        platform_os = str(getattr(snapshot, "platform_os", ""))
+        platform_arch = str(getattr(snapshot, "platform_arch", ""))
+        if not environment_id or "@sha256:" not in image_ref:
+            raise InfrastructureError("rootfs result has an invalid derived Environment identity")
+        if (platform_os, platform_arch) != ("linux", "amd64"):
+            raise InfrastructureError("rootfs result platform is not linux/amd64")
+        return result, environment_id
 
     def cancel(self, execution: ExecutionRef) -> None:
         run = self.client.get_run(execution.run_id)
