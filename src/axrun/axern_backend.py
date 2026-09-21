@@ -227,6 +227,16 @@ class AxernBackend:
             raise InfrastructureError("rootfs result platform is not linux/amd64")
         return result, environment_id
 
+    def delete_environment(self, environment_id: str) -> None:
+        from axern_sdk import SandboxNotFoundError
+
+        try:
+            self.client.delete_environment(environment_id)
+        except SandboxNotFoundError:
+            return
+        except Exception as exc:
+            raise InfrastructureError("derived Environment cleanup failed") from exc
+
     def cancel(self, execution: ExecutionRef) -> None:
         run = self.client.get_run(execution.run_id)
         if _status_name(run) not in _TERMINAL_STATUSES:

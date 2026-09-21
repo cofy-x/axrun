@@ -69,6 +69,7 @@ class OfficialBackend:
         self.interrupt_branch_once = interrupt_branch_once
         self.interrupted = False
         self.created: list[ExecutionRef] = []
+        self.deleted_environments: list[str] = []
         self.plans: dict[str, StagePlan] = {}
         raw = json.loads((_fixture() / "tests.json").read_text())
         self.tests = {
@@ -165,6 +166,10 @@ class OfficialBackend:
     def cancel(self, execution: ExecutionRef) -> None:
         return None
 
+    def delete_environment(self, environment_id: str) -> None:
+        if environment_id not in self.deleted_environments:
+            self.deleted_environments.append(environment_id)
+
     def _branch_result(
         self, plan: StagePlan, artifact_dir: Path, execution: ExecutionRef
     ) -> StageResult:
@@ -236,6 +241,7 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
         assert all(plan.environment_id == f"derived-{variant}" for plan in branch_plans)
         assert len({ref.run_id for ref in backend.created}) == run_count
         assert all(plan.network_policy == "deny_all" for plan in branch_plans)
+        assert backend.deleted_environments == [f"derived-{variant}"]
         compile_plan = next(
             plan
             for plan in backend.plans.values()
@@ -276,4 +282,5 @@ def test_official_multirun_resume_reuses_the_bound_branch_run(tmp_path: Path) ->
     )
     assert record["state"] == "completed"
     assert record["aggregation_state"] == "completed"
-    assert record["cleanup_state"] == "derived_environment_retained"
+    assert record["cleanup_state"] == "completed"
+    assert backend.deleted_environments == ["derived-gold"]

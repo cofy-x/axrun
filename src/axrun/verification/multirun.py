@@ -85,3 +85,9 @@ class MultiRunVerificationCoordinator:
                 errors.append(exc)
         if errors:
             raise InfrastructureError("one or more verification Runs could not be cancelled")
+
+    def delete_environment(self, environment_id: str) -> None:
+        backend = cast(RootfsExecutionBackend, self.backend)
+        if not hasattr(backend, "delete_environment"):
+            raise InfrastructureError("execution backend cannot clean up derived Environments")
+        backend.delete_environment(environment_id)

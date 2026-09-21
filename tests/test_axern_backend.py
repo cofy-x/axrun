@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from axern_sdk import AxernClient
+from axern_sdk import AxernClient, SandboxNotFoundError
 
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
@@ -98,6 +98,26 @@ def test_backend_waits_for_public_rootfs_result_after_success(tmp_path: Path, mo
     )
     assert result is stage
     assert environment_id == "derived-env"
+
+
+def test_derived_environment_cleanup_is_idempotent() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def delete_environment(self, environment_id: str) -> None:
+            assert environment_id == "derived-env"
+            self.calls += 1
+            if self.calls > 1:
+                raise SandboxNotFoundError(
+                    operation="delete environment", code="NOT_FOUND", details="not found"
+                )
+
+    client = Client()
+    backend = AxernBackend(client)
+    backend.delete_environment("derived-env")
+    backend.delete_environment("derived-env")
+    assert client.calls == 2
 
 
 def test_output_capture_has_per_stream_bound(tmp_path: Path) -> None:

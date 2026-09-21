@@ -31,6 +31,10 @@ class RootfsExecutionBackend(Protocol):
         """Recover a finite Run and its ready rootfs result."""
         ...
 
+    def delete_environment(self, environment_id: str) -> None:
+        """Delete a verifier-owned derived Environment; absence is success."""
+        ...
+
 
 class ExecutionBackend(Protocol):
     def execute(

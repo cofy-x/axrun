@@ -355,7 +355,10 @@ class ProgramBenchOfficialVerifierAdapter:
         record.details_path = str(path)
         record.details_digest = digest
         record.aggregation_state = "completed"
-        record.cleanup_state = "derived_environment_retained"
+        record.cleanup_state = "running"
+        store.save(record)
+        coordinator.delete_environment(record.derived_environment_id)
+        record.cleanup_state = "completed"
         record.state = "completed"
         store.save(record)
         primary = record.compile.execution

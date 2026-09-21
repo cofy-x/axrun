@@ -29,6 +29,10 @@ Environment, executable digest, every branch Run/Allocation and result digest, a
 and cleanup state. Resume reuses persisted external IDs. A `running` mutation without a persisted
 external ID is ambiguous and fails closed instead of creating a duplicate Run.
 
+After the details artifact is durably published, the adapter deletes its derived Environment and
+marks cleanup complete. The backend treats an already-absent Environment as success, so a resume
+across the delete/record-write boundary is idempotent.
+
 The bounded coordinator knows only how to create, recover, wait for and cancel Runs, and how to
 obtain a successful Run's rootfs result. The ProgramBench adapter alone understands compile steps,
 branches, assets and scoring.
@@ -44,4 +48,3 @@ not silently discarded.
 Compile and test failures are benchmark outcomes. Run transport failures, rootfs sealing failures,
 asset-integrity failures, malformed evaluator output, and incomplete recovery state are
 infrastructure failures and cannot be converted into a business `failed` verdict.
-
