@@ -485,6 +485,7 @@ class ProgramBenchOfficialVerifierAdapter:
             environment_id=episode.verification_environment.environment_id,
             argv=tuple(argv),
             cwd="/workspace",
+            env={"PYTHONPATH": "/opt/axrun"},
             inputs=(
                 InputFile(
                     str(Path(candidate.root) / workspace.bundle_path),

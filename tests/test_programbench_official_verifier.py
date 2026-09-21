@@ -247,6 +247,7 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
             for plan in backend.plans.values()
             if plan.labels.get("axrun.stage") == "verification-compile"
         )
+        assert compile_plan.env == {"PYTHONPATH": "/opt/axrun"}
         remove_index = compile_plan.argv.index("--remove-sha256")
         assert compile_plan.argv[remove_index + 1] == (
             "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"
