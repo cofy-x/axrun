@@ -68,6 +68,7 @@ class ProgramBenchOfficialSingleResolver:
         inference_environment_id: str,
         verification_environment_id: str,
         harness: HarnessSpec,
+        runtime_image: str = _IMAGE_REFERENCE,
         test_assets_dir: Path | None = None,
         static_candidate_dir: Path | None = None,
     ) -> ResolvedEpisode:
@@ -115,6 +116,8 @@ class ProgramBenchOfficialSingleResolver:
                 raise ContractError(f"ProgramBench official field {key} is unsupported")
         self._validate_image(row["image"])
         self._validate_test_assets(row["test_assets"])
+        if not runtime_image.endswith(f"@{_IMAGE_DIGEST}") or runtime_image.count("@") != 1:
+            raise ContractError("ProgramBench official runtime image must use the locked digest")
         if row["candidate"] != {
             "identity": "workspace-archive",
             "version": "1",
@@ -181,10 +184,10 @@ class ProgramBenchOfficialSingleResolver:
             prompt_file=str(prompt),
             task=TaskSpec("programbench-official-single", "1", task_config),
             inference_environment=EnvironmentBinding(
-                inference_environment_id, _IMAGE_REFERENCE, _PLATFORM, "/workspace"
+                inference_environment_id, runtime_image, _PLATFORM, "/workspace"
             ),
             verification_environment=EnvironmentBinding(
-                verification_environment_id, _IMAGE_REFERENCE, _PLATFORM, "/workspace"
+                verification_environment_id, runtime_image, _PLATFORM, "/workspace"
             ),
             harness=resolved_harness,
             candidate=CandidateSpec("workspace-archive", "1", candidate_config),

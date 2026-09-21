@@ -157,6 +157,8 @@ def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
             "pb-official",
             "--test-assets-dir",
             "locked-assets",
+            "--runtime-image",
+            f"registry.invalid/programbench@sha256:{'a' * 64}",
             "--inference-environment",
             "env-i",
             "--verification-environment",
@@ -169,3 +171,4 @@ def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
     assert args.command == "resolve-programbench-official"
     assert args.harness == "static-candidate"
     assert args.test_assets_dir == Path("locked-assets")
+    assert args.runtime_image.endswith(f"@sha256:{'a' * 64}")

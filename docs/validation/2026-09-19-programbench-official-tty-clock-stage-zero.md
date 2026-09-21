@@ -171,6 +171,7 @@ capability `post-compile-allocation-snapshot-v1`. It imports only `AllocationCli
 uv run axrun resolve-programbench-official \
   fixtures/programbench/tty-clock-1.2.4-official/row.json \
   --episode-id programbench-tty-clock-stage-zero \
+  --runtime-image docker.io/programbench/xorg62_1776_tty-clock.f2f847c@sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272 \
   --inference-environment INFERENCE_ENVIRONMENT_ID \
   --verification-environment DIFFERENT_VERIFICATION_ENVIRONMENT_ID \
   --output /tmp/programbench-tty-clock-stage-zero.json
