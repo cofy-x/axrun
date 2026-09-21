@@ -121,7 +121,7 @@ The official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upstream
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
 the complete expected/ignored test metadata. The benchmark-owned verifier snapshots the whole
 post-compile container and
-starts every branch from it. `axern-sdk==0.11.0` exposes that boundary as an explicitly requested
+starts every branch from it. `axern-sdk==0.11.2` exposes that boundary as an explicitly requested
 successful-Run rootfs result whose content-addressed image backs an ordinary derived Environment.
 Fresh Runs from that Environment receive isolated writable layers. Re-uploading only `/workspace`
 would still lose candidate build effects outside that path and is not official parity. A bounded
