@@ -23,6 +23,13 @@
     "platform_digest": "sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272",
     "config_digest": "sha256:d433c4a48704aee0b45a0f97b43f8bfee5a76bd4299bdeb1133b649e3e151820"
   },
+  "evaluator": {
+    "contract_version": "programbench-1.2.4-axrun-tty-clock-v1",
+    "compile_file": "verifier/compile_candidate.py",
+    "compile_sha256": "eebb1a4f2452b314eac920e2dedd3b34b1a5d2b30621d23fef23ac92e4603d66",
+    "branch_file": "verifier/run_branch.py",
+    "branch_sha256": "9cc0fe9c6dcb3d2dc05ae7ed037d1e1208819c33fd05b5af2c482d3d1b6c2012"
+  },
   "test_blobs": {
     "repository": "programbench/ProgramBench-Tests",
     "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5",

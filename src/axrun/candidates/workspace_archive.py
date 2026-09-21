@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 from dataclasses import dataclass
@@ -41,6 +42,10 @@ class WorkspaceArchiveCandidateAdapter:
         module = Path(__file__).with_name("archive.py")
         errors = package_root / "errors.py"
         source = episode.candidate.config.get("source_directory")
+        source_mode = episode.candidate.config.get("source_mode", "empty")
+        source_manifest_digest = episode.candidate.config.get("source_manifest_digest", "")
+        if source_mode not in {"empty", "overlay"}:
+            raise ContractError("workspace-archive source_mode must be empty or overlay")
         excluded = _excluded_paths(episode.candidate.config.get("exclude_paths", []))
         workspace = shlex.quote(episode.inference_environment.working_directory)
         remove_excluded = tuple(
@@ -71,6 +76,13 @@ class WorkspaceArchiveCandidateAdapter:
             )
             if any(path.is_symlink() for path in source_root.rglob("*")):
                 raise ContractError("workspace-archive source_directory rejects symlinks")
+            manifest = {
+                path.relative_to(source_root).as_posix(): _sha256(path) for path in source_files
+            }
+            if not isinstance(source_manifest_digest, str):
+                raise ContractError("workspace-archive source manifest digest must be a string")
+            if source_manifest_digest and _manifest_digest(manifest) != source_manifest_digest:
+                raise ContractError("workspace-archive source manifest digest mismatch")
             for path in source_files:
                 relative = path.relative_to(source_root).as_posix()
                 inputs.append(
@@ -80,14 +92,18 @@ class WorkspaceArchiveCandidateAdapter:
                         _sha256(path),
                     )
                 )
-            setup_script = "\n".join(
+            setup_lines = [*remove_excluded]
+            if source_mode == "empty":
+                setup_lines.append(
+                    f'test -z "$(find {workspace} -mindepth 1 -maxdepth 1 -print -quit)"'
+                )
+            setup_lines.extend(
                 (
-                    *remove_excluded,
-                    f'test -z "$(find {workspace} -mindepth 1 -maxdepth 1 -print -quit)"',
                     "mkdir -p /run/axrun/static-source",
                     f"cp -R /run/axrun/static-source/. {workspace}/",
                 )
             )
+            setup_script = "\n".join(setup_lines)
             script = "\n".join(
                 (
                     *remove_excluded,
@@ -126,7 +142,12 @@ class WorkspaceArchiveCandidateAdapter:
     def _validate(self, episode: ResolvedEpisode) -> None:
         if episode.candidate.identity != self.name or episode.candidate.version != self.version:
             raise ContractError("workspace archive candidate adapter requires workspace-archive@1")
-        unknown = set(episode.candidate.config) - {"source_directory", "exclude_paths"}
+        unknown = set(episode.candidate.config) - {
+            "source_directory",
+            "source_manifest_digest",
+            "source_mode",
+            "exclude_paths",
+        }
         if unknown:
             raise ContractError(f"unknown workspace-archive config: {', '.join(sorted(unknown))}")
 
@@ -137,6 +158,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _manifest_digest(value: dict[str, str]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _excluded_paths(value: object) -> tuple[str, ...]:

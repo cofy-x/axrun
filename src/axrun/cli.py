@@ -262,10 +262,7 @@ def _parser() -> argparse.ArgumentParser:
     programbench.add_argument("--output", type=Path, required=True)
     programbench_official = commands.add_parser(
         "resolve-programbench-official",
-        help=(
-            "resolve the locked ProgramBench 1.2.4 tty-clock contract; execution fails "
-            "closed until Axern exposes post-compile Allocation snapshots"
-        ),
+        help=("resolve the locked executable ProgramBench 1.2.4 tty-clock contract"),
     )
     programbench_official.add_argument("row", type=Path)
     programbench_official.add_argument("--episode-id", required=True)
@@ -273,6 +270,8 @@ def _parser() -> argparse.ArgumentParser:
         "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
     )
     _add_claude_arguments(programbench_official)
+    programbench_official.add_argument("--test-assets-dir", type=Path, required=True)
+    programbench_official.add_argument("--static-candidate-directory", type=Path)
     programbench_official.add_argument("--inference-environment", required=True)
     programbench_official.add_argument("--verification-environment", required=True)
     programbench_official.add_argument("--output", type=Path, required=True)
@@ -552,6 +551,8 @@ def main(argv: list[str] | None = None) -> int:
                 inference_environment_id=args.inference_environment,
                 verification_environment_id=args.verification_environment,
                 harness=harness,
+                test_assets_dir=args.test_assets_dir,
+                static_candidate_dir=args.static_candidate_directory,
             )
             _write_episode(episode, args.output)
             return 0

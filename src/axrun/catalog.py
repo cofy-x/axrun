@@ -12,6 +12,7 @@ from typing import cast
 from axrun.adapters import (
     CommandVerifierAdapter,
     GreenfieldVerifierAdapter,
+    ProgramBenchOfficialVerifierAdapter,
     ProgramBenchVerifierAdapter,
     StaticCandidateHarness,
     SweBenchVerifiedVerifierAdapter,
@@ -31,7 +32,12 @@ from axrun.harnesses import ClaudeCodeHarness
 from axrun.models import HarnessRuntimeRequirements, ResolvedEpisode
 from axrun.proxy.base import ModelProtocol
 from axrun.proxy.protocols import AnthropicProtocol
-from axrun.tasks import EmptyWorkspaceTaskAdapter, GitWorktreeTaskAdapter, ProgramBenchTaskAdapter
+from axrun.tasks import (
+    EmptyWorkspaceTaskAdapter,
+    GitWorktreeTaskAdapter,
+    ProgramBenchOfficialTaskAdapter,
+    ProgramBenchTaskAdapter,
+)
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 
 
@@ -104,6 +110,8 @@ def resolve_task(episode: ResolvedEpisode) -> TaskAdapter:
         return EmptyWorkspaceTaskAdapter(name=key[0])
     if key == ("programbench", "1"):
         return ProgramBenchTaskAdapter()
+    if key == ("programbench-official-single", "1"):
+        return ProgramBenchOfficialTaskAdapter()
     raise ContractError(f"unsupported task adapter: {key[0]}@{key[1]}")
 
 
@@ -139,6 +147,8 @@ def resolve_verifier(episode: ResolvedEpisode) -> VerifierAdapter:
         return GreenfieldVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
     if key == ("programbench", "1"):
         return ProgramBenchVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
+    if key == ("programbench-official-single", "1"):
+        return ProgramBenchOfficialVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
     if key == ("command-verifier", "1"):
         value = episode.verifier.config.get("command", ["/opt/axrun/run-verifier"])
         if (

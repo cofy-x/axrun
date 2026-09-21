@@ -120,11 +120,11 @@ def test_official_resolver_rejects_shape_asset_and_identity_drift(tmp_path: Path
         )
 
 
-def test_official_episode_remains_closed_until_verifier_adapter_is_implemented() -> None:
-    with pytest.raises(
-        ContractError, match="unsupported task adapter: programbench-official-single@1"
-    ):
-        resolve_adapters(_episode())
+def test_official_episode_selects_the_closed_single_instance_adapters() -> None:
+    selection = resolve_adapters(_episode())
+    assert selection.task.name == "programbench-official-single"
+    assert selection.verifier.name == "programbench-official-single"
+    assert getattr(selection.verifier, "multi_run", False) is True
 
 
 def test_sdk_reproducer_proves_released_surface_supports_derived_environment() -> None:

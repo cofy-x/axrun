@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -147,13 +148,15 @@ def test_programbench_compatibility_resolver_is_explicit() -> None:
     assert args.candidate_variant == "known-bad"
 
 
-def test_programbench_official_stage_zero_resolver_is_explicit() -> None:
+def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
     args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
         [
             "resolve-programbench-official",
             "row.json",
             "--episode-id",
             "pb-official",
+            "--test-assets-dir",
+            "locked-assets",
             "--inference-environment",
             "env-i",
             "--verification-environment",
@@ -165,3 +168,4 @@ def test_programbench_official_stage_zero_resolver_is_explicit() -> None:
 
     assert args.command == "resolve-programbench-official"
     assert args.harness == "static-candidate"
+    assert args.test_assets_dir == Path("locked-assets")

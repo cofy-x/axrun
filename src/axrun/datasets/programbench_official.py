@@ -46,6 +46,10 @@ _BRANCHES = {
 _ACTIVE_TESTS = 281
 _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
+_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v1"
+_TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
+_COMPILE_DIGEST = "eebb1a4f2452b314eac920e2dedd3b34b1a5d2b30621d23fef23ac92e4603d66"
+_BRANCH_DIGEST = "9cc0fe9c6dcb3d2dc05ae7ed037d1e1208819c33fd05b5af2c482d3d1b6c2012"
 
 
 class ProgramBenchOfficialSingleResolver:
@@ -68,6 +72,8 @@ class ProgramBenchOfficialSingleResolver:
         inference_environment_id: str,
         verification_environment_id: str,
         harness: HarnessSpec,
+        test_assets_dir: Path | None = None,
+        static_candidate_dir: Path | None = None,
     ) -> ResolvedEpisode:
         expected = {
             "schema_version",
@@ -126,11 +132,37 @@ class ProgramBenchOfficialSingleResolver:
         lock_path, lock = _checked_json_file(root, row, "asset_lock")
         self._validate_tests(tests)
         self._validate_lock(lock)
+        compile_file = root / "verifier" / "compile_candidate.py"
+        branch_file = root / "verifier" / "run_branch.py"
+        if _sha256(compile_file) != _COMPILE_DIGEST or _sha256(branch_file) != _BRANCH_DIGEST:
+            raise ContractError("ProgramBench official evaluator asset digest mismatch")
         if inference_environment_id == verification_environment_id:
             raise ContractError(
                 "ProgramBench official verification requires a different Environment"
             )
         resolved_harness = self._resolve_harness(harness)
+        asset_directory = (test_assets_dir or root).resolve()
+        candidate_config: dict[str, Any] = {"exclude_paths": ["executable"]}
+        if static_candidate_dir is not None:
+            if resolved_harness.identity != "static-candidate":
+                raise ContractError("static candidate directory requires static-candidate@1")
+            candidate_root = static_candidate_dir.resolve()
+            if (
+                not candidate_root.is_dir()
+                or candidate_root.is_symlink()
+                or any(path.is_symlink() for path in candidate_root.rglob("*"))
+            ):
+                raise ContractError("ProgramBench static candidate directory is invalid")
+            manifest = {
+                path.relative_to(candidate_root).as_posix(): _sha256(path)
+                for path in sorted(candidate_root.rglob("*"))
+                if path.is_file()
+            }
+            candidate_config.update(
+                source_directory=str(candidate_root),
+                source_mode="overlay",
+                source_manifest_digest=canonical_digest(manifest),
+            )
         task_config: dict[str, Any] = {
             "instance_id": _INSTANCE,
             "repository": _REPOSITORY,
@@ -159,7 +191,7 @@ class ProgramBenchOfficialSingleResolver:
                 verification_environment_id, _IMAGE_REFERENCE, _PLATFORM, "/workspace"
             ),
             harness=resolved_harness,
-            candidate=CandidateSpec("workspace-archive", "1", {"exclude_paths": ["executable"]}),
+            candidate=CandidateSpec("workspace-archive", "1", candidate_config),
             verifier=VerifierSpec(
                 "programbench-official-single",
                 "1",
@@ -167,6 +199,12 @@ class ProgramBenchOfficialSingleResolver:
                     "asset_lock_file": str(lock_path),
                     "tests_metadata_file": str(tests_path),
                     "required_public_capability": _CAPABILITY,
+                    "test_assets_dir": str(asset_directory),
+                    "evaluator_contract": _EVALUATOR_CONTRACT,
+                    "compile_file": str(compile_file),
+                    "compile_sha256": _COMPILE_DIGEST,
+                    "branch_file": str(branch_file),
+                    "branch_sha256": _BRANCH_DIGEST,
                 },
             ),
             metadata={
@@ -209,7 +247,7 @@ class ProgramBenchOfficialSingleResolver:
             "branch_count": len(_BRANCHES),
             "active_test_count": _ACTIVE_TESTS,
             "ignored_test_count": _IGNORED_TESTS,
-            "manifest_sha256": "bd4d5c9e8c438f804033505281831d909277e49558ddd7d956d83d886d9617f2",
+            "manifest_sha256": _TEST_MANIFEST_DIGEST,
         }
         if value != expected:
             raise ContractError("ProgramBench official test asset lock is unsupported")
@@ -262,9 +300,17 @@ class ProgramBenchOfficialSingleResolver:
             instance = value["instance"]
             image = value["image"]
             test_blobs = value["test_blobs"]
+            evaluator = value["evaluator"]
         except KeyError as exc:
             raise ContractError("ProgramBench official asset lock is incomplete") from exc
-        if set(value) != {"schema_version", "programbench", "instance", "image", "test_blobs"}:
+        if set(value) != {
+            "schema_version",
+            "programbench",
+            "instance",
+            "image",
+            "evaluator",
+            "test_blobs",
+        }:
             raise ContractError("ProgramBench official asset lock has unknown fields")
         if value["schema_version"] != 1 or programbench != {
             "package_version": _PROGRAMBENCH_VERSION,
@@ -283,6 +329,14 @@ class ProgramBenchOfficialSingleResolver:
             "config_digest": _IMAGE_CONFIG_DIGEST,
         }:
             raise ContractError("ProgramBench official image asset lock changed")
+        if evaluator != {
+            "contract_version": _EVALUATOR_CONTRACT,
+            "compile_file": "verifier/compile_candidate.py",
+            "compile_sha256": _COMPILE_DIGEST,
+            "branch_file": "verifier/run_branch.py",
+            "branch_sha256": _BRANCH_DIGEST,
+        }:
+            raise ContractError("ProgramBench official evaluator asset lock changed")
         if not isinstance(test_blobs, dict):
             raise ContractError("ProgramBench official blob repository changed")
         blob_data = cast(dict[str, object], test_blobs)
