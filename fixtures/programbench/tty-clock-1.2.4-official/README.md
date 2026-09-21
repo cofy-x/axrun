@@ -16,3 +16,8 @@ immutable rootfs result. Every active branch receives its locked blob in a fresh
 same derived Environment. Result aggregation preserves ProgramBench 1.2.4's ignored-test,
 missing-test, duplicate-test and scoring semantics. This remains a single-instance contract rather
 than general ProgramBench or leaderboard support.
+
+ProgramBench's official evaluator installs `pytest-rerunfailures` from an unpinned network source
+after compilation. This fixture closes that reproducibility gap by locking the 16.7 wheel and its
+SHA-256, installing it offline, and materializing the official default of 10 CPUs/xdist workers.
+Those values are evaluator assets and contract inputs, not caller-selectable tuning knobs.

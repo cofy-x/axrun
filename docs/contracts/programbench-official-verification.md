@@ -14,12 +14,16 @@ candidate.
 Verification uses the locked official `linux/amd64` cleanroom image. A fresh compile Run clears
 `/workspace`, safely extracts the archive, removes the exact locked upstream clean-hash set and any
 stale `executable`, runs `compile.sh` with deny-all networking, validates the result and stashes its
-SHA-256. A successful finite Run requests an Axern rootfs result. The returned ordinary derived
-Environment is verifier-internal state and does not change the candidate identity.
+SHA-256. ProgramBench 1.2.4 installs `pytest-rerunfailures` after compilation from an unpinned
+network source; Axrun instead supplies the locked 16.7 wheel as a content-addressed verifier input
+and installs it offline. A successful finite Run requests an Axern rootfs result. The returned
+ordinary derived Environment is verifier-internal state and does not change the candidate identity.
 
 Each of the six active test branches runs in a distinct Run and Allocation from the same derived
 Environment. Its blob is supplied explicitly after independent length and SHA-256 verification.
-No branch depends on another branch's writable layer.
+The official default of 10 container CPUs is materialized as both the Allocation CPU limit and
+`PYTEST_XDIST_AUTO_NUM_WORKERS=10`; it is part of the verifier contract digest rather than an
+ambient host default. No branch depends on another branch's writable layer.
 
 ## Durable execution record
 
@@ -31,7 +35,9 @@ external ID is ambiguous and fails closed instead of creating a duplicate Run.
 
 After the details artifact is durably published, the adapter deletes its derived Environment and
 marks cleanup complete. The backend treats an already-absent Environment as success, so a resume
-across the delete/record-write boundary is idempotent.
+across the delete/record-write boundary is idempotent. A branch Run that reaches a terminal
+infrastructure failure also deletes the derived Environment before surfacing the error. An
+ambiguous caller interruption keeps it for explicit resume instead.
 
 The bounded coordinator knows only how to create, recover, wait for and cancel Runs, and how to
 obtain a successful Run's rootfs result. The ProgramBench adapter alone understands compile steps,
