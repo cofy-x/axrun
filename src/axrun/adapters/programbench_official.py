@@ -31,7 +31,7 @@ from axrun.models import (
 from axrun.verification import MultiRunVerificationCoordinator
 
 _INSTANCE = "xorg62__tty-clock.f2f847c"
-_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v2"
+_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v3"
 _COMPILE_RESULT = "/outputs/programbench-compile.json"
 _BRANCH_RESULT = "/outputs/programbench-branch.json"
 _STASH = "/opt/axrun-programbench/candidate-executable"
@@ -548,6 +548,11 @@ class ProgramBenchOfficialVerifierAdapter:
                 _BRANCH_RESULT,
             ),
             cwd="/workspace",
+            env={
+                "PYTEST_XDIST_AUTO_NUM_WORKERS": str(
+                    episode.verifier.config["pytest_xdist_workers"]
+                )
+            },
             inputs=(
                 InputFile(str(asset), f"/inputs/{branch}.tar.gz", _sha256(asset)),
                 InputFile(
@@ -591,6 +596,8 @@ class ProgramBenchOfficialVerifierAdapter:
                 "compile_sha256": episode.verifier.config["compile_sha256"],
                 "branch_sha256": episode.verifier.config["branch_sha256"],
                 "rerun_wheel_sha256": episode.verifier.config["rerun_wheel_sha256"],
+                "pytest_xdist_workers": episode.verifier.config["pytest_xdist_workers"],
+                "verification_resources": asdict(episode.verification_resources),
                 "remove_hashes": episode.verifier.config["remove_hashes"],
             }
         )
@@ -621,10 +628,16 @@ class ProgramBenchOfficialVerifierAdapter:
             "branch_sha256",
             "rerun_wheel_file",
             "rerun_wheel_sha256",
+            "pytest_xdist_workers",
             "remove_hashes",
         }
         if set(episode.verifier.config) != required:
             raise ContractError("ProgramBench official verifier configuration changed")
+        if (
+            episode.verifier.config["pytest_xdist_workers"] != 10
+            or episode.verification_resources.limit_cpu != "10"
+        ):
+            raise ContractError("ProgramBench official CPU contract changed")
         remove_hashes = episode.verifier.config["remove_hashes"]
         if remove_hashes != ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]:
             raise ContractError("ProgramBench official submission-clean hash set changed")

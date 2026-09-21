@@ -14,13 +14,14 @@ from axrun.models import (
     EnvironmentBinding,
     HarnessSpec,
     ResolvedEpisode,
+    ResourceSpec,
     TaskSpec,
     VerifierSpec,
     canonical_digest,
 )
 
 _IDENTITY = "programbench.official-single"
-_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v2"
+_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v3"
 _PROGRAMBENCH_VERSION = "1.2.4"
 _PROGRAMBENCH_GIT_SHA = "963063c9271cc40fa179977356782ea4582e0b0c"
 _INSTANCE = "xorg62__tty-clock.f2f847c"
@@ -46,7 +47,8 @@ _BRANCHES = {
 _ACTIVE_TESTS = 281
 _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
-_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v2"
+_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v3"
+_DOCKER_CPUS = 10
 _TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
 _COMPILE_DIGEST = "f6221868172e87e0c1587d500f7bd1e17d14a4a34e2d1b277fa8c661c9f6c0dd"
 _BRANCH_DIGEST = "634395a4b0cd0ca14c9f90dcfe4ed42e72e9a0144e37cbdfb7c84d86ebedad9e"
@@ -213,9 +215,11 @@ class ProgramBenchOfficialSingleResolver:
                     "branch_sha256": _BRANCH_DIGEST,
                     "rerun_wheel_file": str(rerun_wheel),
                     "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
+                    "pytest_xdist_workers": _DOCKER_CPUS,
                     "remove_hashes": _REMOVE_HASHES,
                 },
             ),
+            verification_resources=ResourceSpec(limit_cpu=str(_DOCKER_CPUS)),
             metadata={
                 "dataset_identity": self.identity,
                 "dataset_version": self.version,
@@ -346,6 +350,7 @@ class ProgramBenchOfficialSingleResolver:
             "branch_sha256": _BRANCH_DIGEST,
             "rerun_wheel_file": f"verifier/{_RERUN_WHEEL}",
             "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
+            "docker_cpus": _DOCKER_CPUS,
             "remove_hashes": _REMOVE_HASHES,
         }:
             raise ContractError("ProgramBench official evaluator asset lock changed")

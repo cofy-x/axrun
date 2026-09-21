@@ -239,6 +239,8 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
         ]
         assert len(branch_plans) == 6
         assert all(plan.environment_id == f"derived-{variant}" for plan in branch_plans)
+        assert all(plan.env == {"PYTEST_XDIST_AUTO_NUM_WORKERS": "10"} for plan in branch_plans)
+        assert all(plan.resources.limit_cpu == "10" for plan in branch_plans)
         assert len({ref.run_id for ref in backend.created}) == run_count
         assert all(plan.network_policy == "deny_all" for plan in branch_plans)
         assert backend.deleted_environments == [f"derived-{variant}"]
