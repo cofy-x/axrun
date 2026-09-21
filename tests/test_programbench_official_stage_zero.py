@@ -71,6 +71,11 @@ def test_official_resolver_locks_complete_identity_and_denominator() -> None:
     assert episode.verifier.config["required_public_capability"] == (
         "post-compile-allocation-snapshot-v1"
     )
+    rerun_wheel = Path(episode.verifier.config["rerun_wheel_file"])
+    assert rerun_wheel.name == "pytest_rerunfailures-16.7-py3-none-any.whl"
+    assert episode.verifier.config["rerun_wheel_sha256"] == (
+        "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
+    )
     serialized = json.dumps(episode.task.config, sort_keys=True)
     assert "branches" not in serialized
     assert "ignored_tests" not in serialized

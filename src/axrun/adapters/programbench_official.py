@@ -31,7 +31,7 @@ from axrun.models import (
 from axrun.verification import MultiRunVerificationCoordinator
 
 _INSTANCE = "xorg62__tty-clock.f2f847c"
-_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v1"
+_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v2"
 _COMPILE_RESULT = "/outputs/programbench-compile.json"
 _BRANCH_RESULT = "/outputs/programbench-branch.json"
 _STASH = "/opt/axrun-programbench/candidate-executable"
@@ -466,6 +466,7 @@ class ProgramBenchOfficialVerifierAdapter:
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
         compile_file = Path(cast(str, episode.verifier.config["compile_file"]))
+        rerun_wheel = Path(cast(str, episode.verifier.config["rerun_wheel_file"]))
         remove_hashes = cast(list[str], episode.verifier.config["remove_hashes"])
         argv = [
             "python3",
@@ -478,6 +479,8 @@ class ProgramBenchOfficialVerifierAdapter:
             _STASH,
             "--result",
             _COMPILE_RESULT,
+            "--rerun-wheel",
+            "/inputs/pytest-rerunfailures.whl",
         ]
         for digest in remove_hashes:
             argv.extend(("--remove-sha256", digest))
@@ -503,6 +506,11 @@ class ProgramBenchOfficialVerifierAdapter:
                     str(compile_file),
                     "/opt/axrun-programbench/compile_candidate.py",
                     cast(str, episode.verifier.config["compile_sha256"]),
+                ),
+                InputFile(
+                    str(rerun_wheel),
+                    "/inputs/pytest-rerunfailures.whl",
+                    cast(str, episode.verifier.config["rerun_wheel_sha256"]),
                 ),
             ),
             outputs=(OutputSpec(_COMPILE_RESULT, media_type="application/json"),),
@@ -581,6 +589,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 "branches": branches,
                 "compile_sha256": episode.verifier.config["compile_sha256"],
                 "branch_sha256": episode.verifier.config["branch_sha256"],
+                "rerun_wheel_sha256": episode.verifier.config["rerun_wheel_sha256"],
                 "remove_hashes": episode.verifier.config["remove_hashes"],
             }
         )
@@ -609,6 +618,8 @@ class ProgramBenchOfficialVerifierAdapter:
             "compile_sha256",
             "branch_file",
             "branch_sha256",
+            "rerun_wheel_file",
+            "rerun_wheel_sha256",
             "remove_hashes",
         }
         if set(episode.verifier.config) != required:

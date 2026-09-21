@@ -20,7 +20,7 @@ from axrun.models import (
 )
 
 _IDENTITY = "programbench.official-single"
-_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v1"
+_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v2"
 _PROGRAMBENCH_VERSION = "1.2.4"
 _PROGRAMBENCH_GIT_SHA = "963063c9271cc40fa179977356782ea4582e0b0c"
 _INSTANCE = "xorg62__tty-clock.f2f847c"
@@ -46,10 +46,12 @@ _BRANCHES = {
 _ACTIVE_TESTS = 281
 _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
-_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v1"
+_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v2"
 _TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
-_COMPILE_DIGEST = "ca7cd17f2b2cb2beaceb78eb4f251d84c766f6d5d2493712f07bcc0ffd1e3e1c"
-_BRANCH_DIGEST = "fdc9f5ad168e39530c27f952077a874ffe13f48ea35fe57bbc4c7d2d1c038ea6"
+_COMPILE_DIGEST = "f6221868172e87e0c1587d500f7bd1e17d14a4a34e2d1b277fa8c661c9f6c0dd"
+_BRANCH_DIGEST = "634395a4b0cd0ca14c9f90dcfe4ed42e72e9a0144e37cbdfb7c84d86ebedad9e"
+_RERUN_WHEEL = "pytest_rerunfailures-16.7-py3-none-any.whl"
+_RERUN_WHEEL_DIGEST = "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
 _REMOVE_HASHES = ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]
 
 
@@ -133,7 +135,12 @@ class ProgramBenchOfficialSingleResolver:
         self._validate_lock(lock)
         compile_file = root / "verifier" / "compile_candidate.py"
         branch_file = root / "verifier" / "run_branch.py"
-        if _sha256(compile_file) != _COMPILE_DIGEST or _sha256(branch_file) != _BRANCH_DIGEST:
+        rerun_wheel = root / "verifier" / _RERUN_WHEEL
+        if (
+            _sha256(compile_file) != _COMPILE_DIGEST
+            or _sha256(branch_file) != _BRANCH_DIGEST
+            or _sha256(rerun_wheel) != _RERUN_WHEEL_DIGEST
+        ):
             raise ContractError("ProgramBench official evaluator asset digest mismatch")
         if inference_environment_id == verification_environment_id:
             raise ContractError(
@@ -204,6 +211,8 @@ class ProgramBenchOfficialSingleResolver:
                     "compile_sha256": _COMPILE_DIGEST,
                     "branch_file": str(branch_file),
                     "branch_sha256": _BRANCH_DIGEST,
+                    "rerun_wheel_file": str(rerun_wheel),
+                    "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
                     "remove_hashes": _REMOVE_HASHES,
                 },
             ),
@@ -335,6 +344,8 @@ class ProgramBenchOfficialSingleResolver:
             "compile_sha256": _COMPILE_DIGEST,
             "branch_file": "verifier/run_branch.py",
             "branch_sha256": _BRANCH_DIGEST,
+            "rerun_wheel_file": f"verifier/{_RERUN_WHEEL}",
+            "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
             "remove_hashes": _REMOVE_HASHES,
         }:
             raise ContractError("ProgramBench official evaluator asset lock changed")

@@ -248,6 +248,18 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
             if plan.labels.get("axrun.stage") == "verification-compile"
         )
         assert compile_plan.env == {"PYTHONPATH": "/opt/axrun"}
+        assert compile_plan.network_policy == "deny_all"
+        rerun_input = next(
+            item
+            for item in compile_plan.inputs
+            if item.target == "/inputs/pytest-rerunfailures.whl"
+        )
+        assert rerun_input.sha256 == (
+            "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
+        )
+        assert compile_plan.argv[compile_plan.argv.index("--rerun-wheel") + 1] == (
+            "/inputs/pytest-rerunfailures.whl"
+        )
         remove_index = compile_plan.argv.index("--remove-sha256")
         assert compile_plan.argv[remove_index + 1] == (
             "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"

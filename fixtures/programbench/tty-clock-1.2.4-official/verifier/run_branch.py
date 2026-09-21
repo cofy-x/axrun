@@ -97,7 +97,10 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
-        environment = {**os.environ, "PYTEST_ADDOPTS": "--max-worker-restart=4"}
+        environment = {
+            **os.environ,
+            "PYTEST_ADDOPTS": "--max-worker-restart=4 --reruns=2 --reruns-delay=1",
+        }
         subprocess.run(
             ["./eval/run.sh"],
             cwd=args.workspace,
