@@ -35,6 +35,7 @@ _CONTRACT = "programbench-1.2.4-axrun-tty-clock-v2"
 _COMPILE_RESULT = "/outputs/programbench-compile.json"
 _BRANCH_RESULT = "/outputs/programbench-branch.json"
 _STASH = "/opt/axrun-programbench/candidate-executable"
+_RERUN_WHEEL_TARGET = "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
 _COMPILE_BUSINESS_EXIT_CODES = {
     21: "seed_git_failed",
     22: "compile_script_missing",
@@ -480,7 +481,7 @@ class ProgramBenchOfficialVerifierAdapter:
             "--result",
             _COMPILE_RESULT,
             "--rerun-wheel",
-            "/inputs/pytest-rerunfailures.whl",
+            _RERUN_WHEEL_TARGET,
         ]
         for digest in remove_hashes:
             argv.extend(("--remove-sha256", digest))
@@ -509,7 +510,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 ),
                 InputFile(
                     str(rerun_wheel),
-                    "/inputs/pytest-rerunfailures.whl",
+                    _RERUN_WHEEL_TARGET,
                     cast(str, episode.verifier.config["rerun_wheel_sha256"]),
                 ),
             ),

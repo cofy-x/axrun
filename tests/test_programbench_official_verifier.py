@@ -252,13 +252,13 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
         rerun_input = next(
             item
             for item in compile_plan.inputs
-            if item.target == "/inputs/pytest-rerunfailures.whl"
+            if item.target == "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
         )
         assert rerun_input.sha256 == (
             "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
         )
         assert compile_plan.argv[compile_plan.argv.index("--rerun-wheel") + 1] == (
-            "/inputs/pytest-rerunfailures.whl"
+            "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
         )
         remove_index = compile_plan.argv.index("--remove-sha256")
         assert compile_plan.argv[remove_index + 1] == (
