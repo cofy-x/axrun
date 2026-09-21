@@ -69,6 +69,7 @@ class OfficialBackend:
         self.interrupt_branch_once = interrupt_branch_once
         self.interrupted = False
         self.created: list[ExecutionRef] = []
+        self.cancelled: list[str] = []
         self.deleted_environments: list[str] = []
         self.plans: dict[str, StagePlan] = {}
         raw = json.loads((_fixture() / "tests.json").read_text())
@@ -164,7 +165,8 @@ class OfficialBackend:
         return None
 
     def cancel(self, execution: ExecutionRef) -> None:
-        return None
+        if execution.run_id not in self.cancelled:
+            self.cancelled.append(execution.run_id)
 
     def delete_environment(self, environment_id: str) -> None:
         if environment_id not in self.deleted_environments:
@@ -301,6 +303,34 @@ def test_official_multirun_resume_reuses_the_bound_branch_run(tmp_path: Path) ->
     assert record["aggregation_state"] == "completed"
     assert record["cleanup_state"] == "completed"
     assert backend.deleted_environments == ["derived-gold"]
+
+
+def test_official_multirun_cancel_cleans_owned_branch_and_environment(tmp_path: Path) -> None:
+    episode = _episode(tmp_path, "gold")
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant="gold", interrupt_branch_once=True)
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    with pytest.raises(InfrastructureError, match="simulated caller interruption"):
+        runner.run(
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+
+    cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
+
+    assert cancelled.phase.value == "cancelled"
+    assert backend.cancelled == ["run-2", "run-3"]
+    assert backend.deleted_environments == ["derived-gold"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "cancelled"
+    assert record["cleanup_state"] == "completed"
 
 
 def test_official_terminal_branch_infrastructure_failure_cleans_derived_environment(

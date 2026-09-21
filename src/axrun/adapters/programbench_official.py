@@ -216,6 +216,39 @@ class ProgramBenchOfficialVerifierAdapter:
     def parse_result(self, result: Any) -> VerificationResult:
         raise ContractError("ProgramBench official results are aggregated caller-side")
 
+    def cancel(
+        self,
+        episode: ResolvedEpisode,
+        *,
+        backend: ExecutionBackend,
+        state_root: Path,
+    ) -> None:
+        """Cancel verifier-owned Runs and remove its intermediate Environment."""
+
+        self._validate_episode(episode)
+        execution_id = f"{episode.episode_id}-programbench"
+        store = _ExecutionStore(state_root)
+        with store.lock(execution_id):
+            record = store.load(execution_id)
+            if record is None or record.state == "cancelled":
+                return
+            executions = [
+                step.execution
+                for step in (record.compile, *record.branches.values())
+                if step.state == "running" and step.execution is not None
+            ]
+            record.state = "cancelling"
+            store.save(record)
+            coordinator = MultiRunVerificationCoordinator(backend)
+            coordinator.cancel(executions)
+            if record.derived_environment_id and record.cleanup_state != "completed":
+                record.cleanup_state = "running"
+                store.save(record)
+                coordinator.delete_environment(record.derived_environment_id)
+                record.cleanup_state = "completed"
+            record.state = "cancelled"
+            store.save(record)
+
     def verify(
         self,
         episode: ResolvedEpisode,

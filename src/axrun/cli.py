@@ -646,7 +646,9 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
             elif args.command == "cancel":
-                _print(runner.cancel(args.episode_id).as_dict())
+                episode = store.load_spec(args.episode_id)
+                selection = resolve_adapters(episode)
+                _print(runner.cancel(args.episode_id, verifier=selection.verifier).as_dict())
                 return 0
             else:
                 episode = store.load_spec(args.episode_id)

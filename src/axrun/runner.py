@@ -48,6 +48,14 @@ class _MultiRunVerifier(Protocol):
         on_primary_bound: Callable[[ExecutionRef], None],
     ) -> tuple[VerificationResult, ExecutionRef]: ...
 
+    def cancel(
+        self,
+        episode: ResolvedEpisode,
+        *,
+        backend: ExecutionBackend,
+        state_root: Path,
+    ) -> None: ...
+
 
 class EpisodeRunner:
     """Own caller-local orchestration; Axern remains execution fact source."""
@@ -178,7 +186,7 @@ class EpisodeRunner:
             trajectory=trajectory,
         )
 
-    def cancel(self, episode_id: str) -> EpisodeRecord:
+    def cancel(self, episode_id: str, *, verifier: VerifierAdapter | None = None) -> EpisodeRecord:
         with self.store.lock(episode_id):
             record = self._required_record(episode_id)
             if record.phase in {
@@ -198,6 +206,15 @@ class EpisodeRunner:
             # lock covers only the bounded control RPC, never the Run lifetime.
             if execution is not None:
                 self.backend.cancel(execution)
+            if record.phase == EpisodePhase.VERIFICATION_RUNNING and verifier is not None:
+                raw_cancel = getattr(verifier, "cancel", None)
+                if bool(getattr(verifier, "multi_run", False)) and callable(raw_cancel):
+                    episode = self.store.load_spec(episode_id)
+                    cast(_MultiRunVerifier, verifier).cancel(
+                        episode,
+                        backend=self.backend,
+                        state_root=self.store.root,
+                    )
             record.phase = EpisodePhase.CANCELLED
             record.diagnostic_code = "AXRUN_CANCELLED"
             record.completed_at = _now()
