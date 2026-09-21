@@ -22,6 +22,8 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
   tasks, harnesses, candidates, verifiers, qualification, and benchmark adapters compose.
 - [CandidateBundle contract](docs/contracts/candidate-bundle.md) defines the immutable artifact
   boundary between inference and fresh verification.
+- [Environment preparation contract](docs/contracts/environment-preparation.md) defines the
+  explicit Kova build-to-Axern Environment boundary used before episode resolution.
 
 ## Canonical episode contracts
 
@@ -175,7 +177,7 @@ and run the public-SDK reproducer with:
 
 ```bash
 uv run python tools/reproducers/programbench_post_compile_snapshot.py
-# exit 0 means the exact 0.10.0 request/wait contract is present
+# exit 0 means the exact 0.11.0 request/wait contract is present
 ```
 
 No official ProgramBench score, deterministic parity, or Claude acceptance is claimed until the
@@ -210,9 +212,31 @@ The verifier writes `/outputs/verification.json` containing at least:
 
 An unresolved result is a valid `failed` verdict. Transport errors, missing outputs, non-zero verifier exit, and digest mismatches are infrastructure failures and never become a score.
 
+## Explicit Environment preparation
+
+Environment preparation is a caller-selected operation before resolution. It is never invoked by `run`, a resolver, or a dataset adapter. V1 accepts one digest-pinned OCI source, asks Kova for one `linux/amd64` OCI target, verifies the returned manifest digest and immutable reference, then creates or exactly reuses an Axern Environment from that original reference. The ready receipt converts to the existing `EnvironmentBinding`; preparation fields do not enter `ResolvedEpisode`.
+
+Install the optional released Kova client, prepare once, and inspect the resulting binding:
+
+```bash
+uv sync --extra kova
+uv run axrun --state-dir .axrun prepare-kova-environment seed-build.json \
+  --output environment-preparation.json
+uv run axrun --state-dir .axrun preparation-status PREPARATION_ID
+uv run axrun --state-dir .axrun preparation-binding PREPARATION_ID
+```
+
+If the caller loses a response after a mutation, resume the persisted identity rather than creating an ad hoc replacement:
+
+```bash
+uv run axrun --state-dir .axrun preparation-resume PREPARATION_ID
+```
+
+Kova endpoint and token remain in the caller environment used by `kova-client`; Axern connection settings remain in the selected public SDK context. Neither belongs in the preparation spec, record, receipt, episode, or evidence. Source packaging and publishing are outside Axrun.
+
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.10.0`; it does not use an Axern source checkout or private generated modules.
+Axrun pins the released `axern-sdk==0.11.0`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
 
 ```bash
 uv sync --all-groups

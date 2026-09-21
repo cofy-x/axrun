@@ -25,6 +25,8 @@ artifact boundary.
 | Canonical trajectory and usage | Axrun | content-verified TrajectoryBundle |
 | Benchmark grading semantics | verifier image | verifier command |
 | Accepted verdict and score | Axrun | content-addressed VerificationResult |
+| Optional seed build request and receipt | Axrun caller | local preparation record, outside episode state |
+| Build execution and immutable image result | Kova | public Service API build identity and results |
 
 The execution record stores only the specification digest, public Run/Allocation references,
 phase, qualification evidence, CandidateBundle and TrajectoryBundle manifest references/digests, result reference, and
@@ -154,6 +156,14 @@ fall back to the task-image `python3` only for qualified Python base images such
 fixture.
 
 ## SDK boundary
+
+### Optional preparation boundary
+
+Kova-backed Environment preparation is a separate caller-side state machine, not an episode phase. A strict `SeedBuildSpec` and stable idempotency key are atomically persisted before the first Kova mutation. Axrun then uses only released public clients to obtain one immutable OCI result and create or exactly reuse one Axern Environment. A ready `EnvironmentPreparationReceipt` materializes the existing `EnvironmentBinding`; no preparation-specific field is added to `ResolvedEpisode`.
+
+Build and Environment waits happen without a long-held local lock. An uncertain build submission can only replay the identical request with its persisted idempotency key. An uncertain Environment create first recovers through public label-filtered list/get calls: zero matches permits create, one exact image/digest/namespace/platform match permits reuse, and any mismatch or multiple match fails closed. Endpoint, token, context, registry credential, response body, and remote runtime identity are not durable preparation facts.
+
+Preparation remains intentionally narrow: Kova, OCI, one logical target, and `linux/amd64`. It is not a workflow engine, scheduler, dataset service, snapshot model, or implicit image cache. Source packaging and push remain caller/Forge responsibilities. CandidateBundle remains the only inference-to-verification bridge.
 
 `AxernBackend` imports only the released `axern_sdk` package and uses public `create_run`, `watch_run`, `allocation`, File/Archive upload, `read_run_output`, `wait_run`, cancel, sealed manifest and sealed download operations. Inputs never include Node or runtime targets. Output capture is capped at 16 MiB per stdout/stderr stream; declared outputs remain the durable result path.
 
