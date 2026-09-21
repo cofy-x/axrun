@@ -61,11 +61,11 @@ class QualificationRequirements:
     claude_mount_image: str = ""
 
     def __post_init__(self) -> None:
-        if self.task_mode not in {"git", "empty", "prepared"}:
+        if self.task_mode not in {"git", "empty", "prepared", "prepared_contains"}:
             raise ContractError("unsupported task qualification mode")
         if (self.task_mode == "git") != bool(self.base_commit):
             raise ContractError("Git qualification requires exactly one base commit")
-        if (self.task_mode == "prepared") != bool(self.workspace_files):
+        if (self.task_mode in {"prepared", "prepared_contains"}) != bool(self.workspace_files):
             raise ContractError("prepared qualification requires workspace files")
 
 
