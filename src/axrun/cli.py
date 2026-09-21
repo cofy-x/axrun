@@ -35,6 +35,13 @@ from axrun.models import (
     canonical_json,
     resolved_episode_from_dict,
 )
+from axrun.preparation import (
+    AxernEnvironmentPreparationClient,
+    EnvironmentPreparationService,
+    KovaSdkPreparationClient,
+    PreparationStore,
+    seed_build_spec_from_dict,
+)
 from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
 from axrun.qualification import qualify_episode
@@ -308,6 +315,20 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("episode_id")
     report.add_argument("--format", choices=("json", "markdown"), default="json")
     report.add_argument("--output", type=Path)
+    prepare = commands.add_parser(
+        "prepare-kova-environment",
+        help="explicitly build one Kova seed image and create an Axern Environment",
+    )
+    prepare.add_argument("spec", type=Path)
+    prepare.add_argument("--output", type=Path, required=True)
+    prepare.add_argument("--wait-timeout", type=float, default=900.0)
+    preparation_status = commands.add_parser("preparation-status")
+    preparation_status.add_argument("preparation_id")
+    preparation_resume = commands.add_parser("preparation-resume")
+    preparation_resume.add_argument("preparation_id")
+    preparation_resume.add_argument("--wait-timeout", type=float, default=900.0)
+    preparation_binding = commands.add_parser("preparation-binding")
+    preparation_binding.add_argument("preparation_id")
     return parser
 
 
@@ -369,6 +390,39 @@ def _write_episode(episode: ResolvedEpisode, output: Path) -> None:
     )
 
 
+def _write_preparation_output(value: object, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(canonical_json(value) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, output)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+
+
+def _preparation_service(
+    args: argparse.Namespace,
+) -> tuple[EnvironmentPreparationService, Any, KovaSdkPreparationClient]:
+    client = _client(args)
+    try:
+        kova = KovaSdkPreparationClient.from_env()
+    except Exception:
+        client.close()
+        raise
+    return (
+        EnvironmentPreparationService(
+            store=PreparationStore(args.state_dir),
+            kova=kova,
+            axern=AxernEnvironmentPreparationClient(client),
+        ),
+        client,
+        kova,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -376,6 +430,38 @@ def main(argv: list[str] | None = None) -> int:
             episode = _episode(args.episode)
             _print({"episode_id": episode.episode_id, "spec_digest": episode.digest})
             return 0
+        preparation_store = PreparationStore(args.state_dir)
+        if args.command == "preparation-status":
+            record = preparation_store.load_record(args.preparation_id)
+            if record is None:
+                raise ContractError(f"preparation does not exist: {args.preparation_id}")
+            _print(asdict(record))
+            return 0
+        if args.command == "preparation-binding":
+            record = preparation_store.load_record(args.preparation_id)
+            if record is None:
+                raise ContractError(f"preparation does not exist: {args.preparation_id}")
+            _print(asdict(preparation_store.load_preparation_receipt(record).environment_binding()))
+            return 0
+        if args.command in {"prepare-kova-environment", "preparation-resume"}:
+            service, preparation_axern, preparation_kova = _preparation_service(args)
+            try:
+                if args.command == "prepare-kova-environment":
+                    raw_spec: object = json.loads(args.spec.read_text(encoding="utf-8"))
+                    if not isinstance(raw_spec, dict):
+                        raise ContractError("SeedBuildSpec must be a JSON object")
+                    receipt = service.prepare(
+                        seed_build_spec_from_dict(cast(dict[str, Any], raw_spec)),
+                        wait_timeout=args.wait_timeout,
+                    )
+                    _write_preparation_output(asdict(receipt), args.output)
+                else:
+                    receipt = service.resume(args.preparation_id, wait_timeout=args.wait_timeout)
+                _print(asdict(receipt))
+                return 0
+            finally:
+                preparation_kova.close()
+                preparation_axern.close()
         if args.command == "resolve-synthetic":
             raw_value: object = json.loads(args.row.read_text(encoding="utf-8"))
             if not isinstance(raw_value, dict):
