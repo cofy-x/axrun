@@ -336,6 +336,12 @@ class ProgramBenchOfficialVerifierAdapter:
                 on_bound=bind_branch,
             )
             if result.exit_code != 0:
+                record.cleanup_state = "running"
+                store.save(record)
+                coordinator.delete_environment(record.derived_environment_id)
+                record.cleanup_state = "completed"
+                record.state = "infrastructure_failed"
+                store.save(record)
                 raise InfrastructureError(
                     f"ProgramBench branch Run failed: {result.diagnostic_code}"
                 )

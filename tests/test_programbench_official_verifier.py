@@ -173,6 +173,8 @@ class OfficialBackend:
     def _branch_result(
         self, plan: StagePlan, artifact_dir: Path, execution: ExecutionRef
     ) -> StageResult:
+        if self.variant == "infrastructure-failure":
+            return StageResult(execution, 1, "RUNTIME_ERROR", ())
         branch = plan.labels["axrun.programbench.branch"]
         tests = [{"name": name, "status": "passed"} for name in self.tests[branch]]
         if self.variant == "partial" and branch == sorted(self.tests)[0]:
@@ -299,3 +301,27 @@ def test_official_multirun_resume_reuses_the_bound_branch_run(tmp_path: Path) ->
     assert record["aggregation_state"] == "completed"
     assert record["cleanup_state"] == "completed"
     assert backend.deleted_environments == ["derived-gold"]
+
+
+def test_official_terminal_branch_infrastructure_failure_cleans_derived_environment(
+    tmp_path: Path,
+) -> None:
+    episode = _episode(tmp_path, "infrastructure-failure")
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant="infrastructure-failure")
+    store = EpisodeStore(tmp_path / "state")
+    with pytest.raises(InfrastructureError, match="RUNTIME_ERROR"):
+        EpisodeRunner(backend=backend, store=store).run(
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+    assert backend.deleted_environments == ["derived-infrastructure-failure"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "infrastructure_failed"
+    assert record["cleanup_state"] == "completed"
