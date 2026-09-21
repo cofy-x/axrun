@@ -15,7 +15,8 @@ parity, a solved benchmark instance, complete ProgramBench support, or leaderboa
 | --- | --- |
 | Axrun implementation under test | `633a0bb` plus this documentation-only commit |
 | Forge | `0595fcd1dd5af95b7b6b202b46fbaf819b465d5e` |
-| Axern source/release runtime | `18d26de041d043126a885dc5860334f238eb28d6`, release `0.11.0` |
+| Axern Mac reference checkout | `18d26de041d043126a885dc5860334f238eb28d6` (read-only, not the runtime) |
+| HK Axern runtime | released CLI/stack `0.11.0`; the unrelated clean source checkout remained at `0294033e870647e0dde5777b298d437c1d4bb5bc` and was not used |
 | Released SDK | `axern-sdk==0.11.0` |
 | Kova | `916d795350f1b7305d00ae8b90a5a41e99d776bd` (not used by this acceptance) |
 | Openbench | `a666534e83d8a4615d1b5841fb1475d9ab5b64a9` (read-only reference) |
