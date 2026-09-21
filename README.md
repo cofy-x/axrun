@@ -158,19 +158,15 @@ uv run axrun resolve-programbench-compatibility \
   --output /tmp/programbench-calculator-gold.json
 ```
 
-Expanding to a real ProgramBench instance requires a fixed official cleanroom image, test-blob
-revision, and parity evidence against the official evaluator; Axrun does not reinterpret observed
-tests as an equivalent score.
-
-Stage-zero work now locks the real `xorg62__tty-clock.f2f847c` instance from ProgramBench 1.2.4:
-its six-branch denominator, ignore decisions, hidden-blob revision/digests, and official
-`linux/amd64` cleanroom platform manifest are content-addressed. The resolver can materialize and
-validate this contract, but the closed catalog intentionally refuses to run it until the official
-verifier adapter and parity suite exist. ProgramBench's official evaluator commits the complete
-candidate-specific post-compile container and starts each test branch from that state.
-`axern-sdk==0.10.0` now exposes the required successful-Run rootfs result as an immutable derived
-Environment; live validation also proves two fresh Runs preserve the sealed state without sharing
-later mutations. A workspace archive remains an invalid substitute for this boundary. See the
+The real `xorg62__tty-clock.f2f847c` vertical locks the ProgramBench 1.2.4 instance's six-branch
+denominator, ignore decisions, hidden-blob revision/digests, and official `linux/amd64` cleanroom
+platform manifest. Its benchmark-owned verifier clears and extracts the candidate, compiles
+offline, seals the complete post-compile rootfs, and starts one fresh Run per active branch.
+`axern-sdk==0.11.0` exposes the successful-Run rootfs result as an immutable derived Environment;
+live validation proves fresh Runs preserve sealed state without sharing later mutations.
+Aggregation preserves missing tests as `not_run`, ignored tests, branch errors, and ProgramBench's
+last-result-wins behavior for duplicate full test names. A workspace archive remains an invalid
+substitute for this boundary. See the
 historical [stage-zero validation](docs/validation/2026-09-19-programbench-official-tty-clock-stage-zero.md),
 the [0.10.0 capability validation](docs/validation/2026-09-20-axern-sdk-0.10.0-derived-environment.md),
 and run the public-SDK reproducer with:
@@ -180,9 +176,8 @@ uv run python tools/reproducers/programbench_post_compile_snapshot.py
 # exit 0 means the exact 0.11.0 request/wait contract is present
 ```
 
-No official ProgramBench score, deterministic parity, or Claude acceptance is claimed until the
-benchmark-owned multi-Run verifier orchestration reproduces the official evaluator without
-weakening branch isolation.
+This is deliberately one official-instance adapter, not general ProgramBench, suite scheduling,
+leaderboard support, or a generic workflow engine.
 
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the

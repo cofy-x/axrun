@@ -1,4 +1,4 @@
-"""Closed resolver for the stage-zero ProgramBench 1.2.4 official instance lock."""
+"""Closed resolver for one ProgramBench 1.2.4 official-instance vertical."""
 
 from __future__ import annotations
 
@@ -48,18 +48,13 @@ _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
 _EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v1"
 _TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
-_COMPILE_DIGEST = "dc1855f8774bc8c509807ab7c308633999ff101934f229d3f00839335e8cebe7"
+_COMPILE_DIGEST = "ca7cd17f2b2cb2beaceb78eb4f251d84c766f6d5d2493712f07bcc0ffd1e3e1c"
 _BRANCH_DIGEST = "fdc9f5ad168e39530c27f952077a874ffe13f48ea35fe57bbc4c7d2d1c038ea6"
 _REMOVE_HASHES = ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]
 
 
 class ProgramBenchOfficialSingleResolver:
-    """Resolve only the immutable tty-clock contract; execution remains fail-closed.
-
-    Axern SDK 0.10.0 exposes the required Run rootfs result and derived Environment contract. The
-    closed catalog still has no adapters for the task/verifier identities emitted here: official
-    evaluator orchestration and parity must be implemented before this contract becomes runnable.
-    """
+    """Resolve only the immutable tty-clock contract and its locked evaluator assets."""
 
     identity = _IDENTITY
     version = _VERSION
@@ -214,7 +209,7 @@ class ProgramBenchOfficialSingleResolver:
                 "dataset_version": self.version,
                 "programbench_instance": _INSTANCE,
                 "programbench_official_instance": "true",
-                "programbench_stage_zero": "public_snapshot_capability_validated",
+                "programbench_validation_scope": "official-single-instance",
             },
         )
 
@@ -225,7 +220,7 @@ class ProgramBenchOfficialSingleResolver:
         if (harness.identity, harness.version, harness.config) == ("static-candidate", "1", {}):
             return harness
         raise ContractError(
-            "ProgramBench official stage-zero resolver supports empty static-candidate@1 "
+            "ProgramBench official resolver supports empty static-candidate@1 "
             "or claude-code@2.1.205"
         )
 

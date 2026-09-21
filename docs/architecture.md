@@ -117,20 +117,20 @@ runs `compile.sh` offline, and grades behavior. This proves composition but is n
 official tasks and is not leaderboard evidence. A real instance still requires fixed official
 cleanroom and evaluation images, test-blob revision, and official-evaluator parity.
 
-The subsequent official-instance stage-zero audit locks `xorg62__tty-clock.f2f847c`, the upstream
+The official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upstream
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
-the complete expected/ignored test metadata. It deliberately stops before registering executable
-task or verifier adapters. The official evaluator snapshots the whole post-compile container and
-starts every branch from it. `axern-sdk==0.10.0` exposes that boundary as an explicitly requested
+the complete expected/ignored test metadata. The benchmark-owned verifier snapshots the whole
+post-compile container and
+starts every branch from it. `axern-sdk==0.11.0` exposes that boundary as an explicitly requested
 successful-Run rootfs result whose content-addressed image backs an ordinary derived Environment.
 Fresh Runs from that Environment receive isolated writable layers. Re-uploading only `/workspace`
-would still lose candidate build effects outside that path and is not official parity. The locked
-resolver therefore remains fail closed while Axrun adds benchmark-owned compile/branch
-orchestration and proves parity; the public-SDK-only reproducer now audits the exact request/wait
-contract rather than guessing from method names.
+would still lose candidate build effects outside that path and is not official parity. A bounded
+coordinator creates or recovers the compile Run and branch Runs while the adapter alone owns
+ProgramBench assets, failure taxonomy and scoring. The public-SDK-only reproducer audits the exact
+request/wait contract rather than guessing from method names.
 
 A file-only Terminal-Bench subset may also reuse workspace archives. Tasks that preserve package
-or system-file changes across finite setup and test phases may use the 0.10.0 rootfs-result
+or system-file changes across finite setup and test phases may use the rootfs-result
 boundary, but mounts, secrets, processes, sockets, kernel state, and services are deliberately not
 captured and require benchmark-specific modeling. Openbench is read-only research and parity input
 rather than a runtime dependency. Axrun intentionally has no dataset platform, scheduler, general

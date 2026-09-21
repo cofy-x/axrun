@@ -26,7 +26,7 @@
   "evaluator": {
     "contract_version": "programbench-1.2.4-axrun-tty-clock-v1",
     "compile_file": "verifier/compile_candidate.py",
-    "compile_sha256": "dc1855f8774bc8c509807ab7c308633999ff101934f229d3f00839335e8cebe7",
+    "compile_sha256": "ca7cd17f2b2cb2beaceb78eb4f251d84c766f6d5d2493712f07bcc0ffd1e3e1c",
     "branch_file": "verifier/run_branch.py",
     "branch_sha256": "fdc9f5ad168e39530c27f952077a874ffe13f48ea35fe57bbc4c7d2d1c038ea6",
     "remove_hashes": [

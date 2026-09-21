@@ -16,7 +16,7 @@
   "tests_metadata_file": "tests.json",
   "tests_metadata_sha256": "ec1760221921b7614f2c85215b8739203093c1faee45dad70ec6f9d55f8017d6",
   "asset_lock_file": "asset-lock.json",
-  "asset_lock_sha256": "6de405937f61899b02f5b4420f5d1aacbd17af6a869b3030c0d0fbedaedf8028",
+  "asset_lock_sha256": "43c99912281b940df0010a27162985963bfc14737b47a6bb942b87ec42e00c79",
   "image": {
     "source_tag": "docker.io/programbench/xorg62_1776_tty-clock.f2f847c:task_cleanroom_v6",
     "platform": "linux/amd64",

@@ -136,9 +136,9 @@ effect of adding an adapter.
 | --- | --- | --- |
 | SWE-bench-style repository repair | `git-patch@1` | Synthetic vertical and one deliberately closed SWE-bench Verified instance are implemented |
 | Greenfield repository creation | `workspace-archive@1` | Static and real Claude Code verticals are implemented and accepted on the local arm64 development path |
-| ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a 0.10.0 rootfs result | The 1.2.4 calculator compatibility fixture is implemented; one real tty-clock contract and the public derived-Environment boundary are validated, while official multi-Run evaluator parity remains unimplemented |
+| ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a rootfs result | The 1.2.4 calculator fixture and one closed official tty-clock multi-Run verifier are implemented; this is not general suite support |
 | Terminal benchmark, file-only subset | `workspace-archive@1` may be sufficient | Requires explicit task selection and a benchmark adapter; not implemented |
-| Terminal benchmark with packages or system-file changes | A successful finite setup Run may publish a 0.10.0 derived Environment | Requires benchmark-specific phase semantics; mounts, secrets, processes, sockets, kernel state, and live services are not captured |
+| Terminal benchmark with packages or system-file changes | A successful finite setup Run may publish a derived Environment | Requires benchmark-specific phase semantics; mounts, secrets, processes, sockets, kernel state, and live services are not captured |
 | Text/API answer benchmarks | Future bounded `text-response` candidate | Not implemented; add only with a concrete benchmark and verifier |
 
 Openbench may supply reference tasks, official semantics, and parity evidence, but
@@ -164,16 +164,16 @@ Implemented now:
 - independent harness and candidate contracts;
 - `git-patch@1` and `workspace-archive@1` CandidateBundles;
 - a closed ProgramBench 1.2.4 calculator compatibility vertical with deterministic passed/failed paths;
-- a fail-closed ProgramBench 1.2.4 official tty-clock asset lock and resolver, plus a released-SDK
-  reproducer and live validation for the 0.10.0 post-compile derived-Environment boundary;
+- a fail-closed ProgramBench 1.2.4 official tty-clock asset lock, resolver, compile/rootfs/branch
+  verifier, durable recovery record, and released-SDK derived-Environment reproducer;
 - static candidate and Claude Code harness paths;
 - canonical trajectory, per-inference-stage ModelProxy/Tunnel lifecycle, fresh offline
   verification, recovery, safe progress, and record verification.
 
 Deliberately deferred:
 
-- executable official-instance/general ProgramBench or Terminal-Bench support;
-- benchmark-owned multi-Run compile/branch orchestration and official ProgramBench evaluator parity;
+- general ProgramBench, suite scheduling, leaderboard, or Terminal-Bench support;
+- additional official instances beyond the locked tty-clock vertical;
 - dynamic plugins, multi-tenant model proxying, a shared harness service, dataset
   hosting, suite scheduling, and leaderboard orchestration;
 - a second real harness without a benchmark-driven acceptance case.
