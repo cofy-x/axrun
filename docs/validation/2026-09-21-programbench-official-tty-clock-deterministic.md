@@ -2,6 +2,10 @@
 
 Date: 2026-09-21
 
+Follow-up: the released v0.11.2 revalidation is recorded in
+[Axern 0.11.2 ProgramBench regression revalidation](2026-09-22-axern-sdk-0.11.2-programbench-regression.md).
+The exact workload still reproduces under v0.11.2 and is tracked as Axern issue #177.
+
 This record covers the bounded official-instance implementation and the real linux/amd64 HK
 acceptance for `xorg62__tty-clock.f2f847c`. The deterministic empty path has full official parity.
 Gold and partial reached an immutable CandidateBundle, successful compile Run, rootfs result,
