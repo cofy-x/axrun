@@ -18,6 +18,18 @@ def test_released_sdk_has_required_public_run_contract() -> None:
     assert {"image_mounts", "secret_env", "secret_files", "declared_outputs"} <= set(parameters)
 
 
+def test_backend_allows_bounded_cold_image_startup_timeout() -> None:
+    assert AxernBackend(object()).allocation_ready_timeout_seconds == 900.0
+    assert (
+        AxernBackend(
+            object(), allocation_ready_timeout_seconds=30.0
+        ).allocation_ready_timeout_seconds
+        == 30.0
+    )
+    with pytest.raises(ValueError, match="must be positive"):
+        AxernBackend(object(), allocation_ready_timeout_seconds=0)
+
+
 def test_backend_creates_run_without_private_execution_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -196,6 +208,33 @@ def test_transport_failure_after_launch_does_not_implicitly_cancel(
             on_bound=lambda _ref: None,
         )
     assert client.cancelled is False
+
+
+def test_allocation_readiness_failure_cancels_before_release(tmp_path: Path, monkeypatch) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.cancelled: list[str] = []
+
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-placed")
+
+        def cancel_run(self, run_id: str) -> None:
+            self.cancelled.append(run_id)
+
+    client = Client()
+    backend = AxernBackend(client)
+    monkeypatch.setattr(
+        backend_module,
+        "_wait_running",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("cold image")),
+    )
+    with pytest.raises(TimeoutError, match="cold image"):
+        backend.execute(
+            StagePlan("env", ("true",), "/workspace", ()),
+            artifact_dir=tmp_path,
+            on_bound=lambda _ref: None,
+        )
+    assert client.cancelled == ["run-placed"]
 
 
 def test_recovery_normalizes_unset_exit_code_on_failed_run(tmp_path: Path, monkeypatch) -> None:

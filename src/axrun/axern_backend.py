@@ -14,9 +14,18 @@ from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
 
 
 class AxernBackend:
-    def __init__(self, client: Any, *, namespace: str = "default") -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        namespace: str = "default",
+        allocation_ready_timeout_seconds: float = 900.0,
+    ) -> None:
+        if allocation_ready_timeout_seconds <= 0:
+            raise ValueError("allocation ready timeout must be positive")
         self.client = client
         self.namespace = namespace
+        self.allocation_ready_timeout_seconds = allocation_ready_timeout_seconds
 
     def execute(
         self,
@@ -122,7 +131,17 @@ class AxernBackend:
         run = self.client.create_run(**kwargs)
         execution = ExecutionRef(plan.environment_id, run.id)
         on_bound(execution)
-        run = _wait_running(self.client, run.id, timeout_seconds=180.0)
+        try:
+            run = _wait_running(
+                self.client,
+                run.id,
+                timeout_seconds=self.allocation_ready_timeout_seconds,
+            )
+        except BaseException:
+            # No input or readiness marker has been written yet. Cancellation is authoritative
+            # here and prevents an unowned Run from starting after the caller's readiness timeout.
+            self.client.cancel_run(run.id)
+            raise
         execution = ExecutionRef(plan.environment_id, run.id, run.allocation_id)
         on_bound(execution)
         allocation = self.client.allocation(run.allocation_id)
