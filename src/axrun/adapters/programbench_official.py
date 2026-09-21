@@ -463,20 +463,24 @@ class ProgramBenchOfficialVerifierAdapter:
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
         compile_file = Path(cast(str, episode.verifier.config["compile_file"]))
+        remove_hashes = cast(list[str], episode.verifier.config["remove_hashes"])
+        argv = [
+            "python3",
+            "/opt/axrun-programbench/compile_candidate.py",
+            "--candidate",
+            "/inputs/workspace.tar",
+            "--workspace",
+            "/workspace",
+            "--stash",
+            _STASH,
+            "--result",
+            _COMPILE_RESULT,
+        ]
+        for digest in remove_hashes:
+            argv.extend(("--remove-sha256", digest))
         return StagePlan(
             environment_id=episode.verification_environment.environment_id,
-            argv=(
-                "python3",
-                "/opt/axrun-programbench/compile_candidate.py",
-                "--candidate",
-                "/inputs/workspace.tar",
-                "--workspace",
-                "/workspace",
-                "--stash",
-                _STASH,
-                "--result",
-                _COMPILE_RESULT,
-            ),
+            argv=tuple(argv),
             cwd="/workspace",
             inputs=(
                 InputFile(
@@ -573,6 +577,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 "branches": branches,
                 "compile_sha256": episode.verifier.config["compile_sha256"],
                 "branch_sha256": episode.verifier.config["branch_sha256"],
+                "remove_hashes": episode.verifier.config["remove_hashes"],
             }
         )
 
@@ -600,9 +605,13 @@ class ProgramBenchOfficialVerifierAdapter:
             "compile_sha256",
             "branch_file",
             "branch_sha256",
+            "remove_hashes",
         }
         if set(episode.verifier.config) != required:
             raise ContractError("ProgramBench official verifier configuration changed")
+        remove_hashes = episode.verifier.config["remove_hashes"]
+        if remove_hashes != ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]:
+            raise ContractError("ProgramBench official submission-clean hash set changed")
 
 
 def _step(raw: dict[str, Any]) -> _Step:
@@ -669,7 +678,7 @@ def _validate_branch_result(value: dict[str, Any], branch: str) -> None:
 
 
 def _aggregate(record: _ExecutionRecord, tests: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    results: list[dict[str, str]] = []
+    result_map: dict[str, dict[str, str]] = {}
     branch_errors: dict[str, list[dict[str, str]]] = {}
     for branch, expected in tests.items():
         step = record.branches[branch]
@@ -685,10 +694,12 @@ def _aggregate(record: _ExecutionRecord, tests: dict[str, dict[str, Any]]) -> di
         if value["status"] == "branch_error":
             reason = str(value["reason_code"])
             branch_errors[branch] = [{"error_code": reason}]
-            results.extend(
-                {"branch": branch, "name": name, "status": "not_run"}
-                for name in expected["active_tests"]
-            )
+            for name in expected["active_tests"]:
+                result_map[f"{branch}/{name}"] = {
+                    "branch": branch,
+                    "name": name,
+                    "status": "not_run",
+                }
             continue
         observed = cast(list[dict[str, str]], value["tests"])
         got: set[str] = set()
@@ -696,16 +707,25 @@ def _aggregate(record: _ExecutionRecord, tests: dict[str, dict[str, Any]]) -> di
             if item["name"] in ignored:
                 continue
             got.add(item["name"])
-            results.append({"branch": branch, "name": item["name"], "status": item["status"]})
-        results.extend(
-            {"branch": branch, "name": name, "status": "not_run"}
-            for name in expected["active_tests"]
-            if name not in got
-        )
+            # ProgramBench's published scorer materializes a mapping keyed by full test name.
+            # Pytest may emit a duplicate testcase after an xdist worker restart; last result wins.
+            result_map[f"{branch}/{item['name']}"] = {
+                "branch": branch,
+                "name": item["name"],
+                "status": item["status"],
+            }
+        for name in expected["active_tests"]:
+            if name not in got:
+                result_map[f"{branch}/{name}"] = {
+                    "branch": branch,
+                    "name": name,
+                    "status": "not_run",
+                }
         if not got <= active | ignored:
             # Official ProgramBench keeps unexpected observed tests in the denominator. They are
             # intentionally retained above; this guard exists only to make the behavior explicit.
             pass
+    results = [result_map[key] for key in sorted(result_map)]
     passed = sum(item["status"] == "passed" for item in results)
     not_run = sum(item["status"] == "not_run" for item in results)
     failed = len(results) - passed - not_run

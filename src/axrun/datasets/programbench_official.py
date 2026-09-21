@@ -48,8 +48,9 @@ _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
 _EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v1"
 _TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
-_COMPILE_DIGEST = "eebb1a4f2452b314eac920e2dedd3b34b1a5d2b30621d23fef23ac92e4603d66"
-_BRANCH_DIGEST = "9cc0fe9c6dcb3d2dc05ae7ed037d1e1208819c33fd05b5af2c482d3d1b6c2012"
+_COMPILE_DIGEST = "dc1855f8774bc8c509807ab7c308633999ff101934f229d3f00839335e8cebe7"
+_BRANCH_DIGEST = "fdc9f5ad168e39530c27f952077a874ffe13f48ea35fe57bbc4c7d2d1c038ea6"
+_REMOVE_HASHES = ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]
 
 
 class ProgramBenchOfficialSingleResolver:
@@ -205,6 +206,7 @@ class ProgramBenchOfficialSingleResolver:
                     "compile_sha256": _COMPILE_DIGEST,
                     "branch_file": str(branch_file),
                     "branch_sha256": _BRANCH_DIGEST,
+                    "remove_hashes": _REMOVE_HASHES,
                 },
             ),
             metadata={
@@ -335,6 +337,7 @@ class ProgramBenchOfficialSingleResolver:
             "compile_sha256": _COMPILE_DIGEST,
             "branch_file": "verifier/run_branch.py",
             "branch_sha256": _BRANCH_DIGEST,
+            "remove_hashes": _REMOVE_HASHES,
         }:
             raise ContractError("ProgramBench official evaluator asset lock changed")
         if not isinstance(test_blobs, dict):

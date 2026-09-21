@@ -43,10 +43,16 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--stash", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
+    parser.add_argument("--remove-sha256", action="append", default=[])
     args = parser.parse_args()
 
     _clear(args.workspace)
     extract_workspace_archive(args.candidate, args.workspace)
+    remove_hashes = set(args.remove_sha256)
+    for candidate_file in args.workspace.rglob("*"):
+        if candidate_file.is_file() and not candidate_file.is_symlink():
+            if _digest(candidate_file) in remove_hashes:
+                candidate_file.unlink()
     stale = args.workspace / "executable"
     if stale.exists() or stale.is_symlink():
         if stale.is_dir() and not stale.is_symlink():

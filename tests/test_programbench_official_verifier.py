@@ -172,6 +172,8 @@ class OfficialBackend:
         tests = [{"name": name, "status": "passed"} for name in self.tests[branch]]
         if self.variant == "partial" and branch == sorted(self.tests)[0]:
             tests[0]["status"] = "failure"
+        if self.variant == "duplicate" and branch == sorted(self.tests)[0]:
+            tests = [dict(tests[0], status="failure"), *tests]
         artifact_dir.mkdir(parents=True, exist_ok=True)
         path = artifact_dir / "branch.json"
         path.write_text(
@@ -197,6 +199,7 @@ class OfficialBackend:
     ("variant", "verdict", "score", "run_count"),
     (
         ("gold", "passed", 1.0, 8),
+        ("duplicate", "passed", 1.0, 8),
         ("empty", "failed", 0.0, 2),
         ("partial", "failed", 280 / 281, 8),
     ),
@@ -233,6 +236,15 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
         assert all(plan.environment_id == f"derived-{variant}" for plan in branch_plans)
         assert len({ref.run_id for ref in backend.created}) == run_count
         assert all(plan.network_policy == "deny_all" for plan in branch_plans)
+        compile_plan = next(
+            plan
+            for plan in backend.plans.values()
+            if plan.labels.get("axrun.stage") == "verification-compile"
+        )
+        remove_index = compile_plan.argv.index("--remove-sha256")
+        assert compile_plan.argv[remove_index + 1] == (
+            "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"
+        )
 
 
 def test_official_multirun_resume_reuses_the_bound_branch_run(tmp_path: Path) -> None:

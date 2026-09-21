@@ -91,6 +91,12 @@ def main() -> int:
         if not run_script.is_file() or run_script.is_symlink():
             raise ValueError("branch run script missing")
         run_script.chmod(run_script.stat().st_mode | 0o100)
+        run_script.write_text(
+            run_script.read_text(encoding="utf-8").replace(
+                "--timeout-method=thread", "--timeout-method=signal"
+            ),
+            encoding="utf-8",
+        )
         environment = {**os.environ, "PYTEST_ADDOPTS": "--max-worker-restart=4"}
         subprocess.run(
             ["./eval/run.sh"],
