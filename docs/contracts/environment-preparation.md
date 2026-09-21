@@ -4,7 +4,7 @@ Environment preparation is an explicit, optional caller operation that turns one
 
 ## V1 scope
 
-`SeedBuildSpec v1` is closed to one digest-pinned `oci://` source, one mutable destination used only as the Kova publication target, one logical role, OCI output, and `linux/amd64`. The source URI digest must equal `source_digest`. The spec also fixes the preparation ID, recipe digest, Kova idempotency key, Axern namespace, working directory, and bounded non-sensitive labels. Unknown fields fail closed.
+`SeedBuildSpec v1` is closed to one digest-pinned `oci://` source, one mutable destination used only as the Kova publication target, one logical role, OCI output, and `linux/amd64`. The OCI source-manifest digest in `source_uri` and Kova's source-content `source_digest` are separate immutable facts; both are fixed and the latter is checked again in BuildResults. The spec also fixes the preparation ID, recipe digest, Kova idempotency key, Axern namespace, working directory, and bounded non-sensitive labels. Unknown fields fail closed.
 
 The canonical request digest commits the complete spec. Before calling Kova, the store atomically persists the spec, digest, stable idempotency key, and `build_submitting` state. Files are fsynced and renamed into place; the preparation lock protects only local transitions and is not held during remote waits.
 

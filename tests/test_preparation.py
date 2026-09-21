@@ -27,9 +27,10 @@ from axrun.preparation.service import EnvironmentPreparationService
 from axrun.preparation.store import PreparationStore, seed_build_spec_from_dict
 
 SOURCE_DIGEST = f"sha256:{'a' * 64}"
+SOURCE_MANIFEST_DIGEST = f"sha256:{'d' * 64}"
 RECIPE_DIGEST = f"sha256:{'b' * 64}"
 MANIFEST_DIGEST = f"sha256:{'c' * 64}"
-SOURCE_URI = f"oci://registry.invalid/seed-source@{SOURCE_DIGEST}"
+SOURCE_URI = f"oci://registry.invalid/seed-source@{SOURCE_MANIFEST_DIGEST}"
 DESTINATION = "registry.invalid/axrun/seed:qualification"
 IMMUTABLE_REF = f"registry.invalid/axrun/seed@{MANIFEST_DIGEST}"
 
@@ -218,7 +219,7 @@ def test_request_digest_is_canonical_and_commits_the_complete_spec() -> None:
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"source_uri": f"oci://registry.invalid/source@sha256:{'d' * 64}"}, "source_uri digest"),
+        ({"source_uri": "oci://registry.invalid/source:mutable"}, "digest-pinned OCI URI"),
         ({"platform": "linux/arm64"}, "only linux/amd64"),
         ({"format": "nydus"}, "only OCI"),
         ({"destination": "https://registry.invalid/image:tag"}, "mutable OCI target"),

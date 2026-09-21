@@ -60,8 +60,6 @@ class SeedBuildSpec:
         if parsed.username or parsed.password or not parsed.hostname:
             raise ContractError("source_uri must not contain credentials")
         _require_digest(self.source_digest, "source_digest")
-        if not self.source_uri.endswith("@" + self.source_digest):
-            raise ContractError("source_uri digest must equal source_digest")
         _require_digest(self.recipe_digest, "recipe_digest")
         if not _MUTABLE_TARGET.fullmatch(self.destination):
             raise ContractError("destination must be one credential-free mutable OCI target")
