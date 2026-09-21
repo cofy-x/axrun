@@ -82,6 +82,12 @@ def test_backend_creates_run_without_private_execution_identity(
     assert "node_id" not in client.kwargs and "runtime_id" not in client.kwargs
     assert client.kwargs["request_cpu"] == "500m"
     assert client.kwargs["limit_memory"] == "2Gi"
+    assert client.kwargs["argv"][:4] == [
+        "/bin/sh",
+        "-c",
+        'rm -f "$1"; while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"',
+        "axrun",
+    ]
     assert [value.run_id for value in bound] == ["run-1", "run-1"]
     assert bound[-1].allocation_id == "alloc-1"
     assert client.kwargs["rootfs_snapshot"] is False

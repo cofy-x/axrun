@@ -87,7 +87,10 @@ class AxernBackend:
     ) -> StageResult:
         sdk = _sdk_types()
         ready_marker = "/run/axrun/inputs-ready"
-        wrapper = 'while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
+        # A rootfs result can contain the marker written by its producer Run. Remove any
+        # inherited marker before waiting so a derived Environment cannot release a fresh
+        # Run before this caller has uploaded its inputs and completed pre-start lifecycle.
+        wrapper = 'rm -f "$1"; while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
         kwargs: dict[str, Any] = {
             "environment_id": plan.environment_id,
             "namespace": self.namespace,
