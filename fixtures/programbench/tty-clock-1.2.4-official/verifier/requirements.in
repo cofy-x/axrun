@@ -4,4 +4,9 @@ pytest-timeout==2.4.0
 pytest-xdist==3.8.0
 pytest-dependency==0.6.1
 pytest-rerunfailures==16.7
-libtmux==0.62.0
+libtmux==0.58.0
+# Preserve versions already present in the immutable official base.
+packaging==26.2
+pygments==2.20.0
+setuptools==82.0.1
+typing-extensions==4.15.0

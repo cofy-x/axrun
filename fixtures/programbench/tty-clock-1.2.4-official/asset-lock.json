@@ -30,7 +30,7 @@
     "branch_file": "verifier/run_branch.py",
     "branch_sha256": "e7f74cb2570d933bda71fc138d71586a21f75db8736c3fc90defecec2726395f",
     "dependency_lock_file": "verifier/requirements.lock",
-    "dependency_lock_sha256": "2a33f102d01693cbdb04d1301d07489331c6be0f4bd1f1a77e40c8ec1b158baf",
+    "dependency_lock_sha256": "9b14aaddb4cd53fe338a8bf4391b0eed12ea264c49a4c47e7b774d54735f4777",
     "docker_cpus": 10,
     "remove_hashes": [
       "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"

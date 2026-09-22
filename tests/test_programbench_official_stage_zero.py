@@ -75,7 +75,7 @@ def test_official_resolver_locks_complete_identity_and_denominator() -> None:
     dependency_lock = Path(episode.verifier.config["dependency_lock_file"])
     assert dependency_lock.name == "requirements.lock"
     assert episode.verifier.config["dependency_lock_sha256"] == (
-        "2a33f102d01693cbdb04d1301d07489331c6be0f4bd1f1a77e40c8ec1b158baf"
+        "9b14aaddb4cd53fe338a8bf4391b0eed12ea264c49a4c47e7b774d54735f4777"
     )
     assert episode.verifier.config["pytest_xdist_workers"] == 10
     assert episode.verification_resources.limit_cpu == "10"
