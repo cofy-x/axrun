@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from axrun.adapters.base import VerifierQualificationRequirements
 from axrun.backend import ExecutionBackend
+from axrun.datasets.programbench_official import official_case
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     Artifact,
@@ -30,8 +31,6 @@ from axrun.models import (
 )
 from axrun.verification import MultiRunVerificationCoordinator
 
-_INSTANCE = "xorg62__tty-clock.f2f847c"
-_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v4"
 _COMPILE_RESULT = "/outputs/programbench-compile.json"
 _BRANCH_RESULT = "/outputs/programbench-branch.json"
 _STASH = "/opt/axrun-programbench/candidate-executable"
@@ -261,7 +260,9 @@ class ProgramBenchOfficialVerifierAdapter:
         workspace = next((item for item in candidate.files if item.role == "workspace"), None)
         if workspace is None:
             raise ContractError("CandidateBundle does not contain workspace role")
-        tests = _load_tests(Path(cast(str, episode.verifier.config["tests_metadata_file"])))
+        tests = _load_tests(
+            Path(cast(str, episode.verifier.config["tests_metadata_file"])), episode
+        )
         branches = tuple(sorted(tests))
         contract_digest = self._contract_digest(episode, branches)
         execution_id = f"{episode.episode_id}-programbench"
@@ -306,6 +307,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 record.state = "aggregating"
                 store.save(record)
                 return self._finish_compile_failure(
+                    episode,
                     candidate,
                     record,
                     store,
@@ -415,7 +417,7 @@ class ProgramBenchOfficialVerifierAdapter:
         record.state = "aggregating"
         record.aggregation_state = "running"
         store.save(record)
-        details = _aggregate(record, tests)
+        details = _aggregate(record, tests, episode)
         path, digest = store.publish_details(details)
         record.details_path = str(path)
         record.details_digest = digest
@@ -460,6 +462,7 @@ class ProgramBenchOfficialVerifierAdapter:
 
     def _finish_compile_failure(
         self,
+        episode: ResolvedEpisode,
         candidate: CandidateBundle,
         record: _ExecutionRecord,
         store: _ExecutionStore,
@@ -470,9 +473,9 @@ class ProgramBenchOfficialVerifierAdapter:
         active_count = sum(len(value["active_tests"]) for value in tests.values())
         details: dict[str, Any] = {
             "schema_version": 1,
-            "instance_id": _INSTANCE,
+            "instance_id": episode.task_id,
             "candidate_digest": candidate.digest,
-            "evaluator_contract": _CONTRACT,
+            "evaluator_contract": episode.verifier.config["evaluator_contract"],
             "executable_sha256": "",
             "compile_error": record.compile.reason_code,
             "active_branch_count": len(tests),
@@ -650,7 +653,7 @@ class ProgramBenchOfficialVerifierAdapter:
             {
                 "identity": self.name,
                 "version": self.version,
-                "contract": _CONTRACT,
+                "contract": episode.verifier.config["evaluator_contract"],
                 "verification_image": episode.verification_environment.image,
                 "task": episode.task.config,
                 "branches": branches,
@@ -668,10 +671,8 @@ class ProgramBenchOfficialVerifierAdapter:
             raise ContractError(
                 "ProgramBench official verifier requires programbench-official-single@1"
             )
-        if (
-            episode.task_id != _INSTANCE
-            or episode.verifier.config.get("evaluator_contract") != _CONTRACT
-        ):
+        case = official_case(episode.task_id)
+        if episode.verifier.config.get("evaluator_contract") != case.evaluator_contract:
             raise ContractError("ProgramBench official verifier contract changed")
         if (episode.candidate.identity, episode.candidate.version) != ("workspace-archive", "1"):
             raise ContractError("ProgramBench official verifier requires workspace-archive@1")
@@ -697,10 +698,11 @@ class ProgramBenchOfficialVerifierAdapter:
         if (
             episode.verifier.config["pytest_xdist_workers"] != 10
             or episode.verification_resources.limit_cpu != "10"
+            or episode.verification_resources.limit_memory != case.limit_memory
         ):
             raise ContractError("ProgramBench official CPU contract changed")
         remove_hashes = episode.verifier.config["remove_hashes"]
-        if remove_hashes != ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]:
+        if remove_hashes != case.remove_hashes:
             raise ContractError("ProgramBench official submission-clean hash set changed")
 
 
@@ -715,7 +717,7 @@ def _step(raw: dict[str, Any]) -> _Step:
     )
 
 
-def _load_tests(path: Path) -> dict[str, dict[str, Any]]:
+def _load_tests(path: Path, episode: ResolvedEpisode) -> dict[str, dict[str, Any]]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     branches: dict[str, dict[str, Any]] = {}
     for name, value in cast(dict[str, dict[str, Any]], raw["branches"]).items():
@@ -727,7 +729,11 @@ def _load_tests(path: Path) -> dict[str, dict[str, Any]]:
             "active_tests": [item for item in tests if item not in ignored],
             "ignored_tests": sorted(ignored),
         }
-    if len(branches) != 6 or sum(len(item["active_tests"]) for item in branches.values()) != 281:
+    case = official_case(episode.task_id)
+    if (
+        set(branches) != set(case.branches)
+        or sum(len(item["active_tests"]) for item in branches.values()) != case.active_tests
+    ):
         raise ContractError("ProgramBench expected-test denominator changed")
     return branches
 
@@ -767,7 +773,9 @@ def _validate_branch_result(value: dict[str, Any], branch: str) -> None:
             raise ContractError("ProgramBench test result is invalid")
 
 
-def _aggregate(record: _ExecutionRecord, tests: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _aggregate(
+    record: _ExecutionRecord, tests: dict[str, dict[str, Any]], episode: ResolvedEpisode
+) -> dict[str, Any]:
     result_map: dict[str, dict[str, str]] = {}
     branch_errors: dict[str, list[dict[str, str]]] = {}
     for branch, expected in tests.items():
@@ -822,9 +830,9 @@ def _aggregate(record: _ExecutionRecord, tests: dict[str, dict[str, Any]]) -> di
     score = passed / len(results) if results else 0.0
     return {
         "schema_version": 1,
-        "instance_id": _INSTANCE,
+        "instance_id": episode.task_id,
         "candidate_digest": record.candidate_digest,
-        "evaluator_contract": _CONTRACT,
+        "evaluator_contract": episode.verifier.config["evaluator_contract"],
         "executable_sha256": record.executable_digest,
         "compile_error": "",
         "active_branch_count": len(tests),

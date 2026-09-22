@@ -1,10 +1,11 @@
-"""Closed resolver for one ProgramBench 1.2.4 official-instance vertical."""
+"""Closed resolver for explicitly qualified ProgramBench 1.2.4 instances."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -58,11 +59,64 @@ _DEPENDENCY_LOCK_DIGEST = "9b14aaddb4cd53fe338a8bf4391b0eed12ea264c49a4c47e7b774
 _REMOVE_HASHES = ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]
 
 
+@dataclass(frozen=True)
+class _Case:
+    version: str = _VERSION
+    instance: str = _INSTANCE
+    repository: str = _REPOSITORY
+    commit: str = _COMMIT
+    difficulty: str = _DIFFICULTY
+    image_tag: str = _IMAGE_TAG
+    image_digest: str = _IMAGE_DIGEST
+    image_reference: str = _IMAGE_REFERENCE
+    image_config_digest: str = _IMAGE_CONFIG_DIGEST
+    branches: dict[str, tuple[int, str]] = field(default_factory=lambda: _BRANCHES)
+    active_tests: int = _ACTIVE_TESTS
+    ignored_tests: int = _IGNORED_TESTS
+    evaluator_contract: str = _EVALUATOR_CONTRACT
+    test_manifest_digest: str = _TEST_MANIFEST_DIGEST
+    branch_digest: str = _BRANCH_DIGEST
+    remove_hashes: list[str] = field(default_factory=lambda: _REMOVE_HASHES)
+    limit_memory: str = ""
+
+
+_CASES = {
+    _INSTANCE: _Case(),
+    "lh3__seqtk.94e7070": _Case(
+        version="programbench-1.2.4-seqtk-94e7070-v1",
+        instance="lh3__seqtk.94e7070",
+        repository="lh3/seqtk",
+        commit="94e707082d39b0a038f234df676e32d9802c0dc7",
+        difficulty="",
+        image_tag="docker.io/programbench/lh3_1776_seqtk.94e7070:task_cleanroom_v6",
+        image_digest="sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0",
+        image_reference="docker.io/programbench/lh3_1776_seqtk.94e7070@sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0",
+        image_config_digest="sha256:742ff17f7c2fb045550e0545750ba44c698a9801bfffe0cdb13c9ad9610801ac",
+        branches={
+            "e592c32aec70": (
+                107995,
+                "3a9ba4e29bf1eed9cc80b8c8eab537af092fc0b559f8f05eac326b8f5a7943a0",
+            ),
+            "5d974fdda794": (
+                73593,
+                "b908e8eda5bdbb72b338c20a80ec7f18a086a92ee4f5e34a56b72303cb650d11",
+            ),
+        },
+        active_tests=429,
+        ignored_tests=11,
+        evaluator_contract="programbench-1.2.4-axrun-seqtk-v1",
+        test_manifest_digest="eecad6f24e3a09b3bcee6ed88ae45867f6aa929e05f9987c7d93dea25b29459e",
+        branch_digest="1d17a75ccf55eb253679a5b83858bebcee0f233f810dd4e324c5efec25ad5037",
+        remove_hashes=[],
+        limit_memory="8GiB",
+    ),
+}
+
+
 class ProgramBenchOfficialSingleResolver:
-    """Resolve only the immutable tty-clock contract and its locked evaluator assets."""
+    """Resolve one of the explicitly locked official cases, without mutable resolver state."""
 
     identity = _IDENTITY
-    version = _VERSION
 
     def resolve(
         self,
@@ -74,10 +128,55 @@ class ProgramBenchOfficialSingleResolver:
         verification_environment_id: str,
         harness: HarnessSpec,
         verification_image: str,
-        runtime_image: str = _IMAGE_REFERENCE,
+        runtime_image: str | None = None,
         test_assets_dir: Path | None = None,
         static_candidate_dir: Path | None = None,
     ) -> ResolvedEpisode:
+        case = official_case(str(row.get("instance_id", "")))
+        return _LockedResolver(case).resolve(
+            row,
+            source_dir=source_dir,
+            episode_id=episode_id,
+            inference_environment_id=inference_environment_id,
+            verification_environment_id=verification_environment_id,
+            harness=harness,
+            verification_image=verification_image,
+            runtime_image=runtime_image,
+            test_assets_dir=test_assets_dir,
+            static_candidate_dir=static_candidate_dir,
+        )
+
+
+def official_case(instance_id: str) -> _Case:
+    case = _CASES.get(instance_id)
+    if case is None:
+        raise ContractError("ProgramBench official instance is unsupported")
+    return case
+
+
+class _LockedResolver:
+    """Resolve an immutable case contract and its locked evaluator assets."""
+
+    identity = _IDENTITY
+
+    def __init__(self, case: _Case) -> None:
+        self.case = case
+
+    def resolve(
+        self,
+        row: dict[str, Any],
+        *,
+        source_dir: Path,
+        episode_id: str,
+        inference_environment_id: str,
+        verification_environment_id: str,
+        harness: HarnessSpec,
+        verification_image: str,
+        runtime_image: str | None = None,
+        test_assets_dir: Path | None = None,
+        static_candidate_dir: Path | None = None,
+    ) -> ResolvedEpisode:
+        runtime_image = runtime_image or self.case.image_reference
         expected = {
             "schema_version",
             "dataset_identity",
@@ -107,14 +206,14 @@ class ProgramBenchOfficialSingleResolver:
         fixed: dict[str, object] = {
             "schema_version": 1,
             "dataset_identity": self.identity,
-            "dataset_version": self.version,
+            "dataset_version": self.case.version,
             "programbench_version": _PROGRAMBENCH_VERSION,
             "programbench_git_sha": _PROGRAMBENCH_GIT_SHA,
-            "instance_id": _INSTANCE,
-            "repository": _REPOSITORY,
-            "commit": _COMMIT,
+            "instance_id": self.case.instance,
+            "repository": self.case.repository,
+            "commit": self.case.commit,
             "language": _LANGUAGE,
-            "difficulty": _DIFFICULTY,
+            "difficulty": self.case.difficulty,
             "required_verification_capability": _CAPABILITY,
         }
         for key, value in fixed.items():
@@ -122,11 +221,14 @@ class ProgramBenchOfficialSingleResolver:
                 raise ContractError(f"ProgramBench official field {key} is unsupported")
         self._validate_image(row["image"])
         self._validate_test_assets(row["test_assets"])
-        if not runtime_image.endswith(f"@{_IMAGE_DIGEST}") or runtime_image.count("@") != 1:
+        if (
+            not runtime_image.endswith(f"@{self.case.image_digest}")
+            or runtime_image.count("@") != 1
+        ):
             raise ContractError("ProgramBench official runtime image must use the locked digest")
         if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", verification_image):
             raise ContractError("ProgramBench verification image requires an immutable digest")
-        if verification_image.endswith(f"@{_IMAGE_DIGEST}"):
+        if verification_image.endswith(f"@{self.case.image_digest}"):
             raise ContractError("official base image is not dependency-closed for verification")
         if row["candidate"] != {
             "identity": "workspace-archive",
@@ -146,7 +248,7 @@ class ProgramBenchOfficialSingleResolver:
         dependency_lock = root / "verifier" / _DEPENDENCY_LOCK
         if (
             _sha256(compile_file) != _COMPILE_DIGEST
-            or _sha256(branch_file) != _BRANCH_DIGEST
+            or _sha256(branch_file) != self.case.branch_digest
             or _sha256(dependency_lock) != _DEPENDENCY_LOCK_DIGEST
         ):
             raise ContractError("ProgramBench official evaluator asset digest mismatch")
@@ -178,23 +280,23 @@ class ProgramBenchOfficialSingleResolver:
                 source_manifest_digest=canonical_digest(manifest),
             )
         task_config: dict[str, Any] = {
-            "instance_id": _INSTANCE,
-            "repository": _REPOSITORY,
-            "commit": _COMMIT,
+            "instance_id": self.case.instance,
+            "repository": self.case.repository,
+            "commit": self.case.commit,
             "language": _LANGUAGE,
-            "difficulty": _DIFFICULTY,
+            "difficulty": self.case.difficulty,
             "programbench_version": _PROGRAMBENCH_VERSION,
             "programbench_git_sha": _PROGRAMBENCH_GIT_SHA,
-            "official_image_digest": _IMAGE_DIGEST,
+            "official_image_digest": self.case.image_digest,
             "test_blob_revision": _HF_REVISION,
-            "active_branch_count": len(_BRANCHES),
-            "active_test_count": _ACTIVE_TESTS,
-            "ignored_test_count": _IGNORED_TESTS,
+            "active_branch_count": len(self.case.branches),
+            "active_test_count": self.case.active_tests,
+            "ignored_test_count": self.case.ignored_tests,
         }
         return ResolvedEpisode(
             schema_version=1,
             episode_id=episode_id,
-            task_id=_INSTANCE,
+            task_id=self.case.instance,
             seed_digest=canonical_digest(row),
             prompt_file=str(prompt),
             task=TaskSpec("programbench-official-single", "1", task_config),
@@ -214,22 +316,24 @@ class ProgramBenchOfficialSingleResolver:
                     "tests_metadata_file": str(tests_path),
                     "required_public_capability": _CAPABILITY,
                     "test_assets_dir": str(asset_directory),
-                    "evaluator_contract": _EVALUATOR_CONTRACT,
+                    "evaluator_contract": self.case.evaluator_contract,
                     "compile_file": str(compile_file),
                     "compile_sha256": _COMPILE_DIGEST,
                     "branch_file": str(branch_file),
-                    "branch_sha256": _BRANCH_DIGEST,
+                    "branch_sha256": self.case.branch_digest,
                     "dependency_lock_file": str(dependency_lock),
                     "dependency_lock_sha256": _DEPENDENCY_LOCK_DIGEST,
                     "pytest_xdist_workers": _DOCKER_CPUS,
-                    "remove_hashes": _REMOVE_HASHES,
+                    "remove_hashes": self.case.remove_hashes,
                 },
             ),
-            verification_resources=ResourceSpec(limit_cpu=str(_DOCKER_CPUS)),
+            verification_resources=ResourceSpec(
+                limit_cpu=str(_DOCKER_CPUS), limit_memory=self.case.limit_memory
+            ),
             metadata={
                 "dataset_identity": self.identity,
-                "dataset_version": self.version,
-                "programbench_instance": _INSTANCE,
+                "dataset_version": self.case.version,
+                "programbench_instance": self.case.instance,
                 "programbench_official_instance": "true",
                 "programbench_validation_scope": "official-single-instance",
             },
@@ -246,37 +350,34 @@ class ProgramBenchOfficialSingleResolver:
             "or claude-code@2.1.205"
         )
 
-    @staticmethod
-    def _validate_image(value: object) -> None:
+    def _validate_image(self, value: object) -> None:
         expected = {
-            "source_tag": _IMAGE_TAG,
+            "source_tag": self.case.image_tag,
             "platform": _PLATFORM,
-            "platform_reference": _IMAGE_REFERENCE,
-            "platform_digest": _IMAGE_DIGEST,
-            "config_digest": _IMAGE_CONFIG_DIGEST,
+            "platform_reference": self.case.image_reference,
+            "platform_digest": self.case.image_digest,
+            "config_digest": self.case.image_config_digest,
         }
         if value != expected:
             raise ContractError("ProgramBench official image lock is unsupported")
 
-    @staticmethod
-    def _validate_test_assets(value: object) -> None:
+    def _validate_test_assets(self, value: object) -> None:
         expected = {
             "repository": _HF_REPOSITORY,
             "revision": _HF_REVISION,
-            "branch_count": len(_BRANCHES),
-            "active_test_count": _ACTIVE_TESTS,
-            "ignored_test_count": _IGNORED_TESTS,
-            "manifest_sha256": _TEST_MANIFEST_DIGEST,
+            "branch_count": len(self.case.branches),
+            "active_test_count": self.case.active_tests,
+            "ignored_test_count": self.case.ignored_tests,
+            "manifest_sha256": self.case.test_manifest_digest,
         }
         if value != expected:
             raise ContractError("ProgramBench official test asset lock is unsupported")
 
-    @staticmethod
-    def _validate_tests(value: dict[str, Any]) -> None:
+    def _validate_tests(self, value: dict[str, Any]) -> None:
         if set(value) != {"branches"} or not isinstance(value["branches"], dict):
             raise ContractError("ProgramBench official tests metadata has an invalid shape")
         branches = cast(dict[str, object], value["branches"])
-        if set(branches) != set(_BRANCHES):
+        if set(branches) != set(self.case.branches):
             raise ContractError("ProgramBench official test branches do not match the lock")
         active_count = 0
         ignored_count = 0
@@ -309,11 +410,10 @@ class ProgramBenchOfficialSingleResolver:
                 raise ContractError("ProgramBench official ignored test is not expected")
             ignored_count += len(ignored_names)
             active_count += len(tests) - len(ignored_names)
-        if (active_count, ignored_count) != (_ACTIVE_TESTS, _IGNORED_TESTS):
+        if (active_count, ignored_count) != (self.case.active_tests, self.case.ignored_tests):
             raise ContractError("ProgramBench official test denominator changed")
 
-    @staticmethod
-    def _validate_lock(value: dict[str, Any]) -> None:
+    def _validate_lock(self, value: dict[str, Any]) -> None:
         try:
             programbench = value["programbench"]
             instance = value["instance"]
@@ -339,25 +439,25 @@ class ProgramBenchOfficialSingleResolver:
         if not isinstance(instance, dict):
             raise ContractError("ProgramBench official instance lock changed")
         instance_data = cast(dict[str, object], instance)
-        if instance_data.get("instance_id") != _INSTANCE:
+        if instance_data.get("instance_id") != self.case.instance:
             raise ContractError("ProgramBench official instance lock changed")
         if image != {
-            "source": _IMAGE_TAG,
+            "source": self.case.image_tag,
             "platform": _PLATFORM,
-            "platform_digest": _IMAGE_DIGEST,
-            "config_digest": _IMAGE_CONFIG_DIGEST,
+            "platform_digest": self.case.image_digest,
+            "config_digest": self.case.image_config_digest,
         }:
             raise ContractError("ProgramBench official image asset lock changed")
         if evaluator != {
-            "contract_version": _EVALUATOR_CONTRACT,
+            "contract_version": self.case.evaluator_contract,
             "compile_file": "verifier/compile_candidate.py",
             "compile_sha256": _COMPILE_DIGEST,
             "branch_file": "verifier/run_branch.py",
-            "branch_sha256": _BRANCH_DIGEST,
+            "branch_sha256": self.case.branch_digest,
             "dependency_lock_file": f"verifier/{_DEPENDENCY_LOCK}",
             "dependency_lock_sha256": _DEPENDENCY_LOCK_DIGEST,
             "docker_cpus": _DOCKER_CPUS,
-            "remove_hashes": _REMOVE_HASHES,
+            "remove_hashes": self.case.remove_hashes,
         }:
             raise ContractError("ProgramBench official evaluator asset lock changed")
         if not isinstance(test_blobs, dict):
@@ -371,12 +471,12 @@ class ProgramBenchOfficialSingleResolver:
         if not isinstance(raw_branches, dict):
             raise ContractError("ProgramBench official blob branches changed")
         branch_items = cast(dict[object, object], raw_branches)
-        if set(branch_items) != set(_BRANCHES):
+        if set(branch_items) != set(self.case.branches):
             raise ContractError("ProgramBench official blob branches changed")
         branch_data = cast(dict[str, object], raw_branches)
-        for branch, (size, digest) in _BRANCHES.items():
+        for branch, (size, digest) in self.case.branches.items():
             if branch_data[branch] != {
-                "path": f"{_INSTANCE}/tests/{branch}.tar.gz",
+                "path": f"{self.case.instance}/tests/{branch}.tar.gz",
                 "size_bytes": size,
                 "sha256": digest,
             }:

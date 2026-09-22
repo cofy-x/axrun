@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "dataset_identity": "programbench.official-single",
+  "dataset_version": "programbench-1.2.4-seqtk-94e7070-v1",
+  "programbench_version": "1.2.4",
+  "programbench_git_sha": "963063c9271cc40fa179977356782ea4582e0b0c",
+  "instance_id": "lh3__seqtk.94e7070",
+  "repository": "lh3/seqtk",
+  "commit": "94e707082d39b0a038f234df676e32d9802c0dc7",
+  "language": "c",
+  "difficulty": "",
+  "prompt_file": "problem.md",
+  "prompt_sha256": "6df077de37c31e05f57288d1c1b538e9313cb1fb8d22f09840c59fde98154ebf",
+  "task_metadata_file": "task.yaml",
+  "task_metadata_sha256": "16877148ab7e5ceea607b832eef90b7fa4b807c37f993156389fd35771411b38",
+  "tests_metadata_file": "tests.json",
+  "tests_metadata_sha256": "0655f1857c90527d5cab3356f7f1f46399f01c8a3cc62a6243f81edf5e6e3879",
+  "asset_lock_file": "asset-lock.json",
+  "asset_lock_sha256": "5a25bac60e83b7cb4c8af39b3b71a40ee2d77c59d3de278cbce22d64884aa167",
+  "image": {
+    "source_tag": "docker.io/programbench/lh3_1776_seqtk.94e7070:task_cleanroom_v6",
+    "platform": "linux/amd64",
+    "platform_reference": "docker.io/programbench/lh3_1776_seqtk.94e7070@sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0",
+    "platform_digest": "sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0",
+    "config_digest": "sha256:742ff17f7c2fb045550e0545750ba44c698a9801bfffe0cdb13c9ad9610801ac"
+  },
+  "test_assets": {
+    "repository": "programbench/ProgramBench-Tests",
+    "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5",
+    "branch_count": 2,
+    "active_test_count": 429,
+    "ignored_test_count": 11,
+    "manifest_sha256": "eecad6f24e3a09b3bcee6ed88ae45867f6aa929e05f9987c7d93dea25b29459e"
+  },
+  "candidate": {
+    "identity": "workspace-archive",
+    "version": "1",
+    "exclude_paths": [
+      "executable"
+    ]
+  },
+  "required_verification_capability": "post-compile-allocation-snapshot-v1"
+}

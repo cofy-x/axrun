@@ -24,8 +24,8 @@ from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 
 
-def _fixture() -> Path:
-    return Path(__file__).parents[1] / "fixtures" / "programbench" / "tty-clock-1.2.4-official"
+def _fixture(case: str = "tty-clock") -> Path:
+    return Path(__file__).parents[1] / "fixtures" / "programbench" / f"{case}-1.2.4-official"
 
 
 def _sha256(path: Path) -> str:
@@ -36,10 +36,10 @@ def _artifact(name: str, path: Path) -> Artifact:
     return Artifact(name, str(path), path.stat().st_size, _sha256(path), "application/json")
 
 
-def _episode(tmp_path: Path, variant: str):
-    row = cast(dict[str, Any], json.loads((_fixture() / "row.json").read_text()))
+def _episode(tmp_path: Path, variant: str, case: str = "tty-clock"):
+    row = cast(dict[str, Any], json.loads((_fixture(case) / "row.json").read_text()))
     assets = tmp_path / "assets"
-    lock = cast(dict[str, Any], json.loads((_fixture() / "asset-lock.json").read_text()))
+    lock = cast(dict[str, Any], json.loads((_fixture(case) / "asset-lock.json").read_text()))
     for branch, value in lock["test_blobs"]["branches"].items():
         path = assets / value["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def _episode(tmp_path: Path, variant: str):
     lock_path.write_text(json.dumps(lock))
     episode = ProgramBenchOfficialSingleResolver().resolve(
         row,
-        source_dir=_fixture(),
+        source_dir=_fixture(case),
         episode_id=f"programbench-official-{variant}",
         inference_environment_id="official-inference",
         verification_environment_id="official-verification",
@@ -65,7 +65,9 @@ def _episode(tmp_path: Path, variant: str):
 
 
 class OfficialBackend:
-    def __init__(self, *, variant: str, interrupt_branch_once: bool = False) -> None:
+    def __init__(
+        self, *, variant: str, interrupt_branch_once: bool = False, case: str = "tty-clock"
+    ) -> None:
         self.variant = variant
         self.interrupt_branch_once = interrupt_branch_once
         self.interrupted = False
@@ -73,7 +75,7 @@ class OfficialBackend:
         self.cancelled: list[str] = []
         self.deleted_environments: list[str] = []
         self.plans: dict[str, StagePlan] = {}
-        raw = json.loads((_fixture() / "tests.json").read_text())
+        raw = json.loads((_fixture(case) / "tests.json").read_text())
         self.tests = {
             branch: list(value["tests"])
             for branch, value in raw["branches"].items()

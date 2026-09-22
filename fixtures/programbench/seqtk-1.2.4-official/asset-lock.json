@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "programbench": {
+    "package_version": "1.2.4",
+    "git_sha": "963063c9271cc40fa179977356782ea4582e0b0c"
+  },
+  "instance": {
+    "instance_id": "lh3__seqtk.94e7070",
+    "repository": "lh3/seqtk",
+    "commit": "94e707082d39b0a038f234df676e32d9802c0dc7",
+    "language": "c",
+    "difficulty": "",
+    "task_yaml_sha256": "16877148ab7e5ceea607b832eef90b7fa4b807c37f993156389fd35771411b38",
+    "tests_json_sha256": "0655f1857c90527d5cab3356f7f1f46399f01c8a3cc62a6243f81edf5e6e3879",
+    "active_branch_count": 2,
+    "ignored_branch_count": 0,
+    "active_test_count": 429,
+    "ignored_test_count": 11
+  },
+  "image": {
+    "source": "docker.io/programbench/lh3_1776_seqtk.94e7070:task_cleanroom_v6",
+    "platform": "linux/amd64",
+    "platform_digest": "sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0",
+    "config_digest": "sha256:742ff17f7c2fb045550e0545750ba44c698a9801bfffe0cdb13c9ad9610801ac"
+  },
+  "evaluator": {
+    "contract_version": "programbench-1.2.4-axrun-seqtk-v1",
+    "compile_file": "verifier/compile_candidate.py",
+    "compile_sha256": "e0601e72ec6f3d1ebad21c1a72835ed0a511a03048b0b424d573071b634b8c88",
+    "branch_file": "verifier/run_branch.py",
+    "branch_sha256": "1d17a75ccf55eb253679a5b83858bebcee0f233f810dd4e324c5efec25ad5037",
+    "dependency_lock_file": "verifier/requirements.lock",
+    "dependency_lock_sha256": "9b14aaddb4cd53fe338a8bf4391b0eed12ea264c49a4c47e7b774d54735f4777",
+    "docker_cpus": 10,
+    "remove_hashes": []
+  },
+  "test_blobs": {
+    "repository": "programbench/ProgramBench-Tests",
+    "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5",
+    "branches": {
+      "e592c32aec70": {
+        "path": "lh3__seqtk.94e7070/tests/e592c32aec70.tar.gz",
+        "size_bytes": 107995,
+        "sha256": "3a9ba4e29bf1eed9cc80b8c8eab537af092fc0b559f8f05eac326b8f5a7943a0"
+      },
+      "5d974fdda794": {
+        "path": "lh3__seqtk.94e7070/tests/5d974fdda794.tar.gz",
+        "size_bytes": 73593,
+        "sha256": "b908e8eda5bdbb72b338c20a80ec7f18a086a92ee4f5e34a56b72303cb650d11"
+      }
+    }
+  }
+}
