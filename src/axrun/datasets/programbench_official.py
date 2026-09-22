@@ -77,7 +77,6 @@ class _Case:
     test_manifest_digest: str = _TEST_MANIFEST_DIGEST
     branch_digest: str = _BRANCH_DIGEST
     remove_hashes: list[str] = field(default_factory=lambda: _REMOVE_HASHES)
-    limit_memory: str = ""
 
     def task_config(self) -> dict[str, Any]:
         return {
@@ -124,7 +123,6 @@ _CASES = {
         test_manifest_digest="eecad6f24e3a09b3bcee6ed88ae45867f6aa929e05f9987c7d93dea25b29459e",
         branch_digest="1d17a75ccf55eb253679a5b83858bebcee0f233f810dd4e324c5efec25ad5037",
         remove_hashes=[],
-        limit_memory="8GiB",
     ),
 }
 
@@ -330,9 +328,7 @@ class _LockedResolver:
                     "remove_hashes": self.case.remove_hashes,
                 },
             ),
-            verification_resources=ResourceSpec(
-                limit_cpu=str(_DOCKER_CPUS), limit_memory=self.case.limit_memory
-            ),
+            verification_resources=ResourceSpec(limit_cpu=str(_DOCKER_CPUS)),
             metadata={
                 "dataset_identity": self.identity,
                 "dataset_version": self.case.version,

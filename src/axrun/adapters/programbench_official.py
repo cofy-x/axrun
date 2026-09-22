@@ -698,7 +698,6 @@ class ProgramBenchOfficialVerifierAdapter:
         if (
             episode.verifier.config["pytest_xdist_workers"] != 10
             or episode.verification_resources.limit_cpu != "10"
-            or episode.verification_resources.limit_memory != case.limit_memory
         ):
             raise ContractError("ProgramBench official CPU contract changed")
         remove_hashes = episode.verifier.config["remove_hashes"]

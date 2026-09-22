@@ -12,6 +12,8 @@ from axrun.store import EpisodeStore
 @pytest.mark.parametrize("variant", ["gold", "empty", "partial", "missing-dependency"])
 def test_seqtk_uses_existing_compile_snapshot_branch_and_cleanup_contract(tmp_path, variant):
     episode = _episode(tmp_path, variant, "seqtk")
+    # Official ProgramBench fixes CPU concurrency, not a memory hard-limit capability.
+    assert episode.verification_resources.limit_memory == ""
     selection = resolve_adapters(episode)
     for role in ("inference", "verification"):
         assert selection.task.qualification_requirements(episode, role).mode == "prepared_contains"
