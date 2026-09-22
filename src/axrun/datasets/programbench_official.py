@@ -325,7 +325,7 @@ class _LockedResolver:
                     "dependency_lock_file": str(dependency_lock),
                     "dependency_lock_sha256": _DEPENDENCY_LOCK_DIGEST,
                     "pytest_xdist_workers": _DOCKER_CPUS,
-                    "remove_hashes": self.case.remove_hashes,
+                    "remove_hashes": list(self.case.remove_hashes),
                 },
             ),
             verification_resources=ResourceSpec(limit_cpu=str(_DOCKER_CPUS)),

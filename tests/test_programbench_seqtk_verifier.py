@@ -39,3 +39,10 @@ def test_seqtk_uses_existing_compile_snapshot_branch_and_cleanup_contract(tmp_pa
         assert value["evaluator_contract"] == "programbench-1.2.4-axrun-seqtk-v1"
         assert len(backend.created) == (2 if variant == "empty" else 4)
     assert backend.deleted_environments == ([] if variant == "empty" else [f"derived-{variant}"])
+
+
+def test_resolved_configuration_cannot_mutate_the_locked_case(tmp_path):
+    episode = _episode(tmp_path, "gold", "seqtk")
+    episode.verifier.config["remove_hashes"].append("a" * 64)
+    fresh = _episode(tmp_path, "gold", "seqtk")
+    assert fresh.verifier.config["remove_hashes"] == []

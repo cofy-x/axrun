@@ -9,7 +9,7 @@ from axern_sdk import AxernClient, SandboxNotFoundError
 
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
-from axrun.errors import ContractError
+from axrun.errors import ContractError, InfrastructureError
 from axrun.models import ExecutionRef, OutputSpec, ResourceSpec, StagePlan
 
 
@@ -136,6 +136,49 @@ def test_derived_environment_cleanup_is_idempotent() -> None:
     backend.delete_environment("derived-env")
     backend.delete_environment("derived-env")
     assert client.calls == 2
+
+
+@pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize("exit_code", [23, 130])
+def test_unsuccessful_workload_never_requests_a_usable_rootfs(
+    tmp_path: Path, monkeypatch, recover, exit_code
+) -> None:
+    execution = ExecutionRef("base-env", "run-compile", "alloc-compile")
+    stage = SimpleNamespace(execution=execution, exit_code=exit_code)
+
+    class Client:
+        def wait_rootfs_snapshot(self, *_args, **_kwargs):
+            raise AssertionError("failed workload must not wait for or accept a derived image")
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(backend, "recover" if recover else "_execute", lambda *a, **k: stage)
+    plan = StagePlan("base-env", ("false",), "/workspace", ())
+    if recover:
+        result = backend.recover_rootfs(execution, plan, artifact_dir=tmp_path)
+    else:
+        result = backend.execute_rootfs(plan, artifact_dir=tmp_path, on_bound=lambda ref: None)
+    assert result == (stage, "")
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_sealing_failure_after_success_is_infrastructure_failure(
+    tmp_path: Path, monkeypatch, recover
+) -> None:
+    execution = ExecutionRef("base-env", "run-compile", "alloc-compile")
+    stage = SimpleNamespace(execution=execution, exit_code=0)
+
+    class Client:
+        def wait_rootfs_snapshot(self, *_args, **_kwargs):
+            raise RuntimeError("registry sealing failed")
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(backend, "recover" if recover else "_execute", lambda *a, **k: stage)
+    plan = StagePlan("base-env", ("true",), "/workspace", ())
+    with pytest.raises(InfrastructureError, match="rootfs result did not become ready"):
+        if recover:
+            backend.recover_rootfs(execution, plan, artifact_dir=tmp_path)
+        else:
+            backend.execute_rootfs(plan, artifact_dir=tmp_path, on_bound=lambda ref: None)
 
 
 def test_output_capture_has_per_stream_bound(tmp_path: Path) -> None:
