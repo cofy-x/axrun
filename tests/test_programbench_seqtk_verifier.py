@@ -13,6 +13,8 @@ from axrun.store import EpisodeStore
 def test_seqtk_uses_existing_compile_snapshot_branch_and_cleanup_contract(tmp_path, variant):
     episode = _episode(tmp_path, variant, "seqtk")
     selection = resolve_adapters(episode)
+    for role in ("inference", "verification"):
+        assert selection.task.qualification_requirements(episode, role).mode == "prepared_contains"
     backend = OfficialBackend(variant=variant, case="seqtk")
     store = EpisodeStore(tmp_path / "state")
     runner = EpisodeRunner(backend=backend, store=store)

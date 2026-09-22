@@ -79,6 +79,22 @@ class _Case:
     remove_hashes: list[str] = field(default_factory=lambda: _REMOVE_HASHES)
     limit_memory: str = ""
 
+    def task_config(self) -> dict[str, Any]:
+        return {
+            "instance_id": self.instance,
+            "repository": self.repository,
+            "commit": self.commit,
+            "language": _LANGUAGE,
+            "difficulty": self.difficulty,
+            "programbench_version": _PROGRAMBENCH_VERSION,
+            "programbench_git_sha": _PROGRAMBENCH_GIT_SHA,
+            "official_image_digest": self.image_digest,
+            "test_blob_revision": _HF_REVISION,
+            "active_branch_count": len(self.branches),
+            "active_test_count": self.active_tests,
+            "ignored_test_count": self.ignored_tests,
+        }
+
 
 _CASES = {
     _INSTANCE: _Case(),
@@ -279,20 +295,7 @@ class _LockedResolver:
                 source_mode="overlay",
                 source_manifest_digest=canonical_digest(manifest),
             )
-        task_config: dict[str, Any] = {
-            "instance_id": self.case.instance,
-            "repository": self.case.repository,
-            "commit": self.case.commit,
-            "language": _LANGUAGE,
-            "difficulty": self.case.difficulty,
-            "programbench_version": _PROGRAMBENCH_VERSION,
-            "programbench_git_sha": _PROGRAMBENCH_GIT_SHA,
-            "official_image_digest": self.case.image_digest,
-            "test_blob_revision": _HF_REVISION,
-            "active_branch_count": len(self.case.branches),
-            "active_test_count": self.case.active_tests,
-            "ignored_test_count": self.case.ignored_tests,
-        }
+        task_config = self.case.task_config()
         return ResolvedEpisode(
             schema_version=1,
             episode_id=episode_id,
