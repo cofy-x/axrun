@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "dataset_identity": "programbench.official-single",
-  "dataset_version": "programbench-1.2.4-tty-clock-f2f847c-v3",
+  "dataset_version": "programbench-1.2.4-tty-clock-f2f847c-v4",
   "programbench_version": "1.2.4",
   "programbench_git_sha": "963063c9271cc40fa179977356782ea4582e0b0c",
   "instance_id": "xorg62__tty-clock.f2f847c",
@@ -16,7 +16,7 @@
   "tests_metadata_file": "tests.json",
   "tests_metadata_sha256": "ec1760221921b7614f2c85215b8739203093c1faee45dad70ec6f9d55f8017d6",
   "asset_lock_file": "asset-lock.json",
-  "asset_lock_sha256": "25492e3e109c8f8432e25b8f8a9516c12f96d4da38d39a20eda5f574601beccd",
+  "asset_lock_sha256": "74555a5bcbcb819d7fed003a86c7b38aa71f0072743df9d76ff0b735092de49e",
   "image": {
     "source_tag": "docker.io/programbench/xorg62_1776_tty-clock.f2f847c:task_cleanroom_v6",
     "platform": "linux/amd64",

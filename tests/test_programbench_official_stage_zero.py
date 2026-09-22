@@ -31,6 +31,7 @@ def _episode():
         episode_id="programbench-tty-clock-stage-zero",
         inference_environment_id="programbench-tty-clock-inference",
         verification_environment_id="programbench-tty-clock-verification",
+        verification_image="registry.invalid/evaluator@sha256:" + "a" * 64,
         harness=HarnessSpec("static-candidate", "1"),
     )
 
@@ -61,7 +62,7 @@ def test_official_resolver_locks_complete_identity_and_denominator() -> None:
         "sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272"
     )
     assert episode.inference_environment.image == expected_image
-    assert episode.verification_environment.image == expected_image
+    assert episode.verification_environment.image == "registry.invalid/evaluator@sha256:" + "a" * 64
     assert episode.inference_environment.platform == "linux/amd64"
     assert episode.verification_environment.platform == "linux/amd64"
     assert episode.inference_environment.environment_id != (
@@ -71,10 +72,10 @@ def test_official_resolver_locks_complete_identity_and_denominator() -> None:
     assert episode.verifier.config["required_public_capability"] == (
         "post-compile-allocation-snapshot-v1"
     )
-    rerun_wheel = Path(episode.verifier.config["rerun_wheel_file"])
-    assert rerun_wheel.name == "pytest_rerunfailures-16.7-py3-none-any.whl"
-    assert episode.verifier.config["rerun_wheel_sha256"] == (
-        "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
+    dependency_lock = Path(episode.verifier.config["dependency_lock_file"])
+    assert dependency_lock.name == "requirements.lock"
+    assert episode.verifier.config["dependency_lock_sha256"] == (
+        "2a33f102d01693cbdb04d1301d07489331c6be0f4bd1f1a77e40c8ec1b158baf"
     )
     assert episode.verifier.config["pytest_xdist_workers"] == 10
     assert episode.verification_resources.limit_cpu == "10"
@@ -93,6 +94,7 @@ def test_official_resolver_rejects_shape_asset_and_identity_drift(tmp_path: Path
             episode_id="shape-drift",
             inference_environment_id="inference",
             verification_environment_id="verification",
+            verification_image="registry.invalid/evaluator@sha256:" + "a" * 64,
             harness=HarnessSpec("static-candidate", "1"),
         )
 
@@ -105,6 +107,7 @@ def test_official_resolver_rejects_shape_asset_and_identity_drift(tmp_path: Path
             episode_id="image-drift",
             inference_environment_id="inference",
             verification_environment_id="verification",
+            verification_image="registry.invalid/evaluator@sha256:" + "a" * 64,
             harness=HarnessSpec("static-candidate", "1"),
         )
 
@@ -123,6 +126,7 @@ def test_official_resolver_rejects_shape_asset_and_identity_drift(tmp_path: Path
             episode_id="tests-drift",
             inference_environment_id="inference",
             verification_environment_id="verification",
+            verification_image="registry.invalid/evaluator@sha256:" + "a" * 64,
             harness=HarnessSpec("static-candidate", "1"),
         )
 

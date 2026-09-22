@@ -273,6 +273,7 @@ def _parser() -> argparse.ArgumentParser:
     programbench_official.add_argument("--test-assets-dir", type=Path, required=True)
     programbench_official.add_argument("--static-candidate-directory", type=Path)
     programbench_official.add_argument("--runtime-image", required=True)
+    programbench_official.add_argument("--verification-image", required=True)
     programbench_official.add_argument("--inference-environment", required=True)
     programbench_official.add_argument("--verification-environment", required=True)
     programbench_official.add_argument("--output", type=Path, required=True)
@@ -553,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                 verification_environment_id=args.verification_environment,
                 harness=harness,
                 runtime_image=args.runtime_image,
+                verification_image=args.verification_image,
                 test_assets_dir=args.test_assets_dir,
                 static_candidate_dir=args.static_candidate_directory,
             )

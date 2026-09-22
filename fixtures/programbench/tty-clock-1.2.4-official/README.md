@@ -17,7 +17,6 @@ same derived Environment. Result aggregation preserves ProgramBench 1.2.4's igno
 missing-test, duplicate-test and scoring semantics. This remains a single-instance contract rather
 than general ProgramBench or leaderboard support.
 
-ProgramBench's official evaluator installs `pytest-rerunfailures` from an unpinned network source
-after compilation. This fixture closes that reproducibility gap by locking the 16.7 wheel and its
-SHA-256, installing it offline, and materializing the official default of 10 CPUs/xdist workers.
-Those values are evaluator assets and contract inputs, not caller-selectable tuning knobs.
+Build `Dockerfile.verification` with this directory as context before resolving episodes. It starts from the locked official base and installs `verifier/requirements.lock` with hashes. Supply the resulting published manifest reference through `--verification-image`; `--runtime-image` still identifies the official inference base. Record the build source, dependency lock and resulting digest. No static package installation is performed during compile or branch Runs, which retain deny-all networking.
+
+The evaluator pins pytest 9.0.3, pytest-timeout 2.4.0, xdist 3.8.0, dependency 0.6.1, rerunfailures 16.7 and libtmux 0.62.0 plus their dependency closure. The default 10 CPUs/xdist workers and official test/scoring inputs are unchanged. This is contract v4; prior records cannot be resumed under a changed contract. New gold/partial parity is required before treating this evaluator image as accepted.

@@ -54,6 +54,7 @@ def _episode(tmp_path: Path, variant: str):
         episode_id=f"programbench-official-{variant}",
         inference_environment_id="official-inference",
         verification_environment_id="official-verification",
+        verification_image="registry.invalid/evaluator@sha256:" + "a" * 64,
         harness=HarnessSpec("static-candidate", "1"),
         test_assets_dir=assets,
     )
@@ -190,9 +191,17 @@ class OfficialBackend:
                 {
                     "schema_version": 1,
                     "branch": branch,
-                    "status": "completed",
-                    "reason_code": "",
-                    "tests": tests,
+                    "status": (
+                        "infrastructure_error"
+                        if self.variant == "missing-dependency"
+                        else "completed"
+                    ),
+                    "reason_code": (
+                        "evaluator_environment_invalid"
+                        if self.variant == "missing-dependency"
+                        else ""
+                    ),
+                    "tests": [] if self.variant == "missing-dependency" else tests,
                 }
             )
         )
@@ -255,17 +264,8 @@ def test_official_multirun_verifier_isolates_compile_and_branches(
         )
         assert compile_plan.env == {"PYTHONPATH": "/opt/axrun"}
         assert compile_plan.network_policy == "deny_all"
-        rerun_input = next(
-            item
-            for item in compile_plan.inputs
-            if item.target == "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
-        )
-        assert rerun_input.sha256 == (
-            "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
-        )
-        assert compile_plan.argv[compile_plan.argv.index("--rerun-wheel") + 1] == (
-            "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
-        )
+        assert not any(item.target.endswith(".whl") for item in compile_plan.inputs)
+        assert "--rerun-wheel" not in compile_plan.argv
         remove_index = compile_plan.argv.index("--remove-sha256")
         assert compile_plan.argv[remove_index + 1] == (
             "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"
@@ -303,6 +303,32 @@ def test_official_multirun_resume_reuses_the_bound_branch_run(tmp_path: Path) ->
     assert record["aggregation_state"] == "completed"
     assert record["cleanup_state"] == "completed"
     assert backend.deleted_environments == ["derived-gold"]
+
+
+def test_evaluator_setup_failure_is_infrastructure_failure_and_seals_diagnostic(tmp_path):
+    episode = _episode(tmp_path, "missing-dependency")
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant="missing-dependency")
+    store = EpisodeStore(tmp_path / "state")
+    with pytest.raises(InfrastructureError, match="evaluator_environment_invalid"):
+        EpisodeRunner(backend=backend, store=store).run(
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+    assert backend.deleted_environments == ["derived-missing-dependency"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "infrastructure_failed"
+    assert record["cleanup_state"] == "completed"
+    first = record["branches"][sorted(record["branches"])[0]]
+    assert first["reason_code"] == "evaluator_environment_invalid"
+    assert Path(first["result_path"]).is_file()
+    assert not list((store.root / "verification-details").rglob("programbench.json"))
 
 
 def test_official_multirun_cancel_cleans_owned_branch_and_environment(tmp_path: Path) -> None:

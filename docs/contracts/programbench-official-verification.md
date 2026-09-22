@@ -11,12 +11,10 @@ The archive excludes the seed-owned `executable`. Test metadata, hidden branch b
 executable, inference processes, trajectory, credentials and runtime identity never enter the
 candidate.
 
-Verification uses the locked official `linux/amd64` cleanroom image. A fresh compile Run clears
+Verification uses a separately built, digest-pinned `linux/amd64` evaluator image based on the locked official cleanroom image. The fixture's `Dockerfile.verification` installs all pinned evaluator dependencies and checks the installed versions during construction. The resolver requires `--verification-image` separately from the unchanged inference `--runtime-image`; the base image alone is not a valid evaluator. A fresh compile Run clears
 `/workspace`, safely extracts the archive, removes the exact locked upstream clean-hash set and any
 stale `executable`, runs `compile.sh` with deny-all networking, validates the result and stashes its
-SHA-256. ProgramBench 1.2.4 installs `pytest-rerunfailures` after compilation from an unpinned
-network source; Axrun instead supplies the locked 16.7 wheel as a content-addressed verifier input
-and installs it offline. A successful finite Run requests an Axern rootfs result. The returned
+SHA-256. Static dependencies are never installed in a Run. Compile and branch preflight reject a missing or inconsistent evaluator environment. The adapter removes only the exact known online pip commands for each locked branch setup; upstream setup drift fails closed. Pytest arguments, the existing signal-timeout adaptation, rerun policy and scoring remain unchanged. A successful finite Run requests an Axern rootfs result. The returned
 ordinary derived Environment is verifier-internal state and does not change the candidate identity.
 
 Each of the six active test branches runs in a distinct Run and Allocation from the same derived
@@ -50,6 +48,8 @@ removed, missing expected tests become `not_run`, and branch evaluator errors ma
 expected tests `not_run`. The published 1.2.4 scorer keys results by `branch/name`; if pytest emits
 duplicates after a worker restart, the last occurrence wins. Unexpected unique observed tests are
 not silently discarded.
+
+An evaluator invocation failure, missing/invalid/empty XML or invalid dependency environment produces a sealed body-free `infrastructure_error` diagnostic. The adapter retains that artifact, cleans up the derived Environment and raises `InfrastructureError`; it never publishes a score or automatically reruns a failed verification. Raw hidden-test output is not copied into public diagnostics.
 
 Compile and test failures are benchmark outcomes. Run transport failures, rootfs sealing failures,
 asset-integrity failures, malformed evaluator output, and incomplete recovery state are

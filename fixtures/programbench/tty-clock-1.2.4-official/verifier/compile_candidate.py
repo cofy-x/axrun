@@ -43,9 +43,26 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--stash", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
-    parser.add_argument("--rerun-wheel", type=Path, required=True)
+    parser.add_argument("--dependency-lock-sha256", required=True)
     parser.add_argument("--remove-sha256", action="append", default=[])
     args = parser.parse_args()
+
+    checked = subprocess.run(
+        ["python3", "/opt/axrun-programbench/check_environment.py", args.dependency_lock_sha256],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+    )
+    if checked.returncode != 0:
+        _write(
+            args.result,
+            {
+                "status": "evaluator_error",
+                "diagnostic_code": "evaluator_environment_invalid",
+            },
+        )
+        return 26
 
     _clear(args.workspace)
     extract_workspace_archive(args.candidate, args.workspace)
@@ -143,30 +160,6 @@ def main() -> int:
             "executable_mode": mode,
         },
     )
-    installed = subprocess.run(
-        [
-            "pip3",
-            "install",
-            "--quiet",
-            "--disable-pip-version-check",
-            "--no-index",
-            "--no-deps",
-            str(args.rerun_wheel),
-        ],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=120,
-    )
-    if installed.returncode != 0:
-        _write(
-            args.result,
-            {
-                "status": "evaluator_error",
-                "diagnostic_code": "rerun_plugin_install_failed",
-            },
-        )
-        return 26
     return 0
 
 

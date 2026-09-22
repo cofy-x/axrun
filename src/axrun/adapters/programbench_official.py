@@ -31,11 +31,10 @@ from axrun.models import (
 from axrun.verification import MultiRunVerificationCoordinator
 
 _INSTANCE = "xorg62__tty-clock.f2f847c"
-_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v3"
+_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v4"
 _COMPILE_RESULT = "/outputs/programbench-compile.json"
 _BRANCH_RESULT = "/outputs/programbench-branch.json"
 _STASH = "/opt/axrun-programbench/candidate-executable"
-_RERUN_WHEEL_TARGET = "/inputs/pytest_rerunfailures-16.7-py3-none-any.whl"
 _COMPILE_BUSINESS_EXIT_CODES = {
     21: "seed_git_failed",
     22: "compile_script_missing",
@@ -275,6 +274,14 @@ class ProgramBenchOfficialVerifierAdapter:
             branches=branches,
         )
         coordinator = MultiRunVerificationCoordinator(backend)
+        if record.state == "infrastructure_failed":
+            if record.cleanup_state != "completed" and record.derived_environment_id:
+                coordinator.delete_environment(record.derived_environment_id)
+                record.cleanup_state = "completed"
+                store.save(record)
+            raise InfrastructureError(
+                "ProgramBench verification previously failed; use a new episode"
+            )
         started_at = datetime.now(UTC).isoformat()
 
         if record.compile.state != "completed":
@@ -308,7 +315,12 @@ class ProgramBenchOfficialVerifierAdapter:
                 )
             if compile_result.exit_code != 0:
                 raise InfrastructureError(
-                    f"ProgramBench compile Run failed: {compile_result.diagnostic_code}"
+                    "ProgramBench compile Run failed: "
+                    + (
+                        "evaluator_environment_invalid"
+                        if compile_result.exit_code == 26
+                        else compile_result.diagnostic_code
+                    )
                 )
             compile_value, compile_artifact = _load_artifact_json(compile_result, _COMPILE_RESULT)
             if (
@@ -380,6 +392,19 @@ class ProgramBenchOfficialVerifierAdapter:
                 )
             value, artifact = _load_artifact_json(result, _BRANCH_RESULT)
             _validate_branch_result(value, branch)
+            if value["status"] == "infrastructure_error":
+                step.execution = result.execution
+                step.result_path = artifact.path
+                step.result_digest = artifact.sha256
+                step.reason_code = str(value["reason_code"])
+                step.state = "infrastructure_failed"
+                record.state = "infrastructure_failed"
+                record.cleanup_state = "running"
+                store.save(record)
+                coordinator.delete_environment(record.derived_environment_id)
+                record.cleanup_state = "completed"
+                store.save(record)
+                raise InfrastructureError(f"ProgramBench evaluator failed: {step.reason_code}")
             step.execution = result.execution
             step.state = "completed"
             step.result_path = artifact.path
@@ -506,7 +531,6 @@ class ProgramBenchOfficialVerifierAdapter:
         package_root = Path(__file__).parents[1]
         runtime_init = package_root / "fixtures" / "claude" / "runtime_package_init.py"
         compile_file = Path(cast(str, episode.verifier.config["compile_file"]))
-        rerun_wheel = Path(cast(str, episode.verifier.config["rerun_wheel_file"]))
         remove_hashes = cast(list[str], episode.verifier.config["remove_hashes"])
         argv = [
             "python3",
@@ -519,8 +543,8 @@ class ProgramBenchOfficialVerifierAdapter:
             _STASH,
             "--result",
             _COMPILE_RESULT,
-            "--rerun-wheel",
-            _RERUN_WHEEL_TARGET,
+            "--dependency-lock-sha256",
+            str(episode.verifier.config["dependency_lock_sha256"]),
         ]
         for digest in remove_hashes:
             argv.extend(("--remove-sha256", digest))
@@ -546,11 +570,6 @@ class ProgramBenchOfficialVerifierAdapter:
                     str(compile_file),
                     "/opt/axrun-programbench/compile_candidate.py",
                     cast(str, episode.verifier.config["compile_sha256"]),
-                ),
-                InputFile(
-                    str(rerun_wheel),
-                    _RERUN_WHEEL_TARGET,
-                    cast(str, episode.verifier.config["rerun_wheel_sha256"]),
                 ),
             ),
             outputs=(OutputSpec(_COMPILE_RESULT, media_type="application/json"),),
@@ -585,6 +604,8 @@ class ProgramBenchOfficialVerifierAdapter:
                 record.executable_digest,
                 "--result",
                 _BRANCH_RESULT,
+                "--dependency-lock-sha256",
+                str(episode.verifier.config["dependency_lock_sha256"]),
             ),
             cwd="/workspace",
             env={
@@ -630,11 +651,12 @@ class ProgramBenchOfficialVerifierAdapter:
                 "identity": self.name,
                 "version": self.version,
                 "contract": _CONTRACT,
+                "verification_image": episode.verification_environment.image,
                 "task": episode.task.config,
                 "branches": branches,
                 "compile_sha256": episode.verifier.config["compile_sha256"],
                 "branch_sha256": episode.verifier.config["branch_sha256"],
-                "rerun_wheel_sha256": episode.verifier.config["rerun_wheel_sha256"],
+                "dependency_lock_sha256": episode.verifier.config["dependency_lock_sha256"],
                 "pytest_xdist_workers": episode.verifier.config["pytest_xdist_workers"],
                 "verification_resources": asdict(episode.verification_resources),
                 "remove_hashes": episode.verifier.config["remove_hashes"],
@@ -665,8 +687,8 @@ class ProgramBenchOfficialVerifierAdapter:
             "compile_sha256",
             "branch_file",
             "branch_sha256",
-            "rerun_wheel_file",
-            "rerun_wheel_sha256",
+            "dependency_lock_file",
+            "dependency_lock_sha256",
             "pytest_xdist_workers",
             "remove_hashes",
         }
@@ -725,7 +747,7 @@ def _validate_branch_result(value: dict[str, Any], branch: str) -> None:
         raise ContractError("ProgramBench branch result has an invalid shape")
     if value["schema_version"] != 1 or value["branch"] != branch:
         raise ContractError("ProgramBench branch result identity mismatch")
-    if value["status"] not in {"completed", "branch_error"}:
+    if value["status"] not in {"completed", "branch_error", "infrastructure_error"}:
         raise ContractError("ProgramBench branch result status is invalid")
     if not isinstance(value["reason_code"], str) or not isinstance(value["tests"], list):
         raise ContractError("ProgramBench branch result fields are invalid")

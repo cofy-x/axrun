@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,7 +22,7 @@ from axrun.models import (
 )
 
 _IDENTITY = "programbench.official-single"
-_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v3"
+_VERSION = "programbench-1.2.4-tty-clock-f2f847c-v4"
 _PROGRAMBENCH_VERSION = "1.2.4"
 _PROGRAMBENCH_GIT_SHA = "963063c9271cc40fa179977356782ea4582e0b0c"
 _INSTANCE = "xorg62__tty-clock.f2f847c"
@@ -47,13 +48,13 @@ _BRANCHES = {
 _ACTIVE_TESTS = 281
 _IGNORED_TESTS = 38
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
-_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v3"
+_EVALUATOR_CONTRACT = "programbench-1.2.4-axrun-tty-clock-v4"
 _DOCKER_CPUS = 10
 _TEST_MANIFEST_DIGEST = "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
-_COMPILE_DIGEST = "f6221868172e87e0c1587d500f7bd1e17d14a4a34e2d1b277fa8c661c9f6c0dd"
-_BRANCH_DIGEST = "634395a4b0cd0ca14c9f90dcfe4ed42e72e9a0144e37cbdfb7c84d86ebedad9e"
-_RERUN_WHEEL = "pytest_rerunfailures-16.7-py3-none-any.whl"
-_RERUN_WHEEL_DIGEST = "edf1886209c2b7dafe35b5bf1708d6ec40ccf6c6b357f0f02807efcec0204c99"
+_COMPILE_DIGEST = "e0601e72ec6f3d1ebad21c1a72835ed0a511a03048b0b424d573071b634b8c88"
+_BRANCH_DIGEST = "e7f74cb2570d933bda71fc138d71586a21f75db8736c3fc90defecec2726395f"
+_DEPENDENCY_LOCK = "requirements.lock"
+_DEPENDENCY_LOCK_DIGEST = "2a33f102d01693cbdb04d1301d07489331c6be0f4bd1f1a77e40c8ec1b158baf"
 _REMOVE_HASHES = ["cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"]
 
 
@@ -72,6 +73,7 @@ class ProgramBenchOfficialSingleResolver:
         inference_environment_id: str,
         verification_environment_id: str,
         harness: HarnessSpec,
+        verification_image: str,
         runtime_image: str = _IMAGE_REFERENCE,
         test_assets_dir: Path | None = None,
         static_candidate_dir: Path | None = None,
@@ -122,6 +124,10 @@ class ProgramBenchOfficialSingleResolver:
         self._validate_test_assets(row["test_assets"])
         if not runtime_image.endswith(f"@{_IMAGE_DIGEST}") or runtime_image.count("@") != 1:
             raise ContractError("ProgramBench official runtime image must use the locked digest")
+        if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", verification_image):
+            raise ContractError("ProgramBench verification image requires an immutable digest")
+        if verification_image.endswith(f"@{_IMAGE_DIGEST}"):
+            raise ContractError("official base image is not dependency-closed for verification")
         if row["candidate"] != {
             "identity": "workspace-archive",
             "version": "1",
@@ -137,11 +143,11 @@ class ProgramBenchOfficialSingleResolver:
         self._validate_lock(lock)
         compile_file = root / "verifier" / "compile_candidate.py"
         branch_file = root / "verifier" / "run_branch.py"
-        rerun_wheel = root / "verifier" / _RERUN_WHEEL
+        dependency_lock = root / "verifier" / _DEPENDENCY_LOCK
         if (
             _sha256(compile_file) != _COMPILE_DIGEST
             or _sha256(branch_file) != _BRANCH_DIGEST
-            or _sha256(rerun_wheel) != _RERUN_WHEEL_DIGEST
+            or _sha256(dependency_lock) != _DEPENDENCY_LOCK_DIGEST
         ):
             raise ContractError("ProgramBench official evaluator asset digest mismatch")
         if inference_environment_id == verification_environment_id:
@@ -196,7 +202,7 @@ class ProgramBenchOfficialSingleResolver:
                 inference_environment_id, runtime_image, _PLATFORM, "/workspace"
             ),
             verification_environment=EnvironmentBinding(
-                verification_environment_id, runtime_image, _PLATFORM, "/workspace"
+                verification_environment_id, verification_image, _PLATFORM, "/workspace"
             ),
             harness=resolved_harness,
             candidate=CandidateSpec("workspace-archive", "1", candidate_config),
@@ -213,8 +219,8 @@ class ProgramBenchOfficialSingleResolver:
                     "compile_sha256": _COMPILE_DIGEST,
                     "branch_file": str(branch_file),
                     "branch_sha256": _BRANCH_DIGEST,
-                    "rerun_wheel_file": str(rerun_wheel),
-                    "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
+                    "dependency_lock_file": str(dependency_lock),
+                    "dependency_lock_sha256": _DEPENDENCY_LOCK_DIGEST,
                     "pytest_xdist_workers": _DOCKER_CPUS,
                     "remove_hashes": _REMOVE_HASHES,
                 },
@@ -348,8 +354,8 @@ class ProgramBenchOfficialSingleResolver:
             "compile_sha256": _COMPILE_DIGEST,
             "branch_file": "verifier/run_branch.py",
             "branch_sha256": _BRANCH_DIGEST,
-            "rerun_wheel_file": f"verifier/{_RERUN_WHEEL}",
-            "rerun_wheel_sha256": _RERUN_WHEEL_DIGEST,
+            "dependency_lock_file": f"verifier/{_DEPENDENCY_LOCK}",
+            "dependency_lock_sha256": _DEPENDENCY_LOCK_DIGEST,
             "docker_cpus": _DOCKER_CPUS,
             "remove_hashes": _REMOVE_HASHES,
         }:

@@ -159,6 +159,8 @@ def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
             "locked-assets",
             "--runtime-image",
             f"registry.invalid/programbench@sha256:{'a' * 64}",
+            "--verification-image",
+            f"registry.invalid/evaluator@sha256:{'b' * 64}",
             "--inference-environment",
             "env-i",
             "--verification-environment",
