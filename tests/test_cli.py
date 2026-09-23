@@ -173,4 +173,32 @@ def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
     assert args.command == "resolve-programbench-official"
     assert args.harness == "static-candidate"
     assert args.test_assets_dir == Path("locked-assets")
+
+
+def test_claude_model_option_does_not_conflict_with_caller_model_options() -> None:
+    args = cli._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
+        [
+            "resolve-programbench-official",
+            "row.json",
+            "--episode-id",
+            "pb-claude",
+            "--model",
+            "deepseek-flash",
+            "--test-assets-dir",
+            "locked-assets",
+            "--runtime-image",
+            f"registry.invalid/programbench@sha256:{'a' * 64}",
+            "--verification-image",
+            f"registry.invalid/evaluator@sha256:{'b' * 64}",
+            "--inference-environment",
+            "env-i",
+            "--verification-environment",
+            "env-v",
+            "--output",
+            "episode.json",
+        ]
+    )
+
+    assert args.model == "deepseek-flash"
+    assert args.model_upstream_url == ""
     assert args.runtime_image.endswith(f"@sha256:{'a' * 64}")
