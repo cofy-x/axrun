@@ -18,8 +18,8 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-@pytest.mark.parametrize("connected", [False, True])
-def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, connected: bool):
+@pytest.mark.parametrize("permitted", [False, True])
+def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, permitted: bool):
     class Backend:
         def __init__(self, _client: object) -> None:
             pass
@@ -30,7 +30,7 @@ def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, 
             on_bound(ExecutionRef("env", "run", "alloc"))
             artifact_dir.mkdir()
             output = artifact_dir / "network.json"
-            data = json.dumps({"egress_connected": connected}).encode()
+            data = json.dumps({"egress_http_success": permitted}).encode()
             output.write_bytes(data)
             artifact = Artifact(
                 "/outputs/network.json",
@@ -42,7 +42,7 @@ def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, 
             return StageResult(ExecutionRef("env", "run", "alloc"), 0, "", (artifact,))
 
     monkeypatch.setattr(MODULE, "AxernBackend", Backend)
-    if connected:
+    if permitted:
         with pytest.raises(RuntimeError, match="contradicts"):
             MODULE._probe(object(), "env", tmp_path, StageNetworkPolicy.DENY_ALL)
     else:

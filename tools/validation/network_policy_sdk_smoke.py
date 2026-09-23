@@ -24,15 +24,15 @@ IMAGE = (
     "index.docker.io/library/python"
     "@sha256:2d62568c3174136030ac1da4e534cfbfe709aec913daeb2a3d49328e27438093"
 )
-_PROBE = """import json, os, socket
+_PROBE = """import json, os, urllib.request
 try:
-    with socket.create_connection(('example.com', 80), timeout=5):
-        connected = True
+    with urllib.request.urlopen('https://example.com/', timeout=10) as response:
+        permitted = response.status == 200
 except OSError:
-    connected = False
+    permitted = False
 os.makedirs('/outputs', exist_ok=True)
 with open('/outputs/network.json', 'w', encoding='utf-8') as stream:
-    json.dump({'egress_connected': connected}, stream)
+    json.dump({'egress_http_success': permitted}, stream)
 """
 
 
@@ -60,7 +60,7 @@ def _probe(
         raise RuntimeError(f"{policy.value} sealed output integrity mismatch")
     payload = json.loads(data)
     expected = policy is StageNetworkPolicy.UNRESTRICTED
-    if payload != {"egress_connected": expected}:
+    if payload != {"egress_http_success": expected}:
         raise RuntimeError(f"{policy.value} network result contradicts the stage policy")
     if len(bound) != 2 or bound[0].allocation_id:
         raise RuntimeError("Run identity was not persisted before Allocation readiness")
@@ -69,7 +69,7 @@ def _probe(
         "environment_id": environment_id,
         "run_id": result.execution.run_id,
         "allocation_id": result.execution.allocation_id,
-        "egress_connected": payload["egress_connected"],
+        "egress_http_success": payload["egress_http_success"],
         "sealed_size": artifact.size_bytes,
         "sealed_sha256": artifact.sha256,
         "bound_before_release": True,
