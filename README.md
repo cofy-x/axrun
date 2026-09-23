@@ -183,6 +183,13 @@ Code 2.1.205 inference-to-verification acceptance on released Axern v0.11.3. See
 two closed official-instance verticals, not general ProgramBench, suite scheduling, leaderboard
 support, or a generic workflow engine. The tty-clock partial TUI parity question remains open.
 
+ProgramBench scorer parity is separate from upstream submission integrity. The locked seqtk `v2`
+row makes the behavioral-observation-only policy explicit; after a completed Claude episode,
+`axrun review-programbench-provenance EPISODE_ID` returns body-free risk counts from verified
+bundles. Its status is always `human_attestation_required`, including when all counts are zero.
+The historical `v1` Claude acceptance remains execution/scoring evidence, not an integrity
+attestation or leaderboard submission claim.
+
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
 business verdict. Every other non-zero Claude terminal subtype remains fail-closed infrastructure
