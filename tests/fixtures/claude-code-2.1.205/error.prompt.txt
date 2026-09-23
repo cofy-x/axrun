@@ -1,0 +1,1 @@
+Exercise the deterministic error compatibility fixture.

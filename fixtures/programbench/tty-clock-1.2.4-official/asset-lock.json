@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "programbench": {
+    "package_version": "1.2.4",
+    "git_sha": "963063c9271cc40fa179977356782ea4582e0b0c"
+  },
+  "instance": {
+    "instance_id": "xorg62__tty-clock.f2f847c",
+    "repository": "xorg62/tty-clock",
+    "commit": "f2f847cf2cc2949c8a8b7779a778f366d3743474",
+    "language": "c",
+    "difficulty": "easy",
+    "task_yaml_sha256": "7b84b5c8042b33afed1597a92bd527a4163bb354a89f29a2f2d5e8b24676d36d",
+    "tests_json_sha256": "ec1760221921b7614f2c85215b8739203093c1faee45dad70ec6f9d55f8017d6",
+    "active_branch_count": 6,
+    "ignored_branch_count": 0,
+    "active_test_count": 281,
+    "ignored_test_count": 38
+  },
+  "image": {
+    "source": "docker.io/programbench/xorg62_1776_tty-clock.f2f847c:task_cleanroom_v6",
+    "platform": "linux/amd64",
+    "platform_digest": "sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272",
+    "config_digest": "sha256:d433c4a48704aee0b45a0f97b43f8bfee5a76bd4299bdeb1133b649e3e151820"
+  },
+  "evaluator": {
+    "contract_version": "programbench-1.2.4-axrun-tty-clock-v4",
+    "compile_file": "verifier/compile_candidate.py",
+    "compile_sha256": "e0601e72ec6f3d1ebad21c1a72835ed0a511a03048b0b424d573071b634b8c88",
+    "branch_file": "verifier/run_branch.py",
+    "branch_sha256": "e7f74cb2570d933bda71fc138d71586a21f75db8736c3fc90defecec2726395f",
+    "dependency_lock_file": "verifier/requirements.lock",
+    "dependency_lock_sha256": "9b14aaddb4cd53fe338a8bf4391b0eed12ea264c49a4c47e7b774d54735f4777",
+    "docker_cpus": 10,
+    "remove_hashes": [
+      "cd400708bcd6a5b9dd28bd450a211ec4625cde31470057e9d62f66072e297db0"
+    ]
+  },
+  "test_blobs": {
+    "repository": "programbench/ProgramBench-Tests",
+    "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5",
+    "branches": {
+      "89bbe1810fa3": {
+        "path": "xorg62__tty-clock.f2f847c/tests/89bbe1810fa3.tar.gz",
+        "size_bytes": 12261,
+        "sha256": "b70f0d0f54d01410de343b14a27a8831b95512e77662c7c7ff74d13dbd5095b5"
+      },
+      "9951be903ea4": {
+        "path": "xorg62__tty-clock.f2f847c/tests/9951be903ea4.tar.gz",
+        "size_bytes": 10502,
+        "sha256": "62727f9092aea5ec4b5cf23b8717da3768059cfbd4322927243ead31634ab882"
+      },
+      "b2bd72001100": {
+        "path": "xorg62__tty-clock.f2f847c/tests/b2bd72001100.tar.gz",
+        "size_bytes": 9763,
+        "sha256": "bbea41ad480413a43db1e4423d7d3540264e322e3cc37dce87087182499c8a07"
+      },
+      "b48a2e05f04f": {
+        "path": "xorg62__tty-clock.f2f847c/tests/b48a2e05f04f.tar.gz",
+        "size_bytes": 10290,
+        "sha256": "0480561b30d79061894a00886ce358c4c69be0b3af22d4321d7f583532e53347"
+      },
+      "dc1d19eea619": {
+        "path": "xorg62__tty-clock.f2f847c/tests/dc1d19eea619.tar.gz",
+        "size_bytes": 14420,
+        "sha256": "708404eb4dec87af386bef968f301d74fbedcaebe017e7ab964c451234415442"
+      },
+      "ed5c2b1ffc48": {
+        "path": "xorg62__tty-clock.f2f847c/tests/ed5c2b1ffc48.tar.gz",
+        "size_bytes": 92070,
+        "sha256": "b98a5f5468f1ee1f75342a004123041cebebea5b356b4016582d0174086ccf79"
+      }
+    }
+  }
+}

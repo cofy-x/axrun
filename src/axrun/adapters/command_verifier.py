@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from axrun.adapters.base import VerifierQualificationRequirements
 from axrun.errors import ContractError, InfrastructureError
 from axrun.models import (
     CandidateBundle,
@@ -17,6 +18,7 @@ from axrun.models import (
     StagePlan,
     StageResult,
     VerificationResult,
+    task_config_string,
 )
 
 _RESULT = "/outputs/verification.json"
@@ -31,19 +33,27 @@ class CommandVerifierAdapter:
     network_policy: str = "deny_all"
     name: str = "command-verifier"
 
+    def qualification_requirements(
+        self, episode: ResolvedEpisode
+    ) -> VerifierQualificationRequirements:
+        value = episode.verifier.config.get("verifier_file", "")
+        if not isinstance(value, str):
+            raise ContractError("verifier qualification file must be a string")
+        return VerifierQualificationRequirements(verifier_file=value)
+
     def plan(self, episode: ResolvedEpisode, candidate: CandidateBundle) -> StagePlan:
         patch = next(
-            (item for item in candidate.files if item.declared_path.endswith("candidate.patch")),
+            (item for item in candidate.files if item.role == "patch"),
             None,
         )
         if patch is None:
             raise ContractError("CandidateBundle does not contain candidate.patch")
         return StagePlan(
-            environment_id=episode.verification_environment_id,
+            environment_id=episode.verification_environment.environment_id,
             argv=(
                 *self.command,
                 "--base-commit",
-                episode.base_commit,
+                task_config_string(episode, "base_commit"),
                 "--candidate",
                 "/inputs/candidate.patch",
                 "--result",
@@ -51,7 +61,7 @@ class CommandVerifierAdapter:
                 "--log",
                 _LOG,
             ),
-            cwd="/workspace",
+            cwd=episode.verification_environment.working_directory,
             inputs=(
                 InputFile(
                     str(Path(candidate.root) / patch.bundle_path),

@@ -1,0 +1,6 @@
+FROM docker.io/programbench/xorg62_1776_tty-clock.f2f847c@sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272
+# Resolve/download only at build time. The runtime has no package-source dependency.
+COPY verifier/requirements.lock /opt/axrun-programbench/requirements.lock
+RUN python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r /opt/axrun-programbench/requirements.lock
+COPY verifier/check_environment.py /opt/axrun-programbench/check_environment.py
+RUN python3 /opt/axrun-programbench/check_environment.py

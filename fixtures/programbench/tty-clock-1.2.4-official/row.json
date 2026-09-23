@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "dataset_identity": "programbench.official-single",
+  "dataset_version": "programbench-1.2.4-tty-clock-f2f847c-v4",
+  "programbench_version": "1.2.4",
+  "programbench_git_sha": "963063c9271cc40fa179977356782ea4582e0b0c",
+  "instance_id": "xorg62__tty-clock.f2f847c",
+  "repository": "xorg62/tty-clock",
+  "commit": "f2f847cf2cc2949c8a8b7779a778f366d3743474",
+  "language": "c",
+  "difficulty": "easy",
+  "prompt_file": "problem.md",
+  "prompt_sha256": "99712b8e7fc09ca2f72cdc5356f0acfe0bea16988efc195fc2df460fbc9a9508",
+  "task_metadata_file": "task.yaml",
+  "task_metadata_sha256": "7b84b5c8042b33afed1597a92bd527a4163bb354a89f29a2f2d5e8b24676d36d",
+  "tests_metadata_file": "tests.json",
+  "tests_metadata_sha256": "ec1760221921b7614f2c85215b8739203093c1faee45dad70ec6f9d55f8017d6",
+  "asset_lock_file": "asset-lock.json",
+  "asset_lock_sha256": "bcc679db43535e2f641614fa19bc04ab2c46c41d4ca6f4ceb8cd9e0520fc2942",
+  "image": {
+    "source_tag": "docker.io/programbench/xorg62_1776_tty-clock.f2f847c:task_cleanroom_v6",
+    "platform": "linux/amd64",
+    "platform_reference": "docker.io/programbench/xorg62_1776_tty-clock.f2f847c@sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272",
+    "platform_digest": "sha256:7c070e64a44e0b7dc2a032acf02159da43a0a4993a154b5fd98c4ab997726272",
+    "config_digest": "sha256:d433c4a48704aee0b45a0f97b43f8bfee5a76bd4299bdeb1133b649e3e151820"
+  },
+  "test_assets": {
+    "repository": "programbench/ProgramBench-Tests",
+    "revision": "de0ddfb637590c7ecb54fa0b5301f6dc7dfbcee5",
+    "branch_count": 6,
+    "active_test_count": 281,
+    "ignored_test_count": 38,
+    "manifest_sha256": "9ce2363b10524b1f71c831949cf08e409aa6b482136f6c4844f68ab614964200"
+  },
+  "candidate": {
+    "identity": "workspace-archive",
+    "version": "1",
+    "exclude_paths": [
+      "executable"
+    ]
+  },
+  "required_verification_capability": "post-compile-allocation-snapshot-v1"
+}

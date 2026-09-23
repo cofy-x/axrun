@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","claude_code_version":"2.1.205","model":"test-model[opaque]","permissionMode":"bypassPermissions","tools":[],"skills":[],"mcp_servers":[]}
+{"type":"api_error","subtype":"fixture_protocol_error","error":"Sanitized deterministic error."}
+{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Stopped deterministically.","stop_reason":"max_turns","modelUsage":{"test-model[opaque]":{}},"usage":{"input_tokens":3,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}

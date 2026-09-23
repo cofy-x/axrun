@@ -1,0 +1,5 @@
+FROM docker.io/programbench/lh3_1776_seqtk.94e7070@sha256:9d5dc381fd8b30ed1c8c94af8066646aca736ba53ab90da90af29825c6c6c4d0
+COPY verifier/requirements.lock /opt/axrun-programbench/requirements.lock
+RUN python3 -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r /opt/axrun-programbench/requirements.lock
+COPY verifier/check_environment.py /opt/axrun-programbench/check_environment.py
+RUN python3 /opt/axrun-programbench/check_environment.py

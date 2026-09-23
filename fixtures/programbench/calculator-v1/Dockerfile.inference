@@ -1,0 +1,13 @@
+FROM python:3.11-slim-bookworm@sha256:528257d48c1da0dcecc2e725d1ae34498d60c965f1241e39cd6a85a8859bdf84
+
+ARG TARGETARCH
+
+RUN set -eux; \
+    case "$TARGETARCH" in amd64|arm64) ;; *) exit 2 ;; esac; \
+    mkdir -p /workspace
+
+COPY reference/executable /workspace/executable
+RUN chmod 0111 /workspace/executable
+
+LABEL io.axrun.fixture="programbench-calculator-inference-v1"
+WORKDIR /workspace

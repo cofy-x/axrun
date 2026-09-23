@@ -17,6 +17,7 @@ from axrun.models import (
     ResolvedEpisode,
     StageResult,
     canonical_digest,
+    episode_seed_digest,
 )
 
 
@@ -25,7 +26,7 @@ def persist_candidate(
     result: StageResult,
     *,
     destination: Path,
-    required_paths: tuple[str, ...],
+    required_outputs: tuple[tuple[str, str], ...],
     harness: str,
     harness_version: str,
 ) -> CandidateBundle:
@@ -34,7 +35,7 @@ def persist_candidate(
     temporary = Path(tempfile.mkdtemp(prefix=".candidate.", dir=parent))
     try:
         files: list[CandidateFile] = []
-        for index, required_path in enumerate(required_paths):
+        for index, (role, required_path) in enumerate(required_outputs):
             source = result.artifact_for_path(required_path)
             source_path = Path(source.path)
             bundle_path = f"files/{index:02d}-{Path(required_path).name}"
@@ -49,6 +50,7 @@ def persist_candidate(
             _fsync_file(target)
             files.append(
                 CandidateFile(
+                    role=role,
                     declared_path=source.name,
                     bundle_path=bundle_path,
                     size_bytes=source.size_bytes,
@@ -60,11 +62,12 @@ def persist_candidate(
             "schema_version": 1,
             "episode_id": episode.episode_id,
             "task_id": episode.task_id,
-            "task_digest": episode.task_digest,
-            "base_commit": episode.base_commit,
+            "seed_digest": episode_seed_digest(episode),
             "inference_run_id": result.execution.run_id,
             "harness": harness,
             "harness_version": harness_version,
+            "candidate": episode.candidate.identity,
+            "candidate_version": episode.candidate.version,
             "files": [asdict(value) for value in files],
         }
         digest = canonical_digest(unsigned)
@@ -73,11 +76,12 @@ def persist_candidate(
             schema_version=1,
             episode_id=episode.episode_id,
             task_id=episode.task_id,
-            task_digest=episode.task_digest,
-            base_commit=episode.base_commit,
+            seed_digest=episode_seed_digest(episode),
             inference_run_id=result.execution.run_id,
             harness=harness,
             harness_version=harness_version,
+            candidate=episode.candidate.identity,
+            candidate_version=episode.candidate.version,
             files=tuple(files),
             digest=digest,
             root=str(final),

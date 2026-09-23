@@ -32,10 +32,13 @@ class OutputSpec:
     path: str
     format: OutputFormat = OutputFormat.FILE
     media_type: str = "application/octet-stream"
+    max_bytes: int = 64 << 20
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
             raise ContractError("declared output path must be absolute")
+        if self.max_bytes <= 0:
+            raise ContractError("declared output max_bytes must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,26 +78,77 @@ class ResourceSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class MiniSweAgentSpec:
-    command: tuple[str, ...] = ("mini",)
-    version: str = "2.4.6"
+class HarnessSpec:
+    """Harness-neutral adapter selection."""
+
+    identity: str
+    version: str
     timeout_seconds: int = 7200
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def __post_init__(self) -> None:
-        if not self.command or not self.version or self.timeout_seconds <= 0:
-            raise ContractError("mini-swe-agent command and version are required")
+        if not self.identity or not self.version or self.timeout_seconds <= 0:
+            raise ContractError("harness identity, version, and timeout are required")
 
 
 @dataclass(frozen=True, slots=True)
 class VerifierSpec:
-    command: tuple[str, ...] = ("/opt/axrun/run-verifier",)
-    identity: str = "command-verifier"
-    version: str = "1"
+    """Verifier-neutral adapter selection."""
+
+    identity: str
+    version: str
     timeout_seconds: int = 7200
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def __post_init__(self) -> None:
-        if not self.command or not self.identity or not self.version or self.timeout_seconds <= 0:
-            raise ContractError("verifier command, identity, and version are required")
+        if not self.identity or not self.version or self.timeout_seconds <= 0:
+            raise ContractError("verifier identity, version, and timeout are required")
+
+
+@dataclass(frozen=True, slots=True)
+class TaskSpec:
+    """Resolved task semantics owned by the selected dataset adapter."""
+
+    identity: str
+    version: str
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
+
+    def __post_init__(self) -> None:
+        if not self.identity or not self.version:
+            raise ContractError("task identity and version are required")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSpec:
+    """Candidate artifact contract, independent from the producing harness."""
+
+    identity: str
+    version: str
+    config: dict[str, Any] = field(default_factory=dict[str, Any])
+
+    def __post_init__(self) -> None:
+        if not self.identity or not self.version:
+            raise ContractError("candidate identity and version are required")
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentBinding:
+    """One explicit stage binding to an immutable Axern Environment contract."""
+
+    environment_id: str
+    image: str
+    platform: str
+    working_directory: str
+
+    def __post_init__(self) -> None:
+        if not self.environment_id:
+            raise ContractError("environment_id is required")
+        if not _is_digest_image(self.image):
+            raise ContractError("environment image must use an OCI sha256 digest")
+        if self.platform not in {"linux/amd64", "linux/arm64"}:
+            raise ContractError("environment platform must be linux/amd64 or linux/arm64")
+        if not self.working_directory.startswith("/"):
+            raise ContractError("environment working_directory must be absolute")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,17 +177,51 @@ class StagePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateCapturePlan:
+    """One bounded post-agent finalizer composed into the inference stage."""
+
+    setup_script: str
+    finalize_script: str
+    inputs: tuple[InputFile, ...]
+    outputs: tuple[OutputSpec, ...]
+
+    def __post_init__(self) -> None:
+        if not self.finalize_script.strip() or not self.outputs:
+            raise ContractError("candidate capture requires a script and declared outputs")
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessRuntimeRequirements:
+    """Closed, non-sensitive runtime capabilities declared by a harness adapter."""
+
+    model_protocol: str = ""
+    requires_model_tunnel: bool = False
+    trajectory_adapter: str = ""
+    progress_adapter: str = ""
+    terminal_mode: str = "noninteractive"
+
+    def __post_init__(self) -> None:
+        if self.requires_model_tunnel != bool(self.model_protocol):
+            raise ContractError("model tunnel and protocol requirements must be declared together")
+        if self.terminal_mode not in {"noninteractive"}:
+            raise ContractError("unsupported harness terminal mode")
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedEpisode:
+    """Harness-neutral canonical episode contract."""
+
     schema_version: int
     episode_id: str
     task_id: str
-    task_digest: str
-    base_commit: str
+    seed_digest: str
     prompt_file: str
-    inference_environment_id: str
-    verification_environment_id: str
-    harness: MiniSweAgentSpec = field(default_factory=MiniSweAgentSpec)
-    verifier: VerifierSpec = field(default_factory=VerifierSpec)
+    task: TaskSpec
+    inference_environment: EnvironmentBinding
+    verification_environment: EnvironmentBinding
+    harness: HarnessSpec
+    candidate: CandidateSpec
+    verifier: VerifierSpec
     inference_resources: ResourceSpec = field(default_factory=ResourceSpec)
     verification_resources: ResourceSpec = field(default_factory=ResourceSpec)
     metadata: dict[str, str] = field(default_factory=dict[str, str])
@@ -141,14 +229,16 @@ class ResolvedEpisode:
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ContractError(f"unsupported ResolvedEpisode schema {self.schema_version}")
-        if not self.episode_id or not self.task_id or not self.task_digest:
-            raise ContractError("episode_id, task_id, and task_digest are required")
+        if not self.episode_id or not self.task_id or not self.seed_digest:
+            raise ContractError("episode_id, task_id, and seed_digest are required")
         if any(value in self.episode_id for value in ("/", "\\", "..")):
             raise ContractError("episode_id must be a safe path component")
-        if len(self.base_commit) not in {40, 64} or any(
-            value not in "0123456789abcdefABCDEF" for value in self.base_commit
+        if len(self.seed_digest) != 64 or any(
+            value not in "0123456789abcdef" for value in self.seed_digest
         ):
-            raise ContractError("base_commit must be a full 40- or 64-character hex digest")
+            raise ContractError("seed_digest must be lowercase SHA-256 hexadecimal")
+        if not Path(self.prompt_file).is_absolute():
+            raise ContractError("prompt_file must be absolute")
 
     @property
     def digest(self) -> str:
@@ -181,6 +271,7 @@ class StageResult:
     artifacts: tuple[Artifact, ...]
     stdout_path: str = ""
     stderr_path: str = ""
+    diagnostic_details: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def artifact_for_path(self, path: str) -> Artifact:
         try:
@@ -191,6 +282,7 @@ class StageResult:
 
 @dataclass(frozen=True, slots=True)
 class CandidateFile:
+    role: str
     declared_path: str
     bundle_path: str
     size_bytes: int
@@ -199,6 +291,10 @@ class CandidateFile:
 
     def __post_init__(self) -> None:
         relative = Path(self.bundle_path)
+        if not self.role or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for character in self.role
+        ):
+            raise ContractError("candidate file role must be a lowercase stable identifier")
         if not self.declared_path.startswith("/"):
             raise ContractError("candidate declared path must be absolute")
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
@@ -212,11 +308,12 @@ class CandidateBundle:
     schema_version: int
     episode_id: str
     task_id: str
-    task_digest: str
-    base_commit: str
+    seed_digest: str
     inference_run_id: str
     harness: str
     harness_version: str
+    candidate: str
+    candidate_version: str
     files: tuple[CandidateFile, ...]
     digest: str
     root: str = field(default="", compare=False, repr=False)
@@ -224,8 +321,15 @@ class CandidateBundle:
     def __post_init__(self) -> None:
         if self.schema_version != 1 or not self.files:
             raise ContractError("CandidateBundle v1 requires at least one file")
+        if len(self.seed_digest) != 64 or any(
+            value not in "0123456789abcdef" for value in self.seed_digest
+        ):
+            raise ContractError("CandidateBundle seed_digest must be lowercase SHA-256")
         if len(self.digest) != 64 or any(value not in "0123456789abcdef" for value in self.digest):
             raise ContractError("CandidateBundle digest must be lowercase hexadecimal")
+        roles = [item.role for item in self.files]
+        if len(roles) != len(set(roles)):
+            raise ContractError("CandidateBundle file roles must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,9 +364,17 @@ class EpisodeRecord:
     episode_id: str
     spec_digest: str
     phase: EpisodePhase = EpisodePhase.NEW
+    qualifications: tuple[ExecutionRef, ...] = ()
+    qualification_result: str = ""
+    qualification_result_digest: str = ""
     inference: ExecutionRef | None = None
     candidate_manifest: str = ""
     candidate_digest: str = ""
+    trajectory_manifest: str = ""
+    trajectory_digest: str = ""
+    progress_path: str = ""
+    progress_revision: int = 0
+    inference_termination_reason: str = ""
     verification: ExecutionRef | None = None
     verification_result: str = ""
     verification_result_digest: str = ""
@@ -285,16 +397,29 @@ def canonical_digest(value: Any) -> str:
 
 def resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     """Decode the versioned public JSON contract without accepting unknown fields."""
+    version = raw.get("schema_version")
+    if version == 1:
+        return _resolved_episode_from_dict(raw)
+    raise ContractError(f"unsupported ResolvedEpisode schema {version}")
+
+
+def episode_seed_digest(episode: ResolvedEpisode) -> str:
+    """Return the immutable canonical seed identity."""
+    return episode.seed_digest
+
+
+def _resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     expected = {
         "schema_version",
         "episode_id",
         "task_id",
-        "task_digest",
-        "base_commit",
+        "seed_digest",
         "prompt_file",
-        "inference_environment_id",
-        "verification_environment_id",
+        "task",
+        "inference_environment",
+        "verification_environment",
         "harness",
+        "candidate",
         "verifier",
         "inference_resources",
         "verification_resources",
@@ -305,19 +430,50 @@ def resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
         raise ContractError(f"unknown ResolvedEpisode fields: {', '.join(sorted(unknown))}")
     values = dict(raw)
     harness = dict(values.pop("harness", {}))
+    task = dict(values.pop("task", {}))
+    candidate = dict(values.pop("candidate", {}))
+    inference_environment = dict(values.pop("inference_environment", {}))
+    verification_environment = dict(values.pop("verification_environment", {}))
     verifier = dict(values.pop("verifier", {}))
     inference_resources = dict(values.pop("inference_resources", {}))
     verification_resources = dict(values.pop("verification_resources", {}))
-    if "command" in harness:
-        harness["command"] = tuple(harness["command"])
-    if "command" in verifier:
-        verifier["command"] = tuple(verifier["command"])
+    verifier_config = verifier.get("config", {})
+    if not isinstance(verifier_config, dict):
+        raise ContractError("verifier config must be a JSON object")
+    verifier["config"] = verifier_config
+    config = harness.get("config", {})
+    if not isinstance(config, dict):
+        raise ContractError("harness config must be a JSON object")
+    harness["config"] = config
+    for name, spec in (("task", task), ("candidate", candidate)):
+        spec_config = spec.get("config", {})
+        if not isinstance(spec_config, dict):
+            raise ContractError(f"{name} config must be a JSON object")
+        spec["config"] = spec_config
     return ResolvedEpisode(
         **values,
-        harness=MiniSweAgentSpec(**harness),
+        task=TaskSpec(**task),
+        inference_environment=EnvironmentBinding(**inference_environment),
+        verification_environment=EnvironmentBinding(**verification_environment),
+        harness=HarnessSpec(**harness),
+        candidate=CandidateSpec(**candidate),
         verifier=VerifierSpec(**verifier),
         inference_resources=ResourceSpec(**inference_resources),
         verification_resources=ResourceSpec(**verification_resources),
+    )
+
+
+def task_config_string(episode: ResolvedEpisode, key: str) -> str:
+    value = episode.task.config.get(key)
+    if not isinstance(value, str) or not value:
+        raise ContractError(f"task config {key} must be a non-empty string")
+    return value
+
+
+def _is_digest_image(value: str) -> bool:
+    name, separator, digest = value.rpartition("@sha256:")
+    return bool(name and separator and len(digest) == 64) and all(
+        character in "0123456789abcdef" for character in digest
     )
 
 

@@ -1,0 +1,25 @@
+ARG OFFICIAL_IMAGE="docker.io/swebench/sweb.eval.x86_64.django_1776_django-12419@sha256:6c6b1fec0a323b9225564620cd34f2d39828cef8f32496ad4a6c9ca0f7256768"
+FROM ${OFFICIAL_IMAGE}
+
+ARG DJANGO_BASE_COMMIT="7fa1a93c6c8109010a6ff3f604fda83b604e0e97"
+
+RUN test "$(uname -m)" = x86_64 \
+    && test -x /usr/bin/python3 \
+    && command -v git >/dev/null \
+    && git -C /testbed cat-file -e "${DJANGO_BASE_COMMIT}^{commit}" \
+    && git -C /testbed checkout --detach "${DJANGO_BASE_COMMIT}" \
+    && git -C /testbed clean -ffdx \
+    && test "$(git -C /testbed rev-parse HEAD)" = "${DJANGO_BASE_COMMIT}" \
+    && test -z "$(git -C /testbed status --porcelain --untracked-files=all)"
+
+WORKDIR /testbed
+
+LABEL org.opencontainers.image.title="Axrun SWE-bench Verified django__django-12419 amd64 seed" \
+      org.opencontainers.image.description="Canonical amd64 seed derived from the pinned official SWE-bench image" \
+      io.axrun.dataset="SWE-bench/SWE-bench_Verified" \
+      io.axrun.instance-id="django__django-12419" \
+      io.axrun.platform-role="benchmark" \
+      io.axrun.repo="django/django" \
+      io.axrun.base-commit="7fa1a93c6c8109010a6ff3f604fda83b604e0e97"
+
+CMD ["/bin/bash"]

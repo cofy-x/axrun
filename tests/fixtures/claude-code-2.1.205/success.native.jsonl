@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","claude_code_version":"2.1.205","model":"test-model[opaque]","permissionMode":"bypassPermissions","tools":["Read","Edit"],"skills":[],"mcp_servers":[]}
+{"type":"user","uuid":"user-visible","message":{"content":"Visible compatibility follow-up."}}
+{"type":"assistant","message":{"id":"message-main","model":"test-model[opaque]","content":[{"type":"thinking","thinking":"RAW-THINKING-MARKER-MUST-DISAPPEAR","signature":"RAW-SIGNATURE-MARKER-MUST-DISAPPEAR"},{"type":"text","text":"I will inspect the fixture."},{"type":"tool_use","id":"call-read","name":"Read","input":{"file_path":"/workspace/example.py","authorization":"CREDENTIAL-HEADER-MARKER-MUST-DISAPPEAR"}}],"usage":{"input_tokens":12,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2}},"parent_tool_use_id":null}
+{"type":"user","timestamp":"2026-09-19T00:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-read","content":"deterministic tool failure CREDENTIAL-HEADER-MARKER-MUST-DISAPPEAR","is_error":true}]}}
+{"type":"assistant","message":{"id":"message-subagent","model":"test-model[opaque]","content":[{"type":"text","text":"Subagent-visible recovery."}]},"parent_tool_use_id":"call-read"}
+{"type":"thinking_tokens","thinking_tokens":23,"model":"test-model[opaque]"}
+{"type":"result","subtype":"success","is_error":false,"result":"Fixture completed.","stop_reason":"end_turn","modelUsage":{"test-model[opaque]":{}},"usage":{"input_tokens":20,"output_tokens":9,"cache_creation_input_tokens":1,"cache_read_input_tokens":7}}

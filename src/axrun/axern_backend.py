@@ -5,17 +5,28 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
+from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
 
 
 class AxernBackend:
-    def __init__(self, client: Any, *, namespace: str = "default") -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        namespace: str = "default",
+        allocation_ready_timeout_seconds: float = 900.0,
+    ) -> None:
+        if allocation_ready_timeout_seconds <= 0:
+            raise ValueError("allocation ready timeout must be positive")
         self.client = client
         self.namespace = namespace
+        self.allocation_ready_timeout_seconds = allocation_ready_timeout_seconds
 
     def execute(
         self,
@@ -23,10 +34,71 @@ class AxernBackend:
         *,
         artifact_dir: Path,
         on_bound: Callable[[ExecutionRef], None],
+        lifecycle: PreStartLifecycle | None = None,
+    ) -> StageResult:
+        return self._execute(
+            plan,
+            artifact_dir=artifact_dir,
+            on_bound=on_bound,
+            lifecycle=lifecycle,
+            rootfs_snapshot=False,
+        )
+
+    def execute_rootfs(
+        self,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+        on_bound: Callable[[ExecutionRef], None],
+    ) -> tuple[StageResult, str]:
+        result = self._execute(
+            plan,
+            artifact_dir=artifact_dir,
+            on_bound=on_bound,
+            lifecycle=None,
+            rootfs_snapshot=True,
+            download_outputs=False,
+        )
+        if result.exit_code != 0:
+            return result, ""
+        try:
+            snapshot = self.client.wait_rootfs_snapshot(
+                result.execution.run_id,
+                timeout=plan.timeout_seconds + 120.0,
+            )
+        except Exception as exc:
+            raise InfrastructureError("rootfs result did not become ready") from exc
+        environment_id = str(getattr(snapshot, "environment_id", ""))
+        image_ref = str(getattr(snapshot, "image_ref", ""))
+        platform_os = str(getattr(snapshot, "platform_os", ""))
+        platform_arch = str(getattr(snapshot, "platform_arch", ""))
+        if not environment_id or "@sha256:" not in image_ref:
+            raise InfrastructureError("rootfs result has an invalid derived Environment identity")
+        if (platform_os, platform_arch) != ("linux", "amd64"):
+            raise InfrastructureError("rootfs result platform is not linux/amd64")
+        try:
+            artifacts = self._download_outputs(result.execution.run_id, plan, artifact_dir)
+        except (ContractError, InfrastructureError) as exc:
+            self.delete_environment(environment_id)
+            raise InfrastructureError("rootfs workload output is unavailable or invalid") from exc
+        return (replace(result, artifacts=artifacts) if plan.outputs else result), environment_id
+
+    def _execute(
+        self,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+        on_bound: Callable[[ExecutionRef], None],
+        lifecycle: PreStartLifecycle | None,
+        rootfs_snapshot: bool,
+        download_outputs: bool = True,
     ) -> StageResult:
         sdk = _sdk_types()
         ready_marker = "/run/axrun/inputs-ready"
-        wrapper = 'while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
+        # A rootfs result can contain the marker written by its producer Run. Remove any
+        # inherited marker before waiting so a derived Environment cannot release a fresh
+        # Run before this caller has uploaded its inputs and completed pre-start lifecycle.
+        wrapper = 'rm -f "$1"; while [ ! -f "$1" ]; do sleep 0.1; done; shift; exec "$@"'
         kwargs: dict[str, Any] = {
             "environment_id": plan.environment_id,
             "namespace": self.namespace,
@@ -52,6 +124,7 @@ class AxernBackend:
             "limit_cpu": plan.resources.limit_cpu,
             "limit_memory": plan.resources.limit_memory,
             "limit_ephemeral_storage": plan.resources.limit_ephemeral_storage,
+            "rootfs_snapshot": rootfs_snapshot,
         }
         if plan.image_mounts:
             kwargs["image_mounts"] = [
@@ -69,11 +142,24 @@ class AxernBackend:
         run = self.client.create_run(**kwargs)
         execution = ExecutionRef(plan.environment_id, run.id)
         on_bound(execution)
-        run = _wait_running(self.client, run.id, timeout_seconds=180.0)
+        try:
+            run = _wait_running(
+                self.client,
+                run.id,
+                timeout_seconds=self.allocation_ready_timeout_seconds,
+            )
+        except BaseException:
+            # No input or readiness marker has been written yet. Cancellation is authoritative
+            # here and prevents an unowned Run from starting after the caller's readiness timeout.
+            self.client.cancel_run(run.id)
+            raise
         execution = ExecutionRef(plan.environment_id, run.id, run.allocation_id)
         on_bound(execution)
         allocation = self.client.allocation(run.allocation_id)
+        released = False
         try:
+            if lifecycle is not None:
+                lifecycle.start(execution, allocation)
             for item in plan.inputs:
                 source = Path(item.source)
                 if item.sha256 and _sha256(source) != item.sha256:
@@ -83,31 +169,40 @@ class AxernBackend:
                 else:
                     allocation.write_file(item.target, source.read_bytes())
             allocation.write_file(ready_marker, b"ready\n")
+            released = True
         except BaseException:
-            self.client.cancel_run(run.id)
+            if lifecycle is not None:
+                lifecycle.close()
+            if not released:
+                self.client.cancel_run(run.id)
             raise
-
-        # Once the process is released, an ambiguous transport failure must be
-        # recovered by the persisted Run ID. It must not become an implicit
-        # cancellation merely because this client lost its connection.
-        stdout_path, stderr_path = self._capture_output(
-            run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
-        )
-        terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
-
-        artifacts = (
-            ()
-            if int(terminal.exit_code) != 0
-            else self._download_outputs(run.id, plan, artifact_dir)
-        )
-        return StageResult(
-            execution=execution,
-            exit_code=int(terminal.exit_code),
-            diagnostic_code=str(terminal.diagnostic_code),
-            artifacts=artifacts,
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-        )
+        try:
+            # Once the process is released, an ambiguous transport failure must be
+            # recovered by the persisted Run ID. It must not become an implicit
+            # cancellation merely because this client lost its connection.
+            stdout_path, stderr_path = self._capture_output(
+                run.id, artifact_dir, follow=True, timeout=plan.timeout_seconds + 120.0
+            )
+            terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
+            exit_code = _effective_exit_code(terminal)
+            artifacts = (
+                ()
+                if exit_code != 0 or not download_outputs
+                else self._download_outputs(run.id, plan, artifact_dir)
+            )
+            diagnostic_details = _lifecycle_failure_diagnostic(lifecycle, exit_code)
+            return StageResult(
+                execution=execution,
+                exit_code=exit_code,
+                diagnostic_code=_diagnostic_name(terminal),
+                artifacts=artifacts,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                diagnostic_details=diagnostic_details,
+            )
+        finally:
+            if lifecycle is not None:
+                lifecycle.close()
 
     def recover(
         self,
@@ -115,6 +210,7 @@ class AxernBackend:
         plan: StagePlan,
         *,
         artifact_dir: Path,
+        download_outputs: bool = True,
     ) -> StageResult | None:
         run = self.client.get_run(execution.run_id)
         if _status_name(run) not in {
@@ -123,20 +219,67 @@ class AxernBackend:
             "RUN_STATUS_CANCELLED",
         }:
             return None
+        exit_code = _effective_exit_code(run)
         artifacts = (
-            () if int(run.exit_code) != 0 else self._download_outputs(run.id, plan, artifact_dir)
+            ()
+            if exit_code != 0 or not download_outputs
+            else self._download_outputs(run.id, plan, artifact_dir)
         )
         stdout_path, stderr_path = self._capture_output(
             run.id, artifact_dir, follow=False, timeout=30.0
         )
         return StageResult(
             execution=ExecutionRef(plan.environment_id, run.id, run.allocation_id),
-            exit_code=int(run.exit_code),
-            diagnostic_code=str(run.diagnostic_code),
+            exit_code=exit_code,
+            diagnostic_code=_diagnostic_name(run),
             artifacts=artifacts,
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
         )
+
+    def recover_rootfs(
+        self,
+        execution: ExecutionRef,
+        plan: StagePlan,
+        *,
+        artifact_dir: Path,
+    ) -> tuple[StageResult, str] | None:
+        result = self.recover(execution, plan, artifact_dir=artifact_dir, download_outputs=False)
+        if result is None:
+            return None
+        if result.exit_code != 0:
+            return result, ""
+        try:
+            snapshot = self.client.wait_rootfs_snapshot(
+                execution.run_id,
+                timeout=plan.timeout_seconds + 120.0,
+            )
+        except Exception as exc:
+            raise InfrastructureError("rootfs result did not become ready") from exc
+        environment_id = str(getattr(snapshot, "environment_id", ""))
+        image_ref = str(getattr(snapshot, "image_ref", ""))
+        platform_os = str(getattr(snapshot, "platform_os", ""))
+        platform_arch = str(getattr(snapshot, "platform_arch", ""))
+        if not environment_id or "@sha256:" not in image_ref:
+            raise InfrastructureError("rootfs result has an invalid derived Environment identity")
+        if (platform_os, platform_arch) != ("linux", "amd64"):
+            raise InfrastructureError("rootfs result platform is not linux/amd64")
+        try:
+            artifacts = self._download_outputs(result.execution.run_id, plan, artifact_dir)
+        except (ContractError, InfrastructureError) as exc:
+            self.delete_environment(environment_id)
+            raise InfrastructureError("rootfs workload output is unavailable or invalid") from exc
+        return (replace(result, artifacts=artifacts) if plan.outputs else result), environment_id
+
+    def delete_environment(self, environment_id: str) -> None:
+        from axern_sdk import SandboxNotFoundError
+
+        try:
+            self.client.delete_environment(environment_id)
+        except SandboxNotFoundError:
+            return
+        except Exception as exc:
+            raise InfrastructureError("derived Environment cleanup failed") from exc
 
     def cancel(self, execution: ExecutionRef) -> None:
         run = self.client.get_run(execution.run_id)
@@ -174,6 +317,8 @@ class AxernBackend:
     def _download_outputs(
         self, run_id: str, plan: StagePlan, artifact_dir: Path
     ) -> tuple[Artifact, ...]:
+        if not plan.outputs:
+            return ()
         deadline = time.monotonic() + 60.0
         while True:
             try:
@@ -193,6 +338,10 @@ class AxernBackend:
             if sealed is None or sealed.status != "available":
                 reason = "missing" if sealed is None else f"{sealed.status}: {sealed.reason}"
                 raise ContractError(f"declared output {expected.path} is unavailable: {reason}")
+            if int(sealed.size_bytes) > expected.max_bytes:
+                raise ContractError(
+                    f"declared output {expected.path} exceeds {expected.max_bytes} bytes"
+                )
             destination = artifact_dir / f"{index:02d}-{Path(expected.path).name}"
             with destination.open("wb") as stream:
                 verified = self.client.download_sealed_output(run_id, sealed.output_id, stream)
@@ -244,6 +393,28 @@ def _status_name(run: Any) -> str:
     return str(status_field.enum_type.values_by_number[int(run.status)].name)
 
 
+def _effective_exit_code(run: Any) -> int:
+    """Do not interpret an absent proto3 exit code as success on a failed Run."""
+    exit_code = int(run.exit_code)
+    try:
+        status = _status_name(run)
+    except AttributeError:
+        return exit_code
+    return 1 if status != "RUN_STATUS_SUCCEEDED" and exit_code == 0 else exit_code
+
+
+def _diagnostic_name(run: Any) -> str:
+    value = run.diagnostic_code
+    if isinstance(value, str):
+        return value
+    try:
+        field = run.DESCRIPTOR.fields_by_name["diagnostic_code"]
+        name = str(field.enum_type.values_by_number[int(value)].name)
+    except (AttributeError, KeyError):
+        return str(value)
+    return "" if name.endswith("_UNSPECIFIED") else name
+
+
 _TERMINAL_STATUSES = {
     "RUN_STATUS_SUCCEEDED",
     "RUN_STATUS_FAILED",
@@ -257,6 +428,15 @@ def _manifest_retryable(exc: Exception) -> bool:
     if isinstance(exc, SandboxNotFoundError):
         return True
     return isinstance(exc, SandboxConnectionError) and exc.retryable
+
+
+def _lifecycle_failure_diagnostic(
+    lifecycle: PreStartLifecycle | None, exit_code: int
+) -> dict[str, Any]:
+    if lifecycle is None or exit_code == 0:
+        return {}
+    value: object = getattr(lifecycle, "failure_diagnostic", {})
+    return dict(cast(dict[str, Any], value)) if isinstance(value, dict) else {}
 
 
 def _sha256(path: Path) -> str:
