@@ -154,7 +154,7 @@ def test_sdk_reproducer_proves_released_surface_supports_derived_environment() -
     assert completed.returncode == 0
     report = json.loads(completed.stdout)
     assert report["schema_version"] == 2
-    assert report["axern_sdk_version"] == "0.11.2"
+    assert report["axern_sdk_version"] == "0.11.3"
     assert report["supported"] is True
     assert report["capability"] == "post-compile-allocation-snapshot-v1"
     assert report["missing_capability"] == ""
