@@ -1,4 +1,4 @@
-"""The released-SDK smoke rejects policy/result mismatches before acceptance."""
+"""The released-SDK smoke records both trials and rejects policy mismatches."""
 
 from __future__ import annotations
 
@@ -42,10 +42,29 @@ def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, 
             return StageResult(ExecutionRef("env", "run", "alloc"), 0, "", (artifact,))
 
     monkeypatch.setattr(MODULE, "AxernBackend", Backend)
-    if permitted:
-        with pytest.raises(RuntimeError, match="contradicts"):
-            MODULE._probe(object(), "env", tmp_path, StageNetworkPolicy.DENY_ALL)
-    else:
-        result = MODULE._probe(object(), "env", tmp_path, StageNetworkPolicy.DENY_ALL)
-        assert result["bound_before_release"] is True
-        assert result["run_id"] == "run" and result["allocation_id"] == "alloc"
+    result = MODULE._probe(object(), "env", tmp_path, StageNetworkPolicy.DENY_ALL)
+    assert result["bound_before_release"] is True
+    assert result["run_id"] == "run" and result["allocation_id"] == "alloc"
+    assert result["egress_http_success"] is permitted
+
+
+def test_policy_result_pair_requires_isolation_and_public_egress() -> None:
+    denied = {
+        "policy": "deny_all",
+        "run_id": "run-1",
+        "allocation_id": "alloc-1",
+        "egress_http_success": False,
+    }
+    public = {
+        "policy": "unrestricted",
+        "run_id": "run-2",
+        "allocation_id": "alloc-2",
+        "egress_http_success": True,
+    }
+    MODULE._assert_policy_results([denied, public])
+    with pytest.raises(RuntimeError, match="deny_all"):
+        MODULE._assert_policy_results([{**denied, "egress_http_success": True}, public])
+    with pytest.raises(RuntimeError, match="unrestricted"):
+        MODULE._assert_policy_results([denied, {**public, "egress_http_success": False}])
+    with pytest.raises(RuntimeError, match="fresh Runs"):
+        MODULE._assert_policy_results([denied, {**public, "run_id": "run-1"}])

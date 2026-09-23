@@ -59,9 +59,8 @@ def _probe(
     if len(data) != artifact.size_bytes or hashlib.sha256(data).hexdigest() != artifact.sha256:
         raise RuntimeError(f"{policy.value} sealed output integrity mismatch")
     payload = json.loads(data)
-    expected = policy is StageNetworkPolicy.UNRESTRICTED
-    if payload != {"egress_http_success": expected}:
-        raise RuntimeError(f"{policy.value} network result contradicts the stage policy")
+    if not isinstance(payload, dict) or type(payload.get("egress_http_success")) is not bool:
+        raise RuntimeError(f"{policy.value} network result has an invalid shape")
     if len(bound) != 2 or bound[0].allocation_id:
         raise RuntimeError("Run identity was not persisted before Allocation readiness")
     return {
@@ -74,6 +73,23 @@ def _probe(
         "sealed_sha256": artifact.sha256,
         "bound_before_release": True,
     }
+
+
+def _assert_policy_results(results: list[dict[str, Any]]) -> None:
+    if len(results) != 2 or [item["policy"] for item in results] != [
+        StageNetworkPolicy.DENY_ALL.value,
+        StageNetworkPolicy.UNRESTRICTED.value,
+    ]:
+        raise RuntimeError("network policy trials are incomplete")
+    if (
+        results[0]["run_id"] == results[1]["run_id"]
+        or results[0]["allocation_id"] == results[1]["allocation_id"]
+    ):
+        raise RuntimeError("network policy trials did not use fresh Runs and Allocations")
+    if results[0]["egress_http_success"] is not False:
+        raise RuntimeError("deny_all HTTPS egress was permitted")
+    if results[1]["egress_http_success"] is not True:
+        raise RuntimeError("unrestricted HTTPS egress was unavailable")
 
 
 def main() -> None:
@@ -119,12 +135,9 @@ def main() -> None:
             _probe(client, environment_id, root, StageNetworkPolicy.DENY_ALL),
             _probe(client, environment_id, root, StageNetworkPolicy.UNRESTRICTED),
         ]
-        if (
-            results[0]["run_id"] == results[1]["run_id"]
-            or results[0]["allocation_id"] == results[1]["allocation_id"]
-        ):
-            raise RuntimeError("network policy trials did not use fresh Runs and Allocations")
-        receipt.update({"status": "complete", "results": results})
+        receipt["results"] = results
+        _assert_policy_results(results)
+        receipt["status"] = "complete"
     except Exception as exc:
         receipt.update({"status": "infrastructure_error", "reason": type(exc).__name__})
         raise
