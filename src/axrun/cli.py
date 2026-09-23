@@ -49,6 +49,7 @@ from axrun.report import canonical_report_json, report_markdown, verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import load_trajectory_bundle
+from axrun.verification.programbench_provenance import review_programbench_seqtk
 
 
 def _episode(path: Path) -> ResolvedEpisode:
@@ -312,6 +313,11 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument("destination", type=Path)
     verify = commands.add_parser("verify-record")
     verify.add_argument("episode_id")
+    provenance = commands.add_parser(
+        "review-programbench-provenance",
+        help="body-free advisory review of a completed Claude seqtk episode",
+    )
+    provenance.add_argument("episode_id")
     report = commands.add_parser("report")
     report.add_argument("episode_id")
     report.add_argument("--format", choices=("json", "markdown"), default="json")
@@ -592,6 +598,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "export":
             _print({"path": str(_export(store, args.episode_id, args.destination))})
+            return 0
+        if args.command == "review-programbench-provenance":
+            _print(review_programbench_seqtk(store, args.episode_id))
             return 0
         if args.command in {"verify-record", "report"}:
             report = verify_record(store, args.episode_id)

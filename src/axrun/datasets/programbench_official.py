@@ -98,7 +98,7 @@ class _Case:
 _CASES = {
     _INSTANCE: _Case(),
     "lh3__seqtk.94e7070": _Case(
-        version="programbench-1.2.4-seqtk-94e7070-v1",
+        version="programbench-1.2.4-seqtk-94e7070-v2",
         instance="lh3__seqtk.94e7070",
         repository="lh3/seqtk",
         commit="94e707082d39b0a038f234df676e32d9802c0dc7",

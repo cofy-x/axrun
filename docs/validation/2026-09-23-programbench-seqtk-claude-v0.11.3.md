@@ -3,6 +3,15 @@
 Status: passed for one locked official instance. This is not suite or leaderboard support, and it
 does not resolve the tty-clock partial-result discrepancy tracked by cofy-x/axrun#3.
 
+This is an execution and scoring acceptance, not an attestation that the candidate is eligible
+for an official leaderboard submission under the upstream
+[integrity attestations](https://github.com/facebookresearch/ProgramBench/blob/main/src/programbench/data/templates/README.md.j2). A later private-evidence review found attempted `curl`,
+`wget`, and `git clone` commands in the canonical trajectory, despite the enforced deny-all
+sandbox network. It also found a prebuilt fallback file in the submitted archive. The verifier's
+compiled executable hash differs from that fallback, so this run does not show the fallback was
+used; nevertheless, a 429/429 score and network isolation alone do not prove compliance with
+ProgramBench's source/provenance restrictions. No hidden test body or credential is disclosed here.
+
 ## Fixed identities
 
 - Axrun execution commit: `8c7cd39581b1bce0dbe33359edf1ceb88796d97b` (the CLI exact-option

@@ -136,7 +136,7 @@ effect of adding an adapter.
 | --- | --- | --- |
 | SWE-bench-style repository repair | `git-patch@1` | Synthetic vertical and one deliberately closed SWE-bench Verified instance are implemented |
 | Greenfield repository creation | `workspace-archive@1` | Static and real Claude Code verticals are implemented and accepted on the local arm64 development path |
-| ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a rootfs result | The 1.2.4 calculator fixture and one closed official tty-clock multi-Run verifier are implemented; this is not general suite support |
+| ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a rootfs result | The 1.2.4 calculator fixture and closed official tty-clock and seqtk multi-Run verifiers are implemented; this is not general suite support |
 | Terminal benchmark, file-only subset | `workspace-archive@1` may be sufficient | Requires explicit task selection and a benchmark adapter; not implemented |
 | Terminal benchmark with packages or system-file changes | A successful finite setup Run may publish a derived Environment | Requires benchmark-specific phase semantics; mounts, secrets, processes, sockets, kernel state, and live services are not captured |
 | Text/API answer benchmarks | Future bounded `text-response` candidate | Not implemented; add only with a concrete benchmark and verifier |
@@ -166,6 +166,8 @@ Implemented now:
 - a closed ProgramBench 1.2.4 calculator compatibility vertical with deterministic passed/failed paths;
 - a fail-closed ProgramBench 1.2.4 official tty-clock asset lock, resolver, compile/rootfs/branch
   verifier, durable recovery record, and released-SDK derived-Environment reproducer;
+- a separately locked official seqtk instance with deterministic parity and real Claude Code
+  inference-to-fresh-verification acceptance on Axern v0.11.3;
 - static candidate and Claude Code harness paths;
 - canonical trajectory, per-inference-stage ModelProxy/Tunnel lifecycle, fresh offline
   verification, recovery, safe progress, and record verification.
@@ -173,7 +175,7 @@ Implemented now:
 Deliberately deferred:
 
 - general ProgramBench, suite scheduling, leaderboard, or Terminal-Bench support;
-- additional official instances beyond the locked tty-clock vertical;
+- additional official instances beyond the locked tty-clock and seqtk verticals;
 - dynamic plugins, multi-tenant model proxying, a shared harness service, dataset
   hosting, suite scheduling, and leaderboard orchestration;
 - a second real harness without a benchmark-driven acceptance case.

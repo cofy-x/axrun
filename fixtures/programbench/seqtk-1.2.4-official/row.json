@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "dataset_identity": "programbench.official-single",
-  "dataset_version": "programbench-1.2.4-seqtk-94e7070-v1",
+  "dataset_version": "programbench-1.2.4-seqtk-94e7070-v2",
   "programbench_version": "1.2.4",
   "programbench_git_sha": "963063c9271cc40fa179977356782ea4582e0b0c",
   "instance_id": "lh3__seqtk.94e7070",
@@ -10,7 +10,7 @@
   "language": "c",
   "difficulty": "",
   "prompt_file": "problem.md",
-  "prompt_sha256": "6df077de37c31e05f57288d1c1b538e9313cb1fb8d22f09840c59fde98154ebf",
+  "prompt_sha256": "ef1940ada42d9e5d2a0c038fdbbae3184864afb91b138cb2735750d1892a9d92",
   "task_metadata_file": "task.yaml",
   "task_metadata_sha256": "16877148ab7e5ceea607b832eef90b7fa4b807c37f993156389fd35771411b38",
   "tests_metadata_file": "tests.json",

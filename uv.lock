@@ -55,6 +55,7 @@ kova = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "kova-client" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
@@ -69,6 +70,7 @@ provides-extras = ["kova"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "kova-client", specifier = "==0.1.0rc9" },
     { name = "pyright", specifier = ">=1.1.405" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "ruff", specifier = ">=0.11.0" },
