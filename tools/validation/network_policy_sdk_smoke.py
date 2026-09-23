@@ -79,14 +79,34 @@ def _probe(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--context-config", type=Path)
     args = parser.parse_args()
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise RuntimeError("native linux/amd64 is required")
     if args.endpoint != "127.0.0.1:25000":
         raise RuntimeError("smoke accepts only the Forge-managed loopback Axern endpoint")
+    context_config = args.context_config or (
+        Path("/data/forge-workspace/.forge/local/hosts") / platform.node() / "axern/config.json"
+    )
+    config = json.loads(context_config.read_text(encoding="utf-8"))
+    if config.get("current_context") != "local":
+        raise RuntimeError("Axern local context is not selected")
+    context = config["contexts"]["local"]
+    if context.get("endpoint") != args.endpoint:
+        raise RuntimeError("Axern context endpoint does not match the requested endpoint")
+    tls = context["tls"]
+    if not all(isinstance(tls.get(key), str) and tls[key] for key in ("ca_cert", "cert", "key")):
+        raise RuntimeError("Axern local context has incomplete TLS configuration")
     os.umask(0o077)
     root = Path(tempfile.mkdtemp(prefix="axrun-network-policy.", dir="/data/forge-artifacts"))
-    client = AxernClient.from_env(target=args.endpoint)
+    client = AxernClient.from_env(
+        target=args.endpoint,
+        tls_ca_cert=tls["ca_cert"],
+        tls_cert=tls["cert"],
+        tls_key=tls["key"],
+        tls_server_name="gatewayd",
+        proxy_mode="direct",
+    )
     environment_id = ""
     receipt: dict[str, Any] = {"status": "started", "image": IMAGE, "environment_id": ""}
     try:
