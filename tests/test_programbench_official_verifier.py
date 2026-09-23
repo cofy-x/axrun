@@ -137,6 +137,17 @@ class OfficialBackend:
             return StageResult(execution, 22, "", ()), ""
         artifact_dir.mkdir(parents=True, exist_ok=True)
         result = artifact_dir / "compile.json"
+        if self.variant == "corrupt-compile-result":
+            result.write_text("{")
+            return (
+                StageResult(
+                    execution,
+                    0,
+                    "",
+                    (_artifact("/outputs/programbench-compile.json", result),),
+                ),
+                f"derived-{self.variant}",
+            )
         result.write_text(
             json.dumps(
                 {
@@ -188,6 +199,14 @@ class OfficialBackend:
             tests = [dict(tests[0], status="failure"), *tests]
         artifact_dir.mkdir(parents=True, exist_ok=True)
         path = artifact_dir / "branch.json"
+        if self.variant == "corrupt-branch-result":
+            path.write_text("{")
+            return StageResult(
+                execution,
+                0,
+                "",
+                (_artifact("/outputs/programbench-branch.json", path),),
+            )
         path.write_text(
             json.dumps(
                 {
@@ -376,6 +395,39 @@ def test_official_terminal_branch_infrastructure_failure_cleans_derived_environm
             verifier=selection.verifier,
         )
     assert backend.deleted_environments == ["derived-infrastructure-failure"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "infrastructure_failed"
+    assert record["cleanup_state"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("variant", "message"),
+    (
+        ("corrupt-compile-result", "compile result is invalid"),
+        ("corrupt-branch-result", "branch result is invalid"),
+    ),
+)
+def test_evaluator_result_corruption_is_infrastructure_failure_and_cleans_environment(
+    tmp_path: Path, variant: str, message: str
+) -> None:
+    episode = _episode(tmp_path, variant)
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant=variant)
+    store = EpisodeStore(tmp_path / "state")
+
+    with pytest.raises(InfrastructureError, match=message):
+        EpisodeRunner(backend=backend, store=store).run(
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+
+    assert backend.deleted_environments == [f"derived-{variant}"]
     record = json.loads(
         (
             store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"

@@ -324,27 +324,34 @@ class ProgramBenchOfficialVerifierAdapter:
                         else compile_result.diagnostic_code
                     )
                 )
-            compile_value, compile_artifact = _load_artifact_json(compile_result, _COMPILE_RESULT)
-            if (
-                set(compile_value)
-                != {
-                    "status",
-                    "diagnostic_code",
-                    "executable_sha256",
-                    "executable_mode",
-                }
-                or compile_value["status"] != "succeeded"
-            ):
-                raise ContractError("ProgramBench compile result has an invalid shape")
-            executable_digest = str(compile_value["executable_sha256"])
-            _require_digest(executable_digest, "ProgramBench executable")
             if not environment_id:
                 raise InfrastructureError("successful compile has no derived Environment")
             record.compile.execution = compile_result.execution
+            record.derived_environment_id = environment_id
+            store.save(record)
+            try:
+                compile_value, compile_artifact = _load_artifact_json(
+                    compile_result, _COMPILE_RESULT
+                )
+                if (
+                    set(compile_value)
+                    != {
+                        "status",
+                        "diagnostic_code",
+                        "executable_sha256",
+                        "executable_mode",
+                    }
+                    or compile_value["status"] != "succeeded"
+                ):
+                    raise ContractError("ProgramBench compile result has an invalid shape")
+                executable_digest = str(compile_value["executable_sha256"])
+                _require_digest(executable_digest, "ProgramBench executable")
+            except (ContractError, json.JSONDecodeError, OSError, UnicodeError) as exc:
+                _mark_infrastructure_failed(record, store, coordinator)
+                raise InfrastructureError("ProgramBench compile result is invalid") from exc
             record.compile.state = "completed"
             record.compile.result_path = compile_artifact.path
             record.compile.result_digest = compile_artifact.sha256
-            record.derived_environment_id = environment_id
             record.executable_digest = executable_digest
             record.state = "branches_running"
             store.save(record)
@@ -369,19 +376,23 @@ class ProgramBenchOfficialVerifierAdapter:
                 current.execution = execution
                 store.save(current_record)
 
-            result = coordinator.run(
-                plan,
-                artifact_dir=(
-                    state_root
-                    / "artifacts"
-                    / episode.episode_id
-                    / "verification"
-                    / "branches"
-                    / branch
-                ),
-                existing=step.execution,
-                on_bound=bind_branch,
-            )
+            try:
+                result = coordinator.run(
+                    plan,
+                    artifact_dir=(
+                        state_root
+                        / "artifacts"
+                        / episode.episode_id
+                        / "verification"
+                        / "branches"
+                        / branch
+                    ),
+                    existing=step.execution,
+                    on_bound=bind_branch,
+                )
+            except ContractError as exc:
+                _mark_infrastructure_failed(record, store, coordinator)
+                raise InfrastructureError("ProgramBench branch result is unavailable") from exc
             if result.exit_code != 0:
                 record.cleanup_state = "running"
                 store.save(record)
@@ -392,8 +403,12 @@ class ProgramBenchOfficialVerifierAdapter:
                 raise InfrastructureError(
                     f"ProgramBench branch Run failed: {result.diagnostic_code}"
                 )
-            value, artifact = _load_artifact_json(result, _BRANCH_RESULT)
-            _validate_branch_result(value, branch)
+            try:
+                value, artifact = _load_artifact_json(result, _BRANCH_RESULT)
+                _validate_branch_result(value, branch)
+            except (ContractError, json.JSONDecodeError, OSError, UnicodeError) as exc:
+                _mark_infrastructure_failed(record, store, coordinator)
+                raise InfrastructureError("ProgramBench branch result is invalid") from exc
             if value["status"] == "infrastructure_error":
                 step.execution = result.execution
                 step.result_path = artifact.path
@@ -703,6 +718,20 @@ class ProgramBenchOfficialVerifierAdapter:
         remove_hashes = episode.verifier.config["remove_hashes"]
         if remove_hashes != case.remove_hashes:
             raise ContractError("ProgramBench official submission-clean hash set changed")
+
+
+def _mark_infrastructure_failed(
+    record: _ExecutionRecord,
+    store: _ExecutionStore,
+    coordinator: MultiRunVerificationCoordinator,
+) -> None:
+    record.state = "infrastructure_failed"
+    record.cleanup_state = "running"
+    store.save(record)
+    if record.derived_environment_id:
+        coordinator.delete_environment(record.derived_environment_id)
+    record.cleanup_state = "completed"
+    store.save(record)
 
 
 def _step(raw: dict[str, Any]) -> _Step:

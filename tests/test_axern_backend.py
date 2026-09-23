@@ -181,6 +181,45 @@ def test_sealing_failure_after_success_is_infrastructure_failure(
             backend.execute_rootfs(plan, artifact_dir=tmp_path, on_bound=lambda ref: None)
 
 
+@pytest.mark.parametrize("recover", [False, True])
+def test_rootfs_output_failure_cleans_derived_environment(
+    tmp_path: Path, monkeypatch, recover
+) -> None:
+    execution = ExecutionRef("base-env", "run-compile", "alloc-compile")
+    stage = SimpleNamespace(execution=execution, exit_code=0, artifacts=())
+
+    class Client:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def wait_rootfs_snapshot(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                environment_id="derived-env",
+                image_ref=f"registry.invalid/rootfs@sha256:{'a' * 64}",
+                platform_os="linux",
+                platform_arch="amd64",
+            )
+
+        def delete_environment(self, environment_id: str) -> None:
+            self.deleted.append(environment_id)
+
+    client = Client()
+    backend = AxernBackend(client)
+    monkeypatch.setattr(backend, "recover" if recover else "_execute", lambda *a, **k: stage)
+    monkeypatch.setattr(
+        backend,
+        "_download_outputs",
+        lambda *a, **k: (_ for _ in ()).throw(ContractError("missing evaluator result")),
+    )
+    plan = StagePlan("base-env", ("true",), "/workspace", ())
+    with pytest.raises(InfrastructureError, match="rootfs workload output"):
+        if recover:
+            backend.recover_rootfs(execution, plan, artifact_dir=tmp_path)
+        else:
+            backend.execute_rootfs(plan, artifact_dir=tmp_path, on_bound=lambda ref: None)
+    assert client.deleted == ["derived-env"]
+
+
 def test_output_capture_has_per_stream_bound(tmp_path: Path) -> None:
     class Client:
         def read_run_output(self, *args, **kwargs):

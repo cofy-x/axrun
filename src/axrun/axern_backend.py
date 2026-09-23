@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -56,6 +57,7 @@ class AxernBackend:
             on_bound=on_bound,
             lifecycle=None,
             rootfs_snapshot=True,
+            download_outputs=False,
         )
         if result.exit_code != 0:
             return result, ""
@@ -74,7 +76,12 @@ class AxernBackend:
             raise InfrastructureError("rootfs result has an invalid derived Environment identity")
         if (platform_os, platform_arch) != ("linux", "amd64"):
             raise InfrastructureError("rootfs result platform is not linux/amd64")
-        return result, environment_id
+        try:
+            artifacts = self._download_outputs(result.execution.run_id, plan, artifact_dir)
+        except (ContractError, InfrastructureError) as exc:
+            self.delete_environment(environment_id)
+            raise InfrastructureError("rootfs workload output is unavailable or invalid") from exc
+        return (replace(result, artifacts=artifacts) if plan.outputs else result), environment_id
 
     def _execute(
         self,
@@ -84,6 +91,7 @@ class AxernBackend:
         on_bound: Callable[[ExecutionRef], None],
         lifecycle: PreStartLifecycle | None,
         rootfs_snapshot: bool,
+        download_outputs: bool = True,
     ) -> StageResult:
         sdk = _sdk_types()
         ready_marker = "/run/axrun/inputs-ready"
@@ -177,7 +185,11 @@ class AxernBackend:
             )
             terminal = self.client.wait_run(run.id, timeout=plan.timeout_seconds + 120.0)
             exit_code = _effective_exit_code(terminal)
-            artifacts = () if exit_code != 0 else self._download_outputs(run.id, plan, artifact_dir)
+            artifacts = (
+                ()
+                if exit_code != 0 or not download_outputs
+                else self._download_outputs(run.id, plan, artifact_dir)
+            )
             diagnostic_details = _lifecycle_failure_diagnostic(lifecycle, exit_code)
             return StageResult(
                 execution=execution,
@@ -198,6 +210,7 @@ class AxernBackend:
         plan: StagePlan,
         *,
         artifact_dir: Path,
+        download_outputs: bool = True,
     ) -> StageResult | None:
         run = self.client.get_run(execution.run_id)
         if _status_name(run) not in {
@@ -207,7 +220,11 @@ class AxernBackend:
         }:
             return None
         exit_code = _effective_exit_code(run)
-        artifacts = () if exit_code != 0 else self._download_outputs(run.id, plan, artifact_dir)
+        artifacts = (
+            ()
+            if exit_code != 0 or not download_outputs
+            else self._download_outputs(run.id, plan, artifact_dir)
+        )
         stdout_path, stderr_path = self._capture_output(
             run.id, artifact_dir, follow=False, timeout=30.0
         )
@@ -227,7 +244,7 @@ class AxernBackend:
         *,
         artifact_dir: Path,
     ) -> tuple[StageResult, str] | None:
-        result = self.recover(execution, plan, artifact_dir=artifact_dir)
+        result = self.recover(execution, plan, artifact_dir=artifact_dir, download_outputs=False)
         if result is None:
             return None
         if result.exit_code != 0:
@@ -247,7 +264,12 @@ class AxernBackend:
             raise InfrastructureError("rootfs result has an invalid derived Environment identity")
         if (platform_os, platform_arch) != ("linux", "amd64"):
             raise InfrastructureError("rootfs result platform is not linux/amd64")
-        return result, environment_id
+        try:
+            artifacts = self._download_outputs(result.execution.run_id, plan, artifact_dir)
+        except (ContractError, InfrastructureError) as exc:
+            self.delete_environment(environment_id)
+            raise InfrastructureError("rootfs workload output is unavailable or invalid") from exc
+        return (replace(result, artifacts=artifacts) if plan.outputs else result), environment_id
 
     def delete_environment(self, environment_id: str) -> None:
         from axern_sdk import SandboxNotFoundError
@@ -295,6 +317,8 @@ class AxernBackend:
     def _download_outputs(
         self, run_id: str, plan: StagePlan, artifact_dir: Path
     ) -> tuple[Artifact, ...]:
+        if not plan.outputs:
+            return ()
         deadline = time.monotonic() + 60.0
         while True:
             try:
