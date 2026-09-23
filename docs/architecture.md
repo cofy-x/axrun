@@ -117,7 +117,7 @@ runs `compile.sh` offline, and grades behavior. This proves composition but is n
 official tasks and is not leaderboard evidence. A real instance still requires fixed official
 cleanroom and evaluation images, test-blob revision, and official-evaluator parity.
 
-The official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upstream
+The first official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upstream
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
 the complete expected/ignored test metadata. The benchmark-owned verifier snapshots the whole
 post-compile container and
@@ -128,6 +128,14 @@ would still lose candidate build effects outside that path and is not official p
 coordinator creates or recovers the compile Run and branch Runs while the adapter alone owns
 ProgramBench assets, failure taxonomy and scoring. The public-SDK-only reproducer audits the exact
 request/wait contract rather than guessing from method names.
+
+A second closed ProgramBench 1.2.4 vertical locks `lh3__seqtk.94e7070`. Its deterministic
+reference-build, public partial, and compile-failure paths were compared with the native
+evaluator on released Axern v0.11.3. A real Claude Code 2.1.205 candidate then produced sealed
+outputs and an immutable CandidateBundle; fresh compile and branch Runs returned 429/429 passed.
+That result proves this instance's execution path, not general ProgramBench support or submission
+eligibility under every benchmark integrity rule. The separate tty-clock partial TUI discrepancy
+remains unresolved.
 
 A file-only Terminal-Bench subset may also reuse workspace archives. Tasks that preserve package
 or system-file changes across finite setup and test phases may use the rootfs-result

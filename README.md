@@ -137,7 +137,7 @@ workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
 
 `workspace-archive@1` sorts paths, fixes ownership and mtime, preserves ordinary permission bits, and rejects symlinks, devices, FIFOs, sockets, absolute paths, traversal, duplicate entries, oversized paths, excessive entries, archives over 64 MiB, and extracted payloads over 512 MiB. Extraction repeats the closed validation in the fresh verification Allocation. The archive never includes `/inputs`, `/outputs`, `/run/axrun`, model transport state, or harness outputs because its root is the explicit task working directory.
 
-This contract is sufficient groundwork for a ProgramBench single-instance adapter and may cover a file-only Terminal-Bench subset. It does not represent services, package installation, system configuration, background processes, or VM state; full Terminal-Bench support still requires a public immutable Allocation snapshot-to-fresh-Allocation capability from Axern. Openbench remains a research and parity input, never an Axrun runtime dependency. Axrun does not claim full ProgramBench or Terminal-Bench support. A mini-SWE-agent readonly mount should be considered only if future official-baseline parity requires it; it is not a prerequisite for using Claude Code.
+This contract supports the closed ProgramBench single-instance adapters below and may cover a file-only Terminal-Bench subset. Axern's released rootfs result can carry filesystem changes from a successful finite Run into fresh Runs through a derived Environment. It does not carry mounts, secrets, processes, sockets, kernel state, or live services; those require explicit benchmark-specific modeling. Openbench remains a research and parity input, never an Axrun runtime dependency. Axrun does not claim full ProgramBench or Terminal-Bench support. A mini-SWE-agent readonly mount should be considered only if future official-baseline parity requires it; it is not a prerequisite for using Claude Code.
 
 The repository now includes a closed ProgramBench 1.2.4 calculator compatibility fixture. It uses
 ProgramBench's own `testorg__calculator.abc1234` fixture identity, not an official benchmark task,
@@ -176,8 +176,12 @@ uv run python tools/reproducers/programbench_post_compile_snapshot.py
 # exit 0 means the exact 0.11.0 request/wait contract is present
 ```
 
-This is deliberately one official-instance adapter, not general ProgramBench, suite scheduling,
-leaderboard support, or a generic workflow engine.
+The separate locked `lh3__seqtk.94e7070` adapter has deterministic parity and a real Claude
+Code 2.1.205 inference-to-verification acceptance on released Axern v0.11.3. See the
+[deterministic acceptance](docs/validation/2026-09-23-programbench-seqtk-axern-v0.11.3.md) and
+[Claude acceptance](docs/validation/2026-09-23-programbench-seqtk-claude-v0.11.3.md). These are
+two closed official-instance verticals, not general ProgramBench, suite scheduling, leaderboard
+support, or a generic workflow engine. The tty-clock partial TUI parity question remains open.
 
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
