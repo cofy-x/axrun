@@ -173,6 +173,7 @@ def test_programbench_official_resolver_requires_explicit_test_assets() -> None:
     assert args.command == "resolve-programbench-official"
     assert args.harness == "static-candidate"
     assert args.test_assets_dir == Path("locked-assets")
+    assert args.runtime_image.endswith(f"@sha256:{'a' * 64}")
 
 
 def test_claude_model_option_does_not_conflict_with_caller_model_options() -> None:
@@ -183,7 +184,7 @@ def test_claude_model_option_does_not_conflict_with_caller_model_options() -> No
             "--episode-id",
             "pb-claude",
             "--model",
-            "deepseek-flash",
+            "opaque-model",
             "--test-assets-dir",
             "locked-assets",
             "--runtime-image",
@@ -199,6 +200,5 @@ def test_claude_model_option_does_not_conflict_with_caller_model_options() -> No
         ]
     )
 
-    assert args.model == "deepseek-flash"
+    assert args.model == "opaque-model"
     assert args.model_upstream_url == ""
-    assert args.runtime_image.endswith(f"@sha256:{'a' * 64}")
