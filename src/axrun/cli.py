@@ -192,7 +192,7 @@ def _export(store: EpisodeStore, episode_id: str, destination: Path) -> Path:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="axrun")
+    parser = argparse.ArgumentParser(prog="axrun", allow_abbrev=False)
     parser.add_argument("--state-dir", type=Path, default=Path(".axrun"))
     parser.add_argument("--context-file", default="")
     parser.add_argument("--context", default="")
