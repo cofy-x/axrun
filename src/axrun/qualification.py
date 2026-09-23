@@ -19,6 +19,7 @@ from axrun.models import (
     InputFile,
     OutputSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StagePlan,
     canonical_digest,
 )
@@ -210,7 +211,7 @@ def _target_plan(
         resources=(
             episode.inference_resources if role == "inference" else episode.verification_resources
         ),
-        network_policy="deny_all",
+        network_policy=StageNetworkPolicy.DENY_ALL,
         timeout_seconds=min(300, episode.harness.timeout_seconds),
         labels={"axrun.stage": "qualification", "axrun.qualification.role": role},
     )

@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
 from axrun.lifecycle.base import PreStartLifecycle
-from axrun.models import Artifact, ExecutionRef, StagePlan, StageResult
+from axrun.models import Artifact, ExecutionRef, StageNetworkPolicy, StagePlan, StageResult
 
 
 class AxernBackend:
@@ -136,8 +136,10 @@ class AxernBackend:
                 sdk.SecretEnvVar(name=value.name, secret_id=value.secret_id, key=value.key)
                 for value in plan.secret_env
             ]
-        if plan.network_policy == "deny_all":
+        if plan.network_policy == StageNetworkPolicy.DENY_ALL:
             kwargs["network_policy"] = sdk.NetworkPolicy.deny_all()
+        elif plan.network_policy != StageNetworkPolicy.UNRESTRICTED:
+            raise ContractError("unsupported stage network policy")
 
         run = self.client.create_run(**kwargs)
         execution = ExecutionRef(plan.environment_id, run.id)

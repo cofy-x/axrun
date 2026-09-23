@@ -44,7 +44,7 @@ class EpisodeStore:
         now = _now()
         record = EpisodeRecord(1, episode.episode_id, episode.digest, created_at=now)
         _atomic_write(
-            self.spec_path_for(episode.episode_id), canonical_json(asdict(episode)) + b"\n"
+            self.spec_path_for(episode.episode_id), canonical_json(episode.as_dict()) + b"\n"
         )
         self.save(record)
         return record

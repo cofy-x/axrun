@@ -24,6 +24,7 @@ from axrun.models import (
     InputFile,
     OutputSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StagePlan,
     VerificationResult,
     canonical_digest,
@@ -592,7 +593,7 @@ class ProgramBenchOfficialVerifierAdapter:
             ),
             outputs=(OutputSpec(_COMPILE_RESULT, media_type="application/json"),),
             resources=episode.verification_resources,
-            network_policy="deny_all",
+            network_policy=StageNetworkPolicy.DENY_ALL,
             timeout_seconds=self.timeout_seconds,
             labels={"axrun.stage": "verification-compile", "axrun.verifier": self.name},
         )
@@ -641,7 +642,7 @@ class ProgramBenchOfficialVerifierAdapter:
             ),
             outputs=(OutputSpec(_BRANCH_RESULT, media_type="application/json"),),
             resources=episode.verification_resources,
-            network_policy="deny_all",
+            network_policy=StageNetworkPolicy.DENY_ALL,
             timeout_seconds=self.timeout_seconds,
             labels={
                 "axrun.stage": "verification-branch",

@@ -12,6 +12,7 @@ from axrun.models import (
     InputFile,
     OutputSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StagePlan,
     task_config_string,
 )
@@ -71,7 +72,7 @@ class SyntheticVerifierAdapter(CommandVerifierAdapter):
                 OutputSpec(_LOG, media_type="text/plain"),
             ),
             resources=episode.verification_resources,
-            network_policy="deny_all",
+            network_policy=StageNetworkPolicy.DENY_ALL,
             timeout_seconds=episode.verifier.timeout_seconds,
             labels={"axrun.stage": "verification", "axrun.verifier": self.name},
         )

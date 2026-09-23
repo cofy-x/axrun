@@ -5,12 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from axern_sdk import AxernClient, SandboxNotFoundError
+from axern_sdk import AxernClient, NetworkPolicy, SandboxNotFoundError
 
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
 from axrun.errors import ContractError, InfrastructureError
-from axrun.models import ExecutionRef, OutputSpec, ResourceSpec, StagePlan
+from axrun.models import ExecutionRef, OutputSpec, ResourceSpec, StageNetworkPolicy, StagePlan
 
 
 def test_released_sdk_has_required_public_run_contract() -> None:
@@ -30,8 +30,11 @@ def test_backend_allows_bounded_cold_image_startup_timeout() -> None:
         AxernBackend(object(), allocation_ready_timeout_seconds=0)
 
 
+@pytest.mark.parametrize(
+    "network_policy", [StageNetworkPolicy.DENY_ALL, StageNetworkPolicy.UNRESTRICTED]
+)
 def test_backend_creates_run_without_private_execution_identity(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, network_policy: StageNetworkPolicy
 ) -> None:
     class Allocation:
         def write_file(self, path, value):
@@ -74,6 +77,7 @@ def test_backend_creates_run_without_private_execution_identity(
             "/workspace",
             (OutputSpec("/outputs/result"),),
             resources=ResourceSpec(request_cpu="500m", limit_memory="2Gi"),
+            network_policy=network_policy,
         ),
         artifact_dir=tmp_path,
         on_bound=bound.append,
@@ -91,6 +95,11 @@ def test_backend_creates_run_without_private_execution_identity(
     assert [value.run_id for value in bound] == ["run-1", "run-1"]
     assert bound[-1].allocation_id == "alloc-1"
     assert client.kwargs["rootfs_snapshot"] is False
+    if network_policy == StageNetworkPolicy.DENY_ALL:
+        assert isinstance(client.kwargs["network_policy"], NetworkPolicy)
+    else:
+        # The released SDK represents unrestricted egress by omitting the policy.
+        assert "network_policy" not in client.kwargs
 
 
 def test_backend_waits_for_public_rootfs_result_after_success(tmp_path: Path, monkeypatch) -> None:

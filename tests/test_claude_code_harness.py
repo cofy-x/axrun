@@ -18,6 +18,7 @@ from axrun.models import (
     ExecutionRef,
     HarnessSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StageResult,
     TaskSpec,
 )
@@ -49,6 +50,19 @@ def _episode() -> ResolvedEpisode:
             },
         ),
     )
+
+
+def test_claude_harness_materializes_v2_public_egress_without_credentials() -> None:
+    episode = replace(
+        _episode(),
+        schema_version=2,
+        inference_network_policy=StageNetworkPolicy.UNRESTRICTED,
+        verification_network_policy=StageNetworkPolicy.DENY_ALL,
+    )
+    plan = ClaudeCodeHarness().plan(episode, GitPatchCandidateAdapter().capture_plan(episode))
+    assert plan.network_policy is StageNetworkPolicy.UNRESTRICTED
+    assert plan.env["ANTHROPIC_AUTH_TOKEN"] == "axrun-local-tunnel"
+    assert "DEEPSEEK_API_KEY" not in repr(plan)
 
 
 def test_claude_harness_uses_fixed_mount_tunnel_and_output_contract(tmp_path: Path) -> None:

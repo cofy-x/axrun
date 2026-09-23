@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,14 +10,18 @@ import pytest
 import axrun.adapters._candidate as candidate_module
 from axrun.adapters import CommandVerifierAdapter
 from axrun.adapters._candidate import load_candidate, persist_candidate
+from axrun.adapters.static_candidate import StaticCandidateHarness
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
+    CandidateCapturePlan,
     CandidateSpec,
     EnvironmentBinding,
     ExecutionRef,
     HarnessSpec,
+    OutputSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StageResult,
     TaskSpec,
     VerifierSpec,
@@ -39,6 +44,19 @@ def episode(tmp_path: Path) -> ResolvedEpisode:
         harness=HarnessSpec("static-candidate", "1"),
         candidate=CandidateSpec("git-patch", "1"),
         verifier=VerifierSpec("command-verifier", "1"),
+    )
+
+
+def test_static_harness_uses_resolved_v2_network_policy(tmp_path: Path) -> None:
+    resolved = replace(
+        episode(tmp_path),
+        schema_version=2,
+        inference_network_policy=StageNetworkPolicy.UNRESTRICTED,
+        verification_network_policy=StageNetworkPolicy.DENY_ALL,
+    )
+    capture = CandidateCapturePlan("", "true", (), (OutputSpec("/outputs/candidate.patch"),))
+    assert StaticCandidateHarness().plan(resolved, capture).network_policy is (
+        StageNetworkPolicy.UNRESTRICTED
     )
 
 
@@ -93,6 +111,15 @@ def test_verifier_receives_only_candidate_and_digest(tmp_path: Path) -> None:
     assert plan.environment_id == "env-v" and plan.network_policy == "deny_all"
     assert plan.env == {"AXRUN_CANDIDATE_DIGEST": bundle.digest}
     assert plan.secret_env == () and plan.image_mounts == ()
+    public_verifier = replace(
+        episode(tmp_path),
+        schema_version=2,
+        inference_network_policy=StageNetworkPolicy.DENY_ALL,
+        verification_network_policy=StageNetworkPolicy.UNRESTRICTED,
+    )
+    assert CommandVerifierAdapter().plan(public_verifier, bundle).network_policy is (
+        StageNetworkPolicy.UNRESTRICTED
+    )
 
 
 def test_candidate_crash_before_atomic_publish_leaves_no_final_bundle(

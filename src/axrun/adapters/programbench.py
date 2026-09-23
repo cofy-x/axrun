@@ -8,7 +8,14 @@ from pathlib import Path
 
 from axrun.adapters.command_verifier import CommandVerifierAdapter
 from axrun.errors import ContractError
-from axrun.models import CandidateBundle, InputFile, OutputSpec, ResolvedEpisode, StagePlan
+from axrun.models import (
+    CandidateBundle,
+    InputFile,
+    OutputSpec,
+    ResolvedEpisode,
+    StageNetworkPolicy,
+    StagePlan,
+)
 
 _RESULT = "/outputs/verification.json"
 _LOG = "/outputs/verifier.log"
@@ -73,7 +80,7 @@ class ProgramBenchVerifierAdapter(CommandVerifierAdapter):
                 OutputSpec(_LOG, media_type="text/plain"),
             ),
             resources=episode.verification_resources,
-            network_policy="deny_all",
+            network_policy=StageNetworkPolicy.DENY_ALL,
             timeout_seconds=episode.verifier.timeout_seconds,
             labels={"axrun.stage": "verification", "axrun.verifier": self.name},
         )

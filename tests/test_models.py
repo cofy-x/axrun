@@ -6,6 +6,8 @@ from axrun.errors import ContractError
 from axrun.models import (
     EnvironmentBinding,
     OutputSpec,
+    StageNetworkPolicy,
+    StagePlan,
     resolved_episode_from_dict,
 )
 
@@ -95,6 +97,15 @@ def test_episode_requires_sha256_seed() -> None:
         resolved_episode_from_dict(raw)
 
 
-def test_only_canonical_v1_is_supported() -> None:
+def test_unknown_episode_version_is_rejected() -> None:
     with pytest.raises(ContractError, match="unsupported"):
-        resolved_episode_from_dict({"schema_version": 2})
+        resolved_episode_from_dict({"schema_version": 3})
+    with pytest.raises(ContractError, match="unsupported"):
+        resolved_episode_from_dict({"schema_version": True})
+
+
+def test_stage_network_policy_is_closed_and_defaults_to_deny_all() -> None:
+    plan = StagePlan("env", ("true",), "/workspace", ())
+    assert plan.network_policy is StageNetworkPolicy.DENY_ALL
+    with pytest.raises(ContractError, match="unsupported stage network policy"):
+        StagePlan("env", ("true",), "/workspace", (), network_policy="default")  # type: ignore[arg-type]
