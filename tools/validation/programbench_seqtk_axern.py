@@ -213,6 +213,12 @@ def main() -> int:
         verification = client.create_environment(image_ref=args.verification_image)
         environments.append(verification.id)
         _record(output, "verification-environment", _message(verification))
+        runtime_image = str(inference.spec.image.ref)
+        verification_image = str(verification.spec.image.ref)
+        if not runtime_image.endswith(f"@{TASK_DIGEST}") or "@sha256:" not in verification_image:
+            raise AssertionError(
+                "Axern returned a mutable or unexpected Environment image identity"
+            )
         for repetition in range(1, args.repetitions + 1):
             for variant in VARIANTS:
                 label = f"{variant}-{repetition}"
@@ -247,11 +253,11 @@ def main() -> int:
                             "--static-candidate-directory",
                             str(inputs / variant),
                             "--runtime-image",
-                            args.runtime_image,
+                            runtime_image,
                             "--inference-environment",
                             inference.id,
                             "--verification-image",
-                            args.verification_image,
+                            verification_image,
                             "--verification-environment",
                             verification.id,
                             "--output",
