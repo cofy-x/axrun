@@ -15,24 +15,33 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from axern_sdk import AxernClient
+from axern_sdk import AxernClient, SandboxNotFoundError
 
-from axrun.axern_backend import AxernBackend
+from axrun.axern_backend import AxernBackend, _status_name
 from axrun.models import ExecutionRef, OutputSpec, StageNetworkPolicy, StagePlan
 
 IMAGE = (
     "index.docker.io/library/python"
     "@sha256:2d62568c3174136030ac1da4e534cfbfe709aec913daeb2a3d49328e27438093"
 )
-_PROBE = """import json, os, urllib.request
+_PROBE = """import json, os, socket, urllib.request
+https_status = None
 try:
     with urllib.request.urlopen('https://example.com/', timeout=10) as response:
-        permitted = response.status == 200
+        https_status = response.status
 except OSError:
-    permitted = False
+    pass
+direct_tcp = False
+try:
+    with socket.create_connection(('1.1.1.1', 443), timeout=5):
+        direct_tcp = True
+except OSError:
+    pass
 os.makedirs('/outputs', exist_ok=True)
 with open('/outputs/network.json', 'w', encoding='utf-8') as stream:
-    json.dump({'egress_http_success': permitted}, stream)
+    json.dump({'egress_http_success': https_status == 200,
+               'https_status': https_status,
+               'direct_ip_tcp_connected': direct_tcp}, stream)
 """
 
 
@@ -54,12 +63,22 @@ def _probe(
     )
     if result.exit_code != 0 or not result.execution.allocation_id:
         raise RuntimeError(f"{policy.value} Run did not complete successfully")
+    terminal_status = _status_name(client.get_run(result.execution.run_id))
+    if terminal_status != "RUN_STATUS_SUCCEEDED":
+        raise RuntimeError(f"{policy.value} Run did not reach succeeded terminal state")
     artifact = result.artifact_for_path("/outputs/network.json")
     data = Path(artifact.path).read_bytes()
     if len(data) != artifact.size_bytes or hashlib.sha256(data).hexdigest() != artifact.sha256:
         raise RuntimeError(f"{policy.value} sealed output integrity mismatch")
     payload = json.loads(data)
-    if not isinstance(payload, dict) or type(payload.get("egress_http_success")) is not bool:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"egress_http_success", "https_status", "direct_ip_tcp_connected"}
+        or type(payload["egress_http_success"]) is not bool
+        or (payload["https_status"] is not None and type(payload["https_status"]) is not int)
+        or type(payload["direct_ip_tcp_connected"]) is not bool
+        or payload["egress_http_success"] != (payload["https_status"] == 200)
+    ):
         raise RuntimeError(f"{policy.value} network result has an invalid shape")
     if len(bound) != 2 or bound[0].allocation_id:
         raise RuntimeError("Run identity was not persisted before Allocation readiness")
@@ -68,7 +87,10 @@ def _probe(
         "environment_id": environment_id,
         "run_id": result.execution.run_id,
         "allocation_id": result.execution.allocation_id,
+        "terminal_status": terminal_status,
         "egress_http_success": payload["egress_http_success"],
+        "https_status": payload["https_status"],
+        "direct_ip_tcp_connected": payload["direct_ip_tcp_connected"],
         "sealed_size": artifact.size_bytes,
         "sealed_sha256": artifact.sha256,
         "bound_before_release": True,
@@ -88,8 +110,21 @@ def _assert_policy_results(results: list[dict[str, Any]]) -> None:
         raise RuntimeError("network policy trials did not use fresh Runs and Allocations")
     if results[0]["egress_http_success"] is not False:
         raise RuntimeError("deny_all HTTPS egress was permitted")
+    if results[0]["direct_ip_tcp_connected"] is not False:
+        raise RuntimeError("deny_all direct-IP TCP egress was permitted")
     if results[1]["egress_http_success"] is not True:
         raise RuntimeError("unrestricted HTTPS egress was unavailable")
+    if results[1]["direct_ip_tcp_connected"] is not True:
+        raise RuntimeError("unrestricted direct-IP TCP egress was unavailable")
+
+
+def _delete_environment(client: AxernClient, environment_id: str) -> None:
+    client.delete_environment(environment_id)
+    try:
+        client.get_environment(environment_id)
+    except SandboxNotFoundError:
+        return
+    raise RuntimeError("temporary Environment remained queryable after deletion")
 
 
 def main() -> None:
@@ -131,11 +166,10 @@ def main() -> None:
         )
         environment_id = environment.id
         receipt["environment_id"] = environment_id
-        results: list[dict[str, Any]] = [
-            _probe(client, environment_id, root, StageNetworkPolicy.DENY_ALL),
-            _probe(client, environment_id, root, StageNetworkPolicy.UNRESTRICTED),
-        ]
+        results: list[dict[str, Any]] = []
         receipt["results"] = results
+        for policy in (StageNetworkPolicy.DENY_ALL, StageNetworkPolicy.UNRESTRICTED):
+            results.append(_probe(client, environment_id, root, policy))
         _assert_policy_results(results)
         receipt["status"] = "complete"
     except Exception as exc:
@@ -144,8 +178,8 @@ def main() -> None:
     finally:
         try:
             if environment_id:
-                client.delete_environment(environment_id)
-                receipt["cleanup"] = "deleted"
+                _delete_environment(client, environment_id)
+                receipt["cleanup"] = "deleted_verified"
             else:
                 receipt["cleanup"] = "not_created"
         except Exception:
