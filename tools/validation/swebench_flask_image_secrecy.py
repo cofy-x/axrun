@@ -652,6 +652,8 @@ def _docker_audit(image_id: str, row: dict[str, Any]) -> dict[str, Any]:
         "--platform",
         "linux/amd64",
         "--read-only",
+        "--user",
+        "0:0",
         "--cap-drop",
         "ALL",
         "--security-opt",

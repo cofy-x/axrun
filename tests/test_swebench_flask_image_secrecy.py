@@ -165,7 +165,16 @@ def test_docker_inspection_is_pinned_readonly_offline_and_uses_stdin(
     result = secrecy._docker_audit("sha256:" + "a" * 64, {"patch": _MODIFIED, "test_patch": _ADDED})
     assert result["image_clean"] is True
     command, payload = seen[0]
-    for required in ("--network", "none", "--read-only", "--pull", "never", "--log-driver"):
+    for required in (
+        "--network",
+        "none",
+        "--read-only",
+        "--user",
+        "0:0",
+        "--pull",
+        "never",
+        "--log-driver",
+    ):
         assert required in command
     assert "--mount" not in command
     assert "--volume" not in command
