@@ -98,6 +98,28 @@ def test_scorer_venv_python_keeps_interpreter_symlink_identity(tmp_path: Path) -
         MODULE.scorer_venv_python(Path("/bin/sh"))
 
 
+def test_offline_build_wheels_pin_public_artifacts() -> None:
+    assert [
+        (artifact.filename, artifact.size, artifact.sha256)
+        for artifact in MODULE.locked_build_wheels()
+    ] == [
+        (
+            "setuptools-70.0.0-py3-none-any.whl",
+            863_432,
+            "54faa7f2e8d2d11bcd2c07bed282eef1046b5c080d1c32add737d7b5817b1ad4",
+        ),
+        (
+            "wheel-0.45.1-py3-none-any.whl",
+            72_494,
+            "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248",
+        ),
+    ]
+    assert all(
+        artifact.url.startswith("https://files.pythonhosted.org/packages/")
+        for artifact in MODULE.locked_build_wheels()
+    )
+
+
 def test_image_requires_locked_platform_digest_and_accepts_docker_hub_normalization(
     monkeypatch,
 ) -> None:
@@ -173,10 +195,12 @@ def test_empty_is_official_unscored_classification() -> None:
 def test_offline_docker_invocation_is_fresh_and_bounded(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
-    wheel = wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME
-    wheel.write_bytes(b"safe")
+    (wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME).write_bytes(b"safe")
+    (wheelhouse / MODULE.WHEEL_DIST_NAME).write_bytes(b"wheel")
     monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
     monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"safe"))
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_BYTES", 5)
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_SHA256", MODULE.sha256(b"wheel"))
     calls = []
 
     def fake_run(command, **kwargs):
@@ -216,35 +240,46 @@ def test_offline_docker_invocation_is_fresh_and_bounded(tmp_path: Path, monkeypa
     assert result["test_output_sha256"] == MODULE.sha256(b"")
 
 
-def test_pinned_setuptools_wheel_download_and_closed_wheelhouse(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_pinned_build_wheel_downloads_and_closed_wheelhouse(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = tmp_path / "wheelhouse"
-    data = b"fixed-wheel"
-    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", len(data))
-    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(data))
+    bodies = {
+        MODULE.SETUPTOOLS_WHEEL_URL: b"fixed-setuptools",
+        MODULE.WHEEL_DIST_URL: b"fixed-wheel",
+    }
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", len(bodies[MODULE.SETUPTOOLS_WHEEL_URL]))
+    monkeypatch.setattr(
+        MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(bodies[MODULE.SETUPTOOLS_WHEEL_URL])
+    )
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_BYTES", len(bodies[MODULE.WHEEL_DIST_URL]))
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_SHA256", MODULE.sha256(bodies[MODULE.WHEEL_DIST_URL]))
 
     class Response(io.BytesIO):
         def __init__(self, body: bytes):
             super().__init__(body)
             self.headers = {"Content-Length": str(len(body))}
 
-    monkeypatch.setattr(MODULE.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(data))
-    wheel = MODULE._download_locked_wheel(wheelhouse)
-    assert wheel.read_bytes() == data
-    assert MODULE.check_locked_wheelhouse(wheelhouse) == wheel
-    (wheelhouse / "unexpected.whl").write_bytes(data)
+    monkeypatch.setattr(
+        MODULE.urllib.request,
+        "urlopen",
+        lambda request, **_kwargs: Response(bodies[request.full_url]),
+    )
+    for artifact in MODULE.locked_build_wheels():
+        wheel = MODULE._download_locked_wheel(wheelhouse, artifact)
+        assert wheel.read_bytes() == bodies[artifact.url]
+    assert set(MODULE.check_locked_wheelhouse(wheelhouse)) == {
+        MODULE.SETUPTOOLS_WHEEL_NAME,
+        MODULE.WHEEL_DIST_NAME,
+    }
+    (wheelhouse / "unexpected.whl").write_bytes(b"unlocked")
     with pytest.raises(MODULE.OracleError, match="unknown artifacts"):
         MODULE.check_locked_wheelhouse(wheelhouse)
     (wheelhouse / "unexpected.whl").unlink()
-    wheel.write_bytes(b"tampered")
+    (wheelhouse / MODULE.WHEEL_DIST_NAME).write_bytes(b"tampered")
     with pytest.raises(MODULE.OracleError, match="size or SHA-256"):
         MODULE.check_locked_wheelhouse(wheelhouse)
 
 
-def test_setuptools_wheel_download_digest_mismatch_fails_closed(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_build_wheel_download_digest_mismatch_fails_closed(tmp_path: Path, monkeypatch) -> None:
     class Response(io.BytesIO):
         def __init__(self, body: bytes):
             super().__init__(body)
@@ -256,9 +291,22 @@ def test_setuptools_wheel_download_digest_mismatch_fails_closed(
         MODULE.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(b"evil")
     )
     wheelhouse = tmp_path / "wheelhouse"
-    with pytest.raises(MODULE.OracleError, match="downloaded setuptools wheel"):
-        MODULE._download_locked_wheel(wheelhouse)
+    with pytest.raises(MODULE.OracleError, match=r"downloaded setuptools-70\.0\.0"):
+        MODULE._download_locked_wheel(wheelhouse, MODULE.locked_build_wheels()[0])
     assert list(wheelhouse.iterdir()) == []
+
+
+def test_wheelhouse_requires_both_locked_artifacts(tmp_path: Path, monkeypatch) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME).write_bytes(b"safe")
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"safe"))
+    with pytest.raises(MODULE.OracleError, match="missing or unknown"):
+        MODULE.check_locked_wheelhouse(wheelhouse)
+    (wheelhouse / MODULE.WHEEL_DIST_NAME).symlink_to(wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME)
+    with pytest.raises(MODULE.OracleError, match="not a regular file"):
+        MODULE.check_locked_wheelhouse(wheelhouse)
 
 
 def test_offline_install_preflight_uses_same_readonly_wheelhouse(
@@ -267,8 +315,11 @@ def test_offline_install_preflight_uses_same_readonly_wheelhouse(
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
     (wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME).write_bytes(b"safe")
+    (wheelhouse / MODULE.WHEEL_DIST_NAME).write_bytes(b"wheel")
     monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
     monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"safe"))
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_BYTES", 5)
+    monkeypatch.setattr(MODULE, "WHEEL_DIST_SHA256", MODULE.sha256(b"wheel"))
     seen = []
 
     def fake_run(command, **_kwargs):

@@ -22,7 +22,7 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 INSTANCE_ID = "pallets__flask-5014"
 DATASET_COMMIT = "78f471bf655a3137b2e8a75af1501690ec009ec3"
@@ -41,6 +41,13 @@ SETUPTOOLS_WHEEL_URL = (
 )
 SETUPTOOLS_WHEEL_BYTES = 863_432
 SETUPTOOLS_WHEEL_SHA256 = "54faa7f2e8d2d11bcd2c07bed282eef1046b5c080d1c32add737d7b5817b1ad4"
+WHEEL_DIST_NAME = "wheel-0.45.1-py3-none-any.whl"
+WHEEL_DIST_URL = (
+    "https://files.pythonhosted.org/packages/0b/2c/"
+    "87f3254fd8ffd29e4c02732eee68a83a1d3c346ae39bc6822dcbcb697f2b/" + WHEEL_DIST_NAME
+)
+WHEEL_DIST_BYTES = 72_494
+WHEEL_DIST_SHA256 = "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248"
 WHEELHOUSE_MOUNT = "/opt/axrun-wheelhouse"
 OFFLINE_PIP_ENV = ("PIP_NO_INDEX=1", f"PIP_FIND_LINKS={WHEELHOUSE_MOUNT}")
 HARNESS_URL = "https://github.com/SWE-bench/SWE-bench.git"
@@ -120,6 +127,30 @@ python -m pip install -e .
 
 class OracleError(Exception):
     """A failed lock, incomplete oracle result, or infrastructure error."""
+
+
+class LockedBuildWheel(NamedTuple):
+    filename: str
+    url: str
+    size: int
+    sha256: str
+
+
+def locked_build_wheels() -> tuple[LockedBuildWheel, ...]:
+    return (
+        LockedBuildWheel(
+            SETUPTOOLS_WHEEL_NAME,
+            SETUPTOOLS_WHEEL_URL,
+            SETUPTOOLS_WHEEL_BYTES,
+            SETUPTOOLS_WHEEL_SHA256,
+        ),
+        LockedBuildWheel(
+            WHEEL_DIST_NAME,
+            WHEEL_DIST_URL,
+            WHEEL_DIST_BYTES,
+            WHEEL_DIST_SHA256,
+        ),
+    )
 
 
 def sha256(data: bytes) -> str:
@@ -262,44 +293,48 @@ def _download_parquet(path: Path) -> None:
         raise
 
 
-def check_locked_wheelhouse(wheelhouse: Path) -> Path:
+def _check_locked_wheel(wheel: Path, artifact: LockedBuildWheel) -> None:
+    if wheel.is_symlink() or not stat.S_ISREG(wheel.lstat().st_mode):
+        raise OracleError(f"locked {artifact.filename} is not a regular file")
+    data = wheel.read_bytes()
+    if len(data) != artifact.size or sha256(data) != artifact.sha256:
+        raise OracleError(f"locked {artifact.filename} size or SHA-256 differs")
+
+
+def check_locked_wheelhouse(wheelhouse: Path) -> dict[str, Path]:
     if wheelhouse.is_symlink() or not wheelhouse.is_dir():
         raise OracleError("locked wheelhouse directory is missing or is a symlink")
-    entries = list(wheelhouse.iterdir())
-    if len(entries) != 1 or entries[0].name != SETUPTOOLS_WHEEL_NAME:
+    artifacts = locked_build_wheels()
+    entries = {entry.name: entry for entry in wheelhouse.iterdir()}
+    if set(entries) != {artifact.filename for artifact in artifacts}:
         raise OracleError("locked wheelhouse contains missing or unknown artifacts")
-    wheel = entries[0]
-    if wheel.is_symlink() or not stat.S_ISREG(wheel.lstat().st_mode):
-        raise OracleError("locked setuptools wheel is not a regular file")
-    data = wheel.read_bytes()
-    if len(data) != SETUPTOOLS_WHEEL_BYTES or sha256(data) != SETUPTOOLS_WHEEL_SHA256:
-        raise OracleError("locked setuptools wheel size or SHA-256 differs")
-    return wheel
+    for artifact in artifacts:
+        _check_locked_wheel(entries[artifact.filename], artifact)
+    return entries
 
 
-def _download_locked_wheel(wheelhouse: Path) -> Path:
+def _download_locked_wheel(wheelhouse: Path, artifact: LockedBuildWheel) -> Path:
     if wheelhouse.is_symlink():
         raise OracleError("locked wheelhouse cannot be a symlink")
     wheelhouse.mkdir(mode=0o700, exist_ok=True)
-    wheel = wheelhouse / SETUPTOOLS_WHEEL_NAME
-    if wheel.exists() or wheel.is_symlink():
-        check_locked_wheelhouse(wheelhouse)
-        return wheel
-    if list(wheelhouse.iterdir()):
+    wheel = wheelhouse / artifact.filename
+    allowed = {item.filename for item in locked_build_wheels()}
+    if any(entry.name not in allowed for entry in wheelhouse.iterdir()):
         raise OracleError("locked wheelhouse contains unknown artifacts")
-    temporary = wheelhouse / f".{SETUPTOOLS_WHEEL_NAME}.download"
-    request = urllib.request.Request(
-        SETUPTOOLS_WHEEL_URL, headers={"User-Agent": "axrun-stage-zero/1"}
-    )
+    if wheel.exists() or wheel.is_symlink():
+        _check_locked_wheel(wheel, artifact)
+        return wheel
+    temporary = wheelhouse / f".{artifact.filename}.download"
+    request = urllib.request.Request(artifact.url, headers={"User-Agent": "axrun-stage-zero/1"})
     try:
         with (
             urllib.request.urlopen(request, timeout=60) as response,
             temporary.open("xb") as stream,
         ):
             content_length = response.headers.get("Content-Length")
-            if content_length is not None and int(content_length) != SETUPTOOLS_WHEEL_BYTES:
-                raise OracleError("setuptools wheel response length differs from lock")
-            remaining = SETUPTOOLS_WHEEL_BYTES + 1
+            if content_length is not None and int(content_length) != artifact.size:
+                raise OracleError(f"{artifact.filename} response length differs from lock")
+            remaining = artifact.size + 1
             while remaining:
                 block = response.read(min(1024 * 1024, remaining))
                 if not block:
@@ -307,15 +342,15 @@ def _download_locked_wheel(wheelhouse: Path) -> Path:
                 stream.write(block)
                 remaining -= len(block)
         data = temporary.read_bytes()
-        if len(data) != SETUPTOOLS_WHEEL_BYTES or sha256(data) != SETUPTOOLS_WHEEL_SHA256:
-            raise OracleError("downloaded setuptools wheel size or SHA-256 differs")
+        if len(data) != artifact.size or sha256(data) != artifact.sha256:
+            raise OracleError(f"downloaded {artifact.filename} size or SHA-256 differs")
         temporary.chmod(0o600)
         temporary.replace(wheel)
     except Exception:
         if temporary.exists():
             temporary.unlink()
         raise
-    check_locked_wheelhouse(wheelhouse)
+    _check_locked_wheel(wheel, artifact)
     return wheel
 
 
@@ -376,7 +411,9 @@ def prepare_assets(assets: Path) -> dict[str, Any]:
     scorer = assets / "scorer-venv"
     wheelhouse = assets / "wheelhouse"
     _download_parquet(parquet)
-    _download_locked_wheel(wheelhouse)
+    for artifact in locked_build_wheels():
+        _download_locked_wheel(wheelhouse, artifact)
+    check_locked_wheelhouse(wheelhouse)
     _prepare_harness(harness)
     _prepare_scorer(scorer, harness)
     freeze = _run(
@@ -409,6 +446,7 @@ def prepare_assets(assets: Path) -> dict[str, Any]:
         "image": IMAGE,
         "image_id": image_id,
         "setuptools_wheel_sha256": SETUPTOOLS_WHEEL_SHA256,
+        "wheel_distribution_sha256": WHEEL_DIST_SHA256,
     }
 
 
@@ -790,6 +828,7 @@ def main() -> int:
                             "scorer_packages_sha256": prepared["scorer_packages_sha256"],
                             "image_id": prepared["image_id"],
                             "setuptools_wheel_sha256": prepared["setuptools_wheel_sha256"],
+                            "wheel_distribution_sha256": prepared["wheel_distribution_sha256"],
                         },
                         sort_keys=True,
                     )
@@ -859,14 +898,17 @@ def main() -> int:
             "image_id": image_id,
             "platform": "linux/amd64",
             "network": "none",
-            "offline_build_wheel": {
-                "filename": SETUPTOOLS_WHEEL_NAME,
-                "bytes": SETUPTOOLS_WHEEL_BYTES,
-                "sha256": SETUPTOOLS_WHEEL_SHA256,
-                "source": SETUPTOOLS_WHEEL_URL,
-                "mount": WHEELHOUSE_MOUNT,
-                "readonly": True,
-            },
+            "offline_build_wheels": [
+                {
+                    "filename": artifact.filename,
+                    "bytes": artifact.size,
+                    "sha256": artifact.sha256,
+                    "source": artifact.url,
+                }
+                for artifact in locked_build_wheels()
+            ],
+            "offline_build_wheelhouse_mount": WHEELHOUSE_MOUNT,
+            "offline_build_wheelhouse_readonly": True,
             "offline_pip_environment": {
                 "PIP_NO_INDEX": "1",
                 "PIP_FIND_LINKS": WHEELHOUSE_MOUNT,
@@ -878,7 +920,8 @@ def main() -> int:
             "official_test_spec_eval_script_and_grader_used": True,
             "harness_divergence": (
                 "Docker --network none and pinned platform digest are imposed by this tool; "
-                "the content-verified setuptools wheel is mounted read-only and PIP_NO_INDEX/"
+                "the content-verified setuptools and wheel distributions are mounted read-only "
+                "and PIP_NO_INDEX/"
                 "PIP_FIND_LINKS are fixed to make the official install command offline; "
                 "upstream run_instance does not expose these settings"
             ),
