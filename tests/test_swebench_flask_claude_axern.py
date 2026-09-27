@@ -74,7 +74,7 @@ def _parity_receipt(task_image: str) -> dict[str, Any]:
         "schema_version": "axrun.swebench-flask-axern-parity@1",
         "status": "complete",
         "platform": "linux/amd64",
-        "axern_sdk": "0.11.4",
+        "axern_sdk": claude.parity._SDK_VERSION,
         "task_image_source": claude.parity._SOURCE_IMAGE,
         "task_image_runtime": task_image,
         "inference_environment_id": "env-old-inference",

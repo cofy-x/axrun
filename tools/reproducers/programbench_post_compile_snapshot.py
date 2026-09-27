@@ -13,7 +13,7 @@ from typing import Any
 
 from axern_sdk import AxernClient
 
-_REQUIRED_VERSION = "0.11.4"
+_REQUIRED_VERSION = "0.12.0"
 _CAPABILITY = "post-compile-allocation-snapshot-v1"
 
 

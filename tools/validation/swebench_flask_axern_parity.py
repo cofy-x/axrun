@@ -45,7 +45,7 @@ if __package__:
 else:
     from swebench_flask_compare import ParityError, compare_empty, compare_scored
 
-_SDK_VERSION = "0.11.4"
+_SDK_VERSION = "0.12.0"
 _ENDPOINT = "127.0.0.1:25000"
 _SOURCE_IMAGE = (
     "docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-5014"
