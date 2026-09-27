@@ -36,6 +36,7 @@ from axrun.lifecycle.stage_progress import StageProgressObserver
 from axrun.models import EpisodePhase, HarnessSpec, StageNetworkPolicy, canonical_json
 from axrun.proxy.model import ModelProxy
 from axrun.qualification import qualify_episode
+from axrun.report import verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
 from axrun.tasks import GitWorktreeTaskAdapter
@@ -856,6 +857,16 @@ def _execute(
         loaded = store.load_result(record.verification_result, record.verification_result_digest)
         if loaded != result:
             raise ValidationError("claude_result_digest_mismatch")
+        report = verify_record(store, episode_id, selection=selected)
+        if (
+            report["integrity_verified"] is not True
+            or report["candidate_digest"] != candidate.digest
+            or report["trajectory_digest"] != trajectory.digest
+            or report["verification_result_digest"] != record.verification_result_digest
+            or report["verdict"] != result.verdict
+            or report["score"] != result.score
+        ):
+            raise ValidationError("claude_record_integrity_mismatch")
         verification_dir = root / "state" / "artifacts" / episode_id / "verification"
         verification_sealed = {
             "verification.json": parity._sealed_summary(
@@ -885,6 +896,7 @@ def _execute(
             trajectory_digest=trajectory.digest,
             trajectory_event_count=trajectory.event_count,
             verification_result_digest=record.verification_result_digest,
+            record_integrity_verified=True,
             verdict=result.verdict,
             score=result.score,
             diagnostic_code=result.diagnostic_code,

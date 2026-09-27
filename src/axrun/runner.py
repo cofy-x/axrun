@@ -387,6 +387,17 @@ class EpisodeRunner:
                 record.completed_at = _now()
                 self.store.save(record)
                 raise ContractError("VerificationResult references the wrong CandidateBundle")
+            expected = self.store.load_spec(episode_id).verifier
+            if (verification.verifier, verification.verifier_version) != (
+                expected.identity,
+                expected.version,
+            ):
+                record.phase = EpisodePhase.FAILED
+                record.diagnostic_code = "AXRUN_VERIFIER_MISMATCH"
+                record.message = "VerificationResult references the wrong verifier"
+                record.completed_at = _now()
+                self.store.save(record)
+                raise ContractError("VerificationResult references the wrong verifier")
             result_path, result_digest = self.store.save_result(verification)
             record.verification = primary
             record.verification_result = str(result_path)
@@ -425,6 +436,18 @@ class EpisodeRunner:
                 record.completed_at = _now()
                 self.store.save(record)
                 raise ContractError("VerificationResult references the wrong CandidateBundle")
+            expected = self.store.load_spec(episode_id).verifier
+            if (verification.verifier, verification.verifier_version) != (
+                expected.identity,
+                expected.version,
+            ):
+                record.verification = stage.execution
+                record.phase = EpisodePhase.FAILED
+                record.diagnostic_code = "AXRUN_VERIFIER_MISMATCH"
+                record.message = "VerificationResult references the wrong verifier"
+                record.completed_at = _now()
+                self.store.save(record)
+                raise ContractError("VerificationResult references the wrong verifier")
             result_path, result_digest = self.store.save_result(verification)
             record.verification = stage.execution
             record.verification_result = str(result_path)
