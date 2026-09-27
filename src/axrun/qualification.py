@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from axrun.backend import ExecutionBackend
-from axrun.catalog import QualificationRequirements, resolve_qualification_requirements
+from axrun.catalog import (
+    AdapterSelection,
+    QualificationRequirements,
+    resolve_qualification_requirements,
+)
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     EnvironmentBinding,
@@ -75,11 +79,12 @@ def qualify_episode(
     client: Any,
     backend: ExecutionBackend,
     store: EpisodeStore,
+    selection: AdapterSelection | None = None,
 ) -> QualificationResult:
     with store.lock(episode.episode_id):
         record = store.initialize(episode)
         if record.qualification_result:
-            return load_qualification_result(store, episode)
+            return load_qualification_result(store, episode, selection=selection)
         if record.phase != EpisodePhase.NEW:
             raise RecoveryRequiredError("episode started without qualification evidence")
     targets: list[QualificationTargetResult] = []
@@ -88,7 +93,7 @@ def qualify_episode(
         ("inference", episode.inference_environment),
         ("verification", episode.verification_environment),
     ):
-        requirements = resolve_qualification_requirements(episode, role)
+        requirements = resolve_qualification_requirements(episode, role, selection=selection)
         image = _environment_image(client, binding.environment_id)
         if image != binding.image:
             raise ContractError(f"{role} Environment image differs from the resolved episode")
@@ -129,7 +134,7 @@ def qualify_episode(
         if record.phase != EpisodePhase.NEW:
             raise RecoveryRequiredError("episode advanced before qualification was committed")
         if record.qualification_result:
-            return load_qualification_result(store, episode)
+            return load_qualification_result(store, episode, selection=selection)
         record.qualifications = tuple(executions)
         record.qualification_result = str(result_path)
         record.qualification_result_digest = result_digest
@@ -341,7 +346,12 @@ def _persist(result: QualificationResult, state_root: Path) -> tuple[Path, str]:
     return path, digest
 
 
-def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> QualificationResult:
+def load_qualification_result(
+    store: EpisodeStore,
+    episode: ResolvedEpisode,
+    *,
+    selection: AdapterSelection | None = None,
+) -> QualificationResult:
     record = store.load(episode.episode_id)
     if record is None or len(record.qualifications) != 2:
         raise ContractError("qualification record is incomplete")
@@ -385,7 +395,7 @@ def load_qualification_result(store: EpisodeStore, episode: ResolvedEpisode) -> 
         ),
         strict=True,
     ):
-        requirements = resolve_qualification_requirements(episode, role)
+        requirements = resolve_qualification_requirements(episode, role, selection=selection)
         if (
             target.role != role
             or target.environment_id != binding.environment_id

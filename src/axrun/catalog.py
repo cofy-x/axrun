@@ -79,15 +79,18 @@ def resolve_adapters(episode: ResolvedEpisode) -> AdapterSelection:
 
 
 def resolve_qualification_requirements(
-    episode: ResolvedEpisode, role: str
+    episode: ResolvedEpisode,
+    role: str,
+    *,
+    selection: AdapterSelection | None = None,
 ) -> QualificationRequirements:
     if role not in {"inference", "verification"}:
         raise ContractError("qualification role is invalid")
-    selection = resolve_adapters(episode)
-    task = selection.task.qualification_requirements(episode, role)
-    harness = selection.inference.qualification_requirements(episode)
-    candidate = selection.candidate.qualification_requirements(episode)
-    verifier = selection.verifier.qualification_requirements(episode)
+    selected = selection if selection is not None else resolve_adapters(episode)
+    task = selected.task.qualification_requirements(episode, role)
+    harness = selected.inference.qualification_requirements(episode)
+    candidate = selected.candidate.qualification_requirements(episode)
+    verifier = selected.verifier.qualification_requirements(episode)
     return QualificationRequirements(
         task_mode=task.mode,
         base_commit=task.base_commit,
