@@ -711,10 +711,13 @@ def main() -> int:
             raise OracleError("official scorer dependency inspection failed")
         expected_freeze = freeze_path.read_text(encoding="utf-8")
         if current_freeze.stdout != expected_freeze:
+            observed_path = assets / f"scorer-packages-observed-{uuid.uuid4().hex[:8]}.txt"
+            _write_private(observed_path, current_freeze.stdout.encode("utf-8"))
             raise OracleError(
                 "official scorer dependencies differ from frozen preparation "
                 f"(expected_sha256={sha256(expected_freeze.encode())}, "
-                f"actual_sha256={sha256(current_freeze.stdout.encode())})"
+                f"actual_sha256={sha256(current_freeze.stdout.encode())}; "
+                "see private observed scorer package artifact)"
             )
         image_id = check_local_image(args.image)
         output_dir = (
