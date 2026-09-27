@@ -27,6 +27,13 @@ class OutputFormat(StrEnum):
     TAR = "tar"
 
 
+class StageNetworkPolicy(StrEnum):
+    """Closed Run egress policy; unrestricted is an explicit benchmark decision."""
+
+    DENY_ALL = "deny_all"
+    UNRESTRICTED = "unrestricted"
+
+
 @dataclass(frozen=True, slots=True)
 class OutputSpec:
     path: str
@@ -162,7 +169,7 @@ class StagePlan:
     image_mounts: tuple[ImageMountSpec, ...] = ()
     secret_env: tuple[SecretEnvSpec, ...] = ()
     resources: ResourceSpec = field(default_factory=ResourceSpec)
-    network_policy: str = "default"
+    network_policy: StageNetworkPolicy = StageNetworkPolicy.DENY_ALL
     timeout_seconds: int = 3600
     labels: dict[str, str] = field(default_factory=dict[str, str])
 
@@ -171,6 +178,10 @@ class StagePlan:
             raise ContractError("stage environment_id and argv are required")
         if self.timeout_seconds <= 0:
             raise ContractError("stage timeout_seconds must be positive")
+        try:
+            object.__setattr__(self, "network_policy", StageNetworkPolicy(self.network_policy))
+        except (TypeError, ValueError) as exc:
+            raise ContractError("unsupported stage network policy") from exc
         paths = [output.path for output in self.outputs]
         if len(paths) != len(set(paths)):
             raise ContractError("declared output paths must be unique")
@@ -225,10 +236,31 @@ class ResolvedEpisode:
     inference_resources: ResourceSpec = field(default_factory=ResourceSpec)
     verification_resources: ResourceSpec = field(default_factory=ResourceSpec)
     metadata: dict[str, str] = field(default_factory=dict[str, str])
+    inference_network_policy: StageNetworkPolicy | None = None
+    verification_network_policy: StageNetworkPolicy | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise ContractError(f"unsupported ResolvedEpisode schema {self.schema_version}")
+        policies = (self.inference_network_policy, self.verification_network_policy)
+        if self.schema_version == 1 and any(policy is not None for policy in policies):
+            raise ContractError("ResolvedEpisode v1 has implicit deny-all stage policies")
+        if self.schema_version == 2:
+            if any(policy is None for policy in policies):
+                raise ContractError("ResolvedEpisode v2 requires both stage network policies")
+            try:
+                object.__setattr__(
+                    self,
+                    "inference_network_policy",
+                    StageNetworkPolicy(self.inference_network_policy),
+                )
+                object.__setattr__(
+                    self,
+                    "verification_network_policy",
+                    StageNetworkPolicy(self.verification_network_policy),
+                )
+            except (TypeError, ValueError) as exc:
+                raise ContractError("unsupported episode network policy") from exc
         if not self.episode_id or not self.task_id or not self.seed_digest:
             raise ContractError("episode_id, task_id, and seed_digest are required")
         if any(value in self.episode_id for value in ("/", "\\", "..")):
@@ -242,7 +274,23 @@ class ResolvedEpisode:
 
     @property
     def digest(self) -> str:
-        return canonical_digest(asdict(self))
+        return canonical_digest(self.as_dict())
+
+    @property
+    def inference_network(self) -> StageNetworkPolicy:
+        return self.inference_network_policy or StageNetworkPolicy.DENY_ALL
+
+    @property
+    def verification_network(self) -> StageNetworkPolicy:
+        return self.verification_network_policy or StageNetworkPolicy.DENY_ALL
+
+    def as_dict(self) -> dict[str, Any]:
+        """Keep persisted v1 bytes/digests unchanged while making v2 explicit."""
+        value = asdict(self)
+        if self.schema_version == 1:
+            value.pop("inference_network_policy")
+            value.pop("verification_network_policy")
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,7 +446,7 @@ def canonical_digest(value: Any) -> str:
 def resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
     """Decode the versioned public JSON contract without accepting unknown fields."""
     version = raw.get("schema_version")
-    if version == 1:
+    if type(version) is int and version in {1, 2}:
         return _resolved_episode_from_dict(raw)
     raise ContractError(f"unsupported ResolvedEpisode schema {version}")
 
@@ -425,6 +473,8 @@ def _resolved_episode_from_dict(raw: dict[str, Any]) -> ResolvedEpisode:
         "verification_resources",
         "metadata",
     }
+    if raw["schema_version"] == 2:
+        expected |= {"inference_network_policy", "verification_network_policy"}
     unknown = set(raw) - expected
     if unknown:
         raise ContractError(f"unknown ResolvedEpisode fields: {', '.join(sorted(unknown))}")

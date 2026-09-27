@@ -387,7 +387,7 @@ def _claude_harness(args: argparse.Namespace, *, working_directory: str) -> Harn
 
 def _write_episode(episode: ResolvedEpisode, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(canonical_json(asdict(episode)) + b"\n")
+    output.write_bytes(canonical_json(episode.as_dict()) + b"\n")
     _print(
         {
             "episode_id": episode.episode_id,

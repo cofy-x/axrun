@@ -30,7 +30,6 @@ class CommandVerifierAdapter:
     command: tuple[str, ...] = ("/opt/axrun/run-verifier",)
     version: str = "1"
     timeout_seconds: int = 7200
-    network_policy: str = "deny_all"
     name: str = "command-verifier"
 
     def qualification_requirements(
@@ -75,7 +74,7 @@ class CommandVerifierAdapter:
                 OutputSpec(_LOG, OutputFormat.FILE, "text/plain"),
             ),
             resources=episode.verification_resources,
-            network_policy=self.network_policy,
+            network_policy=episode.verification_network,
             timeout_seconds=self.timeout_seconds,
             labels={"axrun.stage": "verification", "axrun.verifier": self.name},
         )

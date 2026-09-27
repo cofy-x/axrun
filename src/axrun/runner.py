@@ -29,6 +29,7 @@ from axrun.models import (
     EpisodeRecord,
     ExecutionRef,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StageResult,
     VerificationResult,
 )
@@ -86,6 +87,8 @@ class EpisodeRunner:
             self.store.save(record)
         try:
             plan = inference.plan(episode, candidate.capture_plan(episode))
+            if plan.network_policy != episode.inference_network:
+                raise ContractError("inference plan conflicts with resolved episode network policy")
             destination = self.store.root / "artifacts" / episode.episode_id / "inference"
             stage = self.backend.execute(
                 plan,
@@ -132,6 +135,8 @@ class EpisodeRunner:
             raise RecoveryRequiredError(f"{phase.value} Run identity was not persisted")
         if phase == EpisodePhase.INFERENCE_RUNNING:
             plan = inference.plan(episode, candidate.capture_plan(episode))
+            if plan.network_policy != episode.inference_network:
+                raise ContractError("inference plan conflicts with resolved episode network policy")
             destination = self.store.root / "artifacts" / episode_id / "inference"
         else:
             try:
@@ -142,6 +147,8 @@ class EpisodeRunner:
             if bool(getattr(verifier, "multi_run", False)):
                 return self._run_multi_verification(episode, bundle, verifier)
             plan = verifier.plan(episode, bundle)
+            if plan.network_policy != episode.verification_network:
+                raise ContractError("verifier plan conflicts with resolved episode network policy")
             destination = self.store.root / "artifacts" / episode_id / "verification"
         stage = self.backend.recover(execution, plan, artifact_dir=destination)
         if stage is None:
@@ -315,6 +322,8 @@ class EpisodeRunner:
             if bool(getattr(adapter, "multi_run", False)):
                 return self._run_multi_verification(episode, candidate, adapter)
             plan = adapter.plan(episode, candidate)
+            if plan.network_policy != episode.verification_network:
+                raise ContractError("verifier plan conflicts with resolved episode network policy")
             destination = self.store.root / "artifacts" / episode.episode_id / "verification"
             stage = self.backend.execute(
                 plan,
@@ -335,6 +344,10 @@ class EpisodeRunner:
         candidate: CandidateBundle,
         adapter: VerifierAdapter,
     ) -> VerificationResult:
+        if episode.verification_network != StageNetworkPolicy.DENY_ALL:
+            raise ContractError(
+                "multi-Run verifier must explicitly implement unrestricted branch policy"
+            )
         raw_verify = getattr(adapter, "verify", None)
         if not callable(raw_verify):
             raise ContractError("multi-Run verifier does not implement verify")

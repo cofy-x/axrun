@@ -49,7 +49,7 @@ class StaticCandidateHarness:
             inputs=capture.inputs,
             outputs=capture.outputs,
             resources=episode.inference_resources,
-            network_policy="deny_all",
+            network_policy=episode.inference_network,
             timeout_seconds=episode.harness.timeout_seconds,
             labels={"axrun.stage": "inference", "axrun.agent": self.name},
         )

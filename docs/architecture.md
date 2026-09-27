@@ -102,6 +102,8 @@ trajectory.
 
 Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. The contract contains `TaskSpec`, stage-specific `EnvironmentBinding`, `HarnessSpec`, `CandidateSpec`, and `VerifierSpec`. Git commits belong only to Git task configuration; they are not core episode or CandidateBundle fields. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields.
 
+The v1 episode's network semantics remain implicit deny-all. V2 requires explicit, closed `inference_network_policy` and `verification_network_policy` fields; existing v1 serialized specs and digests are unchanged. A harness may realize but not override the resolved inference policy; the runner rejects conflicting single-Run stage plans before creating an Axern Run. The backend maps `deny_all` to the released SDK's strict policy and maps `unrestricted` to the SDK's documented omitted-policy behavior. Unknown values fail closed. Qualification stays deny-all; benchmark-owned multi-Run verifiers must explicitly enforce the resolved verification policy for each internal Run rather than treating that policy as a generic scheduler feature.
+
 Resolvers also materialize harness defaults that affect execution semantics. For Claude Code, one primary model fills any omitted Opus, Sonnet, Haiku, and subagent aliases, and the default turn limit and absolute working directory are made explicit before `spec.json` is written. The reusable harness canonicalizer owns this validation so later dataset resolvers do not duplicate Claude runtime semantics. The harness adapter therefore receives five explicit opaque model IDs and does not reinterpret missing aliases while building a StagePlan.
 
 The repository-owned synthetic resolver demonstrates this boundary without introducing a dataset service. The raw row declares and content-checks the task-image build inputs; the resulting image owns the Git repository, required tools and fixed base commit. Its deterministic inference adapter seals a chosen fixture patch. Its verifier receives only the CandidateBundle and verifier entrypoint in a fresh Allocation rooted in that task image, checks the clean base commit, applies the patch, runs an offline test contract, and returns either a valid passed or valid failed result.
@@ -121,7 +123,7 @@ The first official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upst
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
 the complete expected/ignored test metadata. The benchmark-owned verifier snapshots the whole
 post-compile container and
-starts every branch from it. `axern-sdk==0.11.3` exposes that boundary as an explicitly requested
+starts every branch from it. `axern-sdk==0.11.4` exposes that boundary as an explicitly requested
 successful-Run rootfs result whose content-addressed image backs an ordinary derived Environment.
 Fresh Runs from that Environment receive isolated writable layers. Re-uploading only `/workspace`
 would still lose candidate build effects outside that path and is not official parity. A bounded

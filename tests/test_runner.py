@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from axrun.models import (
     HarnessSpec,
     OutputSpec,
     ResolvedEpisode,
+    StageNetworkPolicy,
     StagePlan,
     StageResult,
     TaskSpec,
@@ -219,6 +221,37 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
         == result
     )
     assert len(backend.executions) == 2
+
+
+def test_runner_rejects_harness_network_policy_override_before_run(tmp_path: Path) -> None:
+    resolved = replace(
+        episode(tmp_path),
+        schema_version=2,
+        inference_network_policy=StageNetworkPolicy.UNRESTRICTED,
+        verification_network_policy=StageNetworkPolicy.DENY_ALL,
+    )
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="inference plan conflicts"):
+        runner.run(resolved, inference=Inference(), candidate=Inference(), verifier=Verifier())
+    assert backend.executions == []
+
+
+def test_multi_run_verifier_cannot_silently_ignore_public_policy(tmp_path: Path) -> None:
+    class MultiVerifier(Verifier):
+        multi_run = True
+
+    resolved = replace(
+        episode(tmp_path),
+        schema_version=2,
+        inference_network_policy=StageNetworkPolicy.DENY_ALL,
+        verification_network_policy=StageNetworkPolicy.UNRESTRICTED,
+    )
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="multi-Run verifier"):
+        runner.run(resolved, inference=Inference(), candidate=Inference(), verifier=MultiVerifier())
+    assert len(backend.executions) == 1
 
 
 def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch(

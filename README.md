@@ -29,6 +29,8 @@ Axrun does not provide a scheduler, sandbox runtime, agent registry, provider ma
 
 `ResolvedEpisode v1` selects task, harness, candidate and verifier adapters by explicit identity/version, carries adapter-owned validated configuration, binds each stage to an exact image/platform/working-directory contract, and binds the input to a lowercase SHA-256 `seed_digest`. Git and `base_commit` are task-adapter details rather than core fields. A dataset-native row is parsed exactly once by an explicit resolver; inference and verification consume the resulting canonical episode rather than reparsing the original row.
 
+`ResolvedEpisode v2` adds explicit, closed inference and verification network policies (`deny_all` or `unrestricted`). V1 retains its original implicit deny-all semantics and serialized digest; new benchmark resolvers requiring public egress must emit v2 and materialize both policies. Harness plans cannot override the resolved inference policy, and single-Run verifier plans cannot override the verification policy. `StagePlan` defaults to deny-all and rejects unknown policy values. The released Axern SDK represents unrestricted egress by omitting a Run network policy; this is done only for an explicitly resolved `unrestricted` stage, never as an unrecognized fallback. Qualification Runs remain deny-all. A public sandbox policy does not change the caller-only model credential and Tunnel boundaries.
+
 Axrun core is not a Git patch runner. `HarnessSpec` selects how an agent is launched and how harness-native logs, usage, and trajectory are collected; `CandidateSpec` independently selects how the result is finalized and published. The curated catalog currently composes `claude-code@2.1.205` or model-free `static-candidate@1` with `git-patch@1` or `workspace-archive@1`. Unknown identity/version pairs fail closed; there are no dynamic entry points or runtime-downloaded adapters.
 
 Axrun includes small Git and no-Git synthetic fixtures for deterministic qualification. They are not a dataset registry or download service. Gold, empty, and known-bad candidates pass through the same sealed-output, immutable CandidateBundle, and fresh verification boundary used by remote execution.
@@ -162,7 +164,7 @@ The real `xorg62__tty-clock.f2f847c` vertical locks the ProgramBench 1.2.4 insta
 denominator, ignore decisions, hidden-blob revision/digests, and official `linux/amd64` cleanroom
 platform manifest. Its benchmark-owned verifier clears and extracts the candidate, compiles
 offline, seals the complete post-compile rootfs, and starts one fresh Run per active branch.
-`axern-sdk==0.11.3` exposes the successful-Run rootfs result as an immutable derived Environment;
+`axern-sdk==0.11.4` exposes the successful-Run rootfs result as an immutable derived Environment;
 live validation proves fresh Runs preserve sealed state without sharing later mutations.
 Aggregation preserves missing tests as `not_run`, ignored tests, branch errors, and ProgramBench's
 last-result-wins behavior for duplicate full test names. A workspace archive remains an invalid
@@ -173,7 +175,7 @@ and run the public-SDK reproducer with:
 
 ```bash
 uv run python tools/reproducers/programbench_post_compile_snapshot.py
-# exit 0 means the exact 0.11.0 request/wait contract is present
+# exit 0 means the pinned released SDK exposes the request/wait contract
 ```
 
 The separate locked `lh3__seqtk.94e7070` adapter has deterministic parity and a real Claude
@@ -242,7 +244,7 @@ Kova endpoint and token remain in the caller environment used by `kova-client`; 
 
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.11.3`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
+Axrun pins the released `axern-sdk==0.11.4`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
 
 ```bash
 uv sync --all-groups
