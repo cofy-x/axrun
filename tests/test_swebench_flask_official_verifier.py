@@ -431,8 +431,21 @@ def test_scored_result_requires_full_denom_and_status_consistency(tmp_path: Path
     )
     assert parsed.verdict == "passed" and parsed.score == 1.0
     assert parsed.details["status_map"]["test_f2p"] == "PASSED"
+    failed_log = log.replace("PASSED test_f2p", "FAILED test_f2p - AssertionError")
+    payload["test_output_sha256"] = _digest(failed_log.encode())
+    with pytest.raises(ContractError, match="differs from its sealed test log"):
+        SweBenchFlaskOfficialVerifierAdapter().parse_result(
+            _stage_result(tmp_path, payload, failed_log.encode())
+        )
+    payload["test_output_sha256"] = _digest(log.encode())
     payload["status_map"]["test_f2p"] = "FAILED"
     with pytest.raises(ContractError, match="success contradicts"):
+        SweBenchFlaskOfficialVerifierAdapter().parse_result(
+            _stage_result(tmp_path, payload, log.encode())
+        )
+    payload["status_map"]["test_f2p"] = "PASSED"
+    payload["eval_exit_code"] = -9
+    with pytest.raises(ContractError, match="scored result fields"):
         SweBenchFlaskOfficialVerifierAdapter().parse_result(
             _stage_result(tmp_path, payload, log.encode())
         )

@@ -12,7 +12,9 @@ from typing import Any, cast
 
 from axrun.adapters.command_verifier import CommandVerifierAdapter
 from axrun.errors import ContractError, InfrastructureError
+from axrun.fixtures.swebench_flask_official import run_verifier as flask_verifier
 from axrun.models import (
+    Artifact,
     CandidateBundle,
     InputFile,
     OutputSpec,
@@ -92,6 +94,23 @@ def _digest(path: Path, *, size: int | None = None, expected_sha256: str = "") -
     if expected_sha256 and digest != expected_sha256:
         raise ContractError("Flask verifier asset SHA-256 differs from lock")
     return digest
+
+
+def _sealed_bytes(artifact: Artifact) -> bytes:
+    path = Path(artifact.path)
+    try:
+        mode = path.lstat().st_mode
+        if not stat.S_ISREG(mode) or path.is_symlink():
+            raise ContractError("Flask sealed output is not a regular file")
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ContractError("Flask sealed output is unavailable") from exc
+    if (
+        len(payload) != artifact.size_bytes
+        or hashlib.sha256(payload).hexdigest() != artifact.sha256
+    ):
+        raise ContractError("Flask sealed output integrity mismatch")
+    return payload
 
 
 def _config_path(config: dict[str, Any], key: str) -> Path:
@@ -243,9 +262,10 @@ class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
         artifact = result.artifact_for_path(_RESULT)
         log = result.artifact_for_path(_LOG)
         try:
-            raw: Any = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raw: Any = json.loads(_sealed_bytes(artifact).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ContractError("Flask verifier result is not valid JSON") from exc
+        log_bytes = _sealed_bytes(log)
         if not isinstance(raw, dict) or set(cast(dict[object, object], raw)) != _RESULT_KEYS:
             raise ContractError("Flask verifier result has an incomplete or unknown schema")
         payload = cast(dict[str, Any], raw)
@@ -288,12 +308,14 @@ class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
                 != ("" if payload["resolved"] else "SWEBENCH_TESTS_FAILED")
                 or payload["patch_successfully_applied"] is not True
                 or type(payload["eval_exit_code"]) is not int
+                or not 0 <= payload["eval_exit_code"] <= 255
                 or not isinstance(payload["status_map"], dict)
                 or not isinstance(payload["tests_status"], dict)
                 or not isinstance(payload["missing_expected"], list)
             ):
                 raise ContractError("Flask scored result fields are inconsistent")
             self._check_test_details(payload)
+            self._check_sealed_test_log(payload, log_bytes)
         else:
             raise ContractError("Flask verifier result classification is unknown")
         started_at = payload["started_at"]
@@ -382,3 +404,26 @@ class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
             raise ContractError("Flask verifier missing-test list is malformed")
         if missing != sorted(expected_cases - statuses.keys()):
             raise ContractError("Flask verifier missing-test status contradicts the log")
+
+    @staticmethod
+    def _check_sealed_test_log(payload: dict[str, Any], log_bytes: bytes) -> None:
+        try:
+            log_text = log_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ContractError("Flask sealed test log is not UTF-8") from exc
+        sections = cast(dict[str, dict[str, list[str]]], payload["tests_status"])
+        fail_to_pass = [
+            *sections["FAIL_TO_PASS"]["success"],
+            *sections["FAIL_TO_PASS"]["failure"],
+        ]
+        pass_to_pass = [
+            *sections["PASS_TO_PASS"]["success"],
+            *sections["PASS_TO_PASS"]["failure"],
+        ]
+        try:
+            grade = flask_verifier.score_log(log_text, fail_to_pass, pass_to_pass)
+        except flask_verifier.VerifierError as exc:
+            raise ContractError("Flask sealed test log cannot be graded") from exc
+        for key in ("status_map", "tests_status", "missing_expected", "resolved"):
+            if payload[key] != grade[key]:
+                raise ContractError("Flask verifier result differs from its sealed test log")
