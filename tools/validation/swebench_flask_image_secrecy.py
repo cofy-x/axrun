@@ -43,6 +43,7 @@ _CONTAINER_ERROR_CODES = frozenset(
         "additional_git_repository_unscanned",
         "filesystem_scan_failed",
         "filesystem_walk_failed",
+        "filesystem_walk_permission_denied",
         "filesystem_entry_invalid",
         "filesystem_size_changed",
         "filesystem_permission_denied",
@@ -202,7 +203,7 @@ def _patch_targets_and_hunks(patch: str) -> list[dict[str, Any]]:
 # patch bodies, or Git output. Every subprocess has a finite timeout and closed
 # stderr. A missing Git tool, truncated history, or unexpected shape blocks.
 _CONTAINER_CODE = r"""
-import base64, binascii, json, os, pathlib, stat, subprocess, sys
+import base64, binascii, errno, json, os, pathlib, stat, subprocess, sys
 
 MAX_FILESYSTEM_ENTRIES = 500000
 MAX_FILESYSTEM_BYTES = 16 << 30
@@ -277,7 +278,9 @@ def scan_filesystem(needles, result):
     regular_files = 0
     regular_bytes = 0
     matches = {"test": 0, "gold": 0}
-    def walk_error(_error):
+    def walk_error(error):
+        if error.errno in (errno.EACCES, errno.EPERM):
+            fail("filesystem_walk_permission_denied")
         fail("filesystem_walk_failed")
     try:
         for root, dirs, files in os.walk("/", topdown=True, followlinks=False,
