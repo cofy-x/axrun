@@ -707,10 +707,15 @@ def main() -> int:
             ["uv", "--no-config", "pip", "freeze", "--python", str(scorer_python)],
             timeout=60,
         )
-        if current_freeze.returncode != 0 or current_freeze.stdout != freeze_path.read_text(
-            encoding="utf-8"
-        ):
-            raise OracleError("official scorer dependencies differ from frozen preparation")
+        if current_freeze.returncode != 0:
+            raise OracleError("official scorer dependency inspection failed")
+        expected_freeze = freeze_path.read_text(encoding="utf-8")
+        if current_freeze.stdout != expected_freeze:
+            raise OracleError(
+                "official scorer dependencies differ from frozen preparation "
+                f"(expected_sha256={sha256(expected_freeze.encode())}, "
+                f"actual_sha256={sha256(current_freeze.stdout.encode())})"
+            )
         image_id = check_local_image(args.image)
         output_dir = (
             args.output_dir
