@@ -3,15 +3,32 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
+import tarfile
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
 from axrun.lifecycle.base import PreStartLifecycle
-from axrun.models import Artifact, ExecutionRef, StageNetworkPolicy, StagePlan, StageResult
+from axrun.models import (
+    Artifact,
+    ExecutionRef,
+    InputFile,
+    StageNetworkPolicy,
+    StagePlan,
+    StageResult,
+)
+
+# WriteFile is a unary RPC whose JSON transport has a 1 MiB body limit. Base64
+# expansion makes even a sub-1 MiB file unsafe there; larger regular inputs use
+# the public streaming UploadArchive RPC with exactly one regular tar member.
+_INLINE_INPUT_MAX_BYTES = 512 << 10
+_ARCHIVE_SPOOL_MAX_BYTES = 1 << 20
 
 
 class AxernBackend:
@@ -164,12 +181,12 @@ class AxernBackend:
                 lifecycle.start(execution, allocation)
             for item in plan.inputs:
                 source = Path(item.source)
-                if item.sha256 and _sha256(source) != item.sha256:
-                    raise InfrastructureError(f"input digest mismatch: {source}")
                 if item.archive:
+                    if item.sha256 and _sha256(source) != item.sha256:
+                        raise InfrastructureError(f"input digest mismatch: {source}")
                     allocation.upload_archive(item.target, lambda source=source: _chunks(source))
                 else:
-                    allocation.write_file(item.target, source.read_bytes())
+                    _upload_regular_input(allocation, item, source)
             allocation.write_file(ready_marker, b"ready\n")
             released = True
         except BaseException:
@@ -451,5 +468,78 @@ def _sha256(path: Path) -> str:
 
 def _chunks(path: Path) -> Iterator[bytes]:
     with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            yield chunk
+        yield from _stream_chunks(stream)
+
+
+class _ReadableBytes(Protocol):
+    def read(self, size: int, /) -> bytes: ...
+
+
+def _stream_chunks(stream: _ReadableBytes) -> Iterator[bytes]:
+    while chunk := stream.read(1024 * 1024):
+        yield chunk
+
+
+class _DigestingReader:
+    def __init__(self, stream: _ReadableBytes) -> None:
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size: int = -1) -> bytes:
+        value = self.stream.read(size)
+        self.digest.update(value)
+        self.size += len(value)
+        return value
+
+
+def _regular_input_target(target: str) -> tuple[str, str]:
+    if (
+        not target.startswith("/")
+        or target == "/"
+        or len(target.encode("utf-8")) > 4096
+        or "\x00" in target
+        or "\\" in target
+        or any(part in {"", ".", ".."} for part in target[1:].split("/"))
+    ):
+        raise ContractError("regular input target must be a normalized absolute file path")
+    parent, _, basename = target.rpartition("/")
+    return parent or "/", basename
+
+
+def _upload_regular_input(allocation: Any, item: InputFile, source: Path) -> None:
+    parent, basename = _regular_input_target(item.target)
+    # O_NOFOLLOW and fstat ensure the archive can contain only the opened regular
+    # file, never a symlink or a directory substituted for the source path.
+    with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        source_stat = os.fstat(stream.fileno())
+        size = source_stat.st_size
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ContractError("regular input source must be a regular file")
+        if size <= _INLINE_INPUT_MAX_BYTES:
+            payload = stream.read(_INLINE_INPUT_MAX_BYTES + 1)
+            if len(payload) != size or stream.read(1):
+                raise InfrastructureError("input changed while being read")
+            if item.sha256 and hashlib.sha256(payload).hexdigest() != item.sha256:
+                raise InfrastructureError(f"input digest mismatch: {source}")
+            allocation.write_file(item.target, payload)
+            return
+
+        # The spool has bounded memory and is closed on both success and RPC
+        # failure. The member name is the validated target basename, not a path
+        # supplied by a source archive; all tar metadata is deterministic.
+        with tempfile.SpooledTemporaryFile(max_size=_ARCHIVE_SPOOL_MAX_BYTES) as archive_stream:
+            member = tarfile.TarInfo(basename)
+            member.size = size
+            member.mode = 0o644
+            member.uid = member.gid = member.mtime = 0
+            member.type = tarfile.REGTYPE
+            reader = _DigestingReader(stream)
+            with tarfile.open(fileobj=archive_stream, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                tar.addfile(member, reader)
+            if reader.size != size or stream.read(1):
+                raise InfrastructureError("input changed while being archived")
+            if item.sha256 and reader.digest.hexdigest() != item.sha256:
+                raise InfrastructureError(f"input digest mismatch: {source}")
+            archive_stream.seek(0)
+            allocation.upload_archive(parent, lambda: _stream_chunks(archive_stream))

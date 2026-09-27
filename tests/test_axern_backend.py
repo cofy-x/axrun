@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
+import io
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +13,14 @@ from axern_sdk import AxernClient, NetworkPolicy, SandboxNotFoundError
 import axrun.axern_backend as backend_module
 from axrun.axern_backend import AxernBackend
 from axrun.errors import ContractError, InfrastructureError
-from axrun.models import ExecutionRef, OutputSpec, ResourceSpec, StageNetworkPolicy, StagePlan
+from axrun.models import (
+    ExecutionRef,
+    InputFile,
+    OutputSpec,
+    ResourceSpec,
+    StageNetworkPolicy,
+    StagePlan,
+)
 
 
 def test_released_sdk_has_required_public_run_contract() -> None:
@@ -28,6 +38,291 @@ def test_backend_allows_bounded_cold_image_startup_timeout() -> None:
     )
     with pytest.raises(ValueError, match="must be positive"):
         AxernBackend(object(), allocation_ready_timeout_seconds=0)
+
+
+def _run_input_stage(tmp_path: Path, monkeypatch, client, item: InputFile) -> None:
+    backend = AxernBackend(client)
+    monkeypatch.setattr(
+        backend_module,
+        "_wait_running",
+        lambda *_args, **_kwargs: SimpleNamespace(id="run-input", allocation_id="alloc-input"),
+    )
+    monkeypatch.setattr(
+        backend, "_capture_output", lambda *_args, **_kwargs: (tmp_path / "out", tmp_path / "err")
+    )
+    backend.execute(
+        StagePlan("env", ("true",), "/workspace", (), inputs=(item,)),
+        artifact_dir=tmp_path,
+        on_bound=lambda _ref: None,
+    )
+
+
+def test_small_regular_input_uses_write_file(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "small.txt"
+    source.write_bytes(b"small input")
+    events: list[tuple[str, object]] = []
+
+    class Allocation:
+        def write_file(self, path, value):
+            events.append((path, value))
+
+        def upload_archive(self, *_args):
+            pytest.fail("small regular input must not use archive upload")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def wait_run(self, _run_id, timeout):
+            return SimpleNamespace(exit_code=0, diagnostic_code="")
+
+        def cancel_run(self, _run_id):
+            pytest.fail("successful Run must not be cancelled")
+
+    _run_input_stage(
+        tmp_path,
+        monkeypatch,
+        Client(),
+        InputFile(
+            str(source), "/opt/inputs/small.txt", hashlib.sha256(source.read_bytes()).hexdigest()
+        ),
+    )
+    assert events == [
+        ("/opt/inputs/small.txt", b"small input"),
+        ("/run/axrun/inputs-ready", b"ready\n"),
+    ]
+
+
+def test_large_regular_input_uses_single_safe_streamed_tar(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "setuptools.whl"
+    payload = b"fixed-wheel-bytes" * 53_965
+    assert len(payload) > 512 << 10
+    source.write_bytes(payload)
+    uploads: list[tuple[str, bytes]] = []
+    releases: list[str] = []
+
+    class Allocation:
+        def write_file(self, path, _value):
+            releases.append(path)
+
+        def upload_archive(self, path, chunk_factory):
+            chunks = list(chunk_factory())
+            assert chunks and all(0 < len(chunk) <= 1 << 20 for chunk in chunks)
+            uploads.append((path, b"".join(chunks)))
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def wait_run(self, _run_id, timeout):
+            return SimpleNamespace(exit_code=0, diagnostic_code="")
+
+        def cancel_run(self, _run_id):
+            pytest.fail("successful Run must not be cancelled")
+
+    _run_input_stage(
+        tmp_path,
+        monkeypatch,
+        Client(),
+        InputFile(
+            str(source), "/opt/axrun-wheelhouse/setuptools.whl", hashlib.sha256(payload).hexdigest()
+        ),
+    )
+    assert len(uploads) == 1
+    assert uploads[0][0] == "/opt/axrun-wheelhouse"
+    assert releases == ["/run/axrun/inputs-ready"]
+    with tarfile.open(fileobj=io.BytesIO(uploads[0][1]), mode="r:") as archive:
+        members = archive.getmembers()
+        assert len(members) == 1
+        assert members[0].name == "setuptools.whl"
+        assert members[0].isfile() and not members[0].issym()
+        assert members[0].mode == 0o644 and members[0].mtime == 0
+        extracted = archive.extractfile(members[0])
+        assert extracted is not None and extracted.read() == payload
+
+
+@pytest.mark.parametrize(
+    ("size", "expected_method"),
+    [(512 << 10, "write_file"), ((512 << 10) + 1, "upload_archive")],
+)
+def test_regular_input_transport_boundary_is_explicit(
+    tmp_path: Path, size: int, expected_method: str
+) -> None:
+    source = tmp_path / "boundary.bin"
+    payload = b"x" * size
+    source.write_bytes(payload)
+    events: list[str] = []
+
+    class Allocation:
+        def write_file(self, _target, contents):
+            assert contents == payload
+            events.append("write_file")
+
+        def upload_archive(self, _target, chunk_factory):
+            assert b"".join(chunk_factory())
+            events.append("upload_archive")
+
+    backend_module._upload_regular_input(
+        Allocation(),
+        InputFile(str(source), "/opt/inputs/boundary.bin", hashlib.sha256(payload).hexdigest()),
+        source,
+    )
+    assert events == [expected_method]
+
+
+def test_explicit_archive_input_keeps_existing_upload_contract(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "workspace.tar"
+    source.write_bytes(b"archive-stream")
+    uploads: list[tuple[str, bytes]] = []
+
+    class Allocation:
+        def write_file(self, path, value):
+            assert (path, value) == ("/run/axrun/inputs-ready", b"ready\n")
+
+        def upload_archive(self, path, chunk_factory):
+            uploads.append((path, b"".join(chunk_factory())))
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def wait_run(self, _run_id, timeout):
+            return SimpleNamespace(exit_code=0, diagnostic_code="")
+
+        def cancel_run(self, _run_id):
+            pytest.fail("successful Run must not be cancelled")
+
+    _run_input_stage(
+        tmp_path,
+        monkeypatch,
+        Client(),
+        InputFile(
+            str(source), "/workspace", hashlib.sha256(source.read_bytes()).hexdigest(), archive=True
+        ),
+    )
+    assert uploads == [("/workspace", b"archive-stream")]
+
+
+@pytest.mark.parametrize("invalid_target", ["/opt/../escape", "/opt//escape", "/opt/.", "/opt/"])
+def test_unsafe_regular_input_target_cancels_before_release(
+    tmp_path: Path, monkeypatch, invalid_target: str
+) -> None:
+    source = tmp_path / "input.bin"
+    source.write_bytes(b"x" * (513 << 10))
+    events: list[str] = []
+
+    class Allocation:
+        def write_file(self, _path, _value):
+            pytest.fail("unsafe input must not release the Run")
+
+        def upload_archive(self, *_args):
+            pytest.fail("unsafe input must not upload")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def cancel_run(self, run_id):
+            events.append(f"cancelled:{run_id}")
+
+    with pytest.raises(ContractError, match="normalized absolute file path"):
+        _run_input_stage(tmp_path, monkeypatch, Client(), InputFile(str(source), invalid_target))
+    assert events == ["cancelled:run-input"]
+
+
+@pytest.mark.parametrize("error_kind", ["digest", "upload"])
+def test_large_input_failure_cleans_spool_and_cancels_run(
+    tmp_path: Path, monkeypatch, error_kind: str
+) -> None:
+    source = tmp_path / "input.whl"
+    source.write_bytes(b"x" * (2 << 20))
+    events: list[str] = []
+    spools = []
+    original_spooled_file = backend_module.tempfile.SpooledTemporaryFile
+
+    def tracked_spooled_file(*args, **kwargs):
+        spool = original_spooled_file(*args, **kwargs)
+        spools.append(spool)
+        return spool
+
+    monkeypatch.setattr(backend_module.tempfile, "SpooledTemporaryFile", tracked_spooled_file)
+
+    class Allocation:
+        def write_file(self, _path, _value):
+            pytest.fail("failed upload must not release the Run")
+
+        def upload_archive(self, _path, chunk_factory):
+            events.append("upload")
+            assert b"".join(chunk_factory())
+            raise RuntimeError("upload failed")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def cancel_run(self, run_id):
+            events.append(f"cancelled:{run_id}")
+
+    expected = (
+        "0" * 64 if error_kind == "digest" else hashlib.sha256(source.read_bytes()).hexdigest()
+    )
+    with pytest.raises((InfrastructureError, RuntimeError)):
+        _run_input_stage(
+            tmp_path,
+            monkeypatch,
+            Client(),
+            InputFile(str(source), "/opt/inputs/input.whl", expected),
+        )
+    assert events == (
+        ["cancelled:run-input"] if error_kind == "digest" else ["upload", "cancelled:run-input"]
+    )
+    assert len(spools) == 1 and spools[0].closed
+
+
+def test_symlink_regular_source_cancels_before_release(tmp_path: Path, monkeypatch) -> None:
+    actual = tmp_path / "actual.bin"
+    actual.write_bytes(b"x" * (513 << 10))
+    source = tmp_path / "linked.bin"
+    source.symlink_to(actual)
+    cancelled: list[str] = []
+
+    class Allocation:
+        def write_file(self, _path, _value):
+            pytest.fail("symlink source must not release the Run")
+
+        def upload_archive(self, *_args):
+            pytest.fail("symlink source must not upload")
+
+    class Client:
+        def create_run(self, **_kwargs):
+            return SimpleNamespace(id="run-input")
+
+        def allocation(self, _allocation_id):
+            return Allocation()
+
+        def cancel_run(self, run_id):
+            cancelled.append(run_id)
+
+    with pytest.raises(OSError):
+        _run_input_stage(
+            tmp_path, monkeypatch, Client(), InputFile(str(source), "/opt/inputs/linked.bin")
+        )
+    assert cancelled == ["run-input"]
 
 
 @pytest.mark.parametrize(
