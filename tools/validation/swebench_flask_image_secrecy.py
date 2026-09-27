@@ -42,6 +42,11 @@ _CONTAINER_ERROR_CODES = frozenset(
     {
         "additional_git_repository_unscanned",
         "filesystem_scan_failed",
+        "filesystem_walk_failed",
+        "filesystem_entry_invalid",
+        "filesystem_size_changed",
+        "filesystem_permission_denied",
+        "filesystem_io_failed",
         "filesystem_scan_unbounded",
         "git_object_scan_failed",
         "git_object_scan_invalid",
@@ -273,7 +278,7 @@ def scan_filesystem(needles, result):
     regular_bytes = 0
     matches = {"test": 0, "gold": 0}
     def walk_error(_error):
-        fail("filesystem_scan_failed")
+        fail("filesystem_walk_failed")
     try:
         for root, dirs, files in os.walk("/", topdown=True, followlinks=False,
                                          onerror=walk_error):
@@ -295,7 +300,7 @@ def scan_filesystem(needles, result):
                 if stat.S_ISDIR(mode):
                     kept_dirs.append(name)
                 elif not stat.S_ISLNK(mode):
-                    fail("filesystem_scan_failed")
+                    fail("filesystem_entry_invalid")
             dirs[:] = kept_dirs
             for name in files:
                 entries += 1
@@ -315,16 +320,18 @@ def scan_filesystem(needles, result):
                 with os.fdopen(os.open(path, flags), "rb", closefd=True) as stream:
                     opened = os.fstat(stream.fileno())
                     if not stat.S_ISREG(opened.st_mode) or opened.st_size != size:
-                        fail("filesystem_scan_failed")
+                        fail("filesystem_size_changed")
                     found = scan_stream(stream, size, needles)
                     if stream.read(1):
-                        fail("filesystem_scan_failed")
+                        fail("filesystem_size_changed")
                 regular_files += 1
                 regular_bytes += size
                 for prefix in matches:
                     matches[prefix] += int(found[prefix])
+    except PermissionError:
+        fail("filesystem_permission_denied")
     except (OSError, OverflowError):
-        fail("filesystem_scan_failed")
+        fail("filesystem_io_failed")
     result.update({
         "filesystem_scan_complete": True,
         "filesystem_entry_count": entries,
