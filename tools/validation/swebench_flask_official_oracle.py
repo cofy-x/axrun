@@ -143,6 +143,16 @@ def safe_subprocess_env(*, pythonpath: str | None = None) -> dict[str, str]:
     return env
 
 
+def scorer_venv_python(path: Path) -> Path:
+    # `bin/python` is commonly a symlink. Resolving it changes the interpreter
+    # identity to the base Python and makes `uv pip freeze --python` inspect the
+    # wrong environment.
+    absolute = path.absolute()
+    if not absolute.is_file() or not (absolute.parent.parent / "pyvenv.cfg").is_file():
+        raise OracleError("official scorer Python must be a prepared virtual environment")
+    return absolute
+
+
 def load_locked_row(path: Path) -> dict[str, Any]:
     row = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(row, dict) or set(row) != ROW_FIELDS:
@@ -325,7 +335,7 @@ def prepare_assets(assets: Path) -> dict[str, Any]:
         "parquet_sha256": PARQUET_SHA256,
         "harness_source": str(harness.resolve()),
         "harness_commit": HARNESS_COMMIT,
-        "scorer_python": str((scorer / "bin/python").resolve()),
+        "scorer_python": str(scorer_venv_python(scorer / "bin/python")),
         "scorer_packages_sha256": sha256(freeze.stdout.encode()),
         "image": IMAGE,
         "image_id": image_id,
@@ -696,10 +706,8 @@ def main() -> int:
                 return 0
         parquet = (args.parquet or assets / "test-00000-of-00001.parquet").resolve()
         harness_source = (args.harness_source or assets / "SWE-bench").resolve()
-        scorer_python = (args.scorer_python or assets / "scorer-venv/bin/python").resolve()
+        scorer_python = scorer_venv_python(args.scorer_python or assets / "scorer-venv/bin/python")
         check_source(harness_source, HARNESS_COMMIT, "harness")
-        if not scorer_python.is_file():
-            raise OracleError("prepared official scorer Python is missing")
         freeze_path = assets / "scorer-packages.txt"
         if not freeze_path.is_file():
             raise OracleError("prepared official scorer package freeze is missing")

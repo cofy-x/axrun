@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,19 @@ def test_native_platform_and_safe_child_environment(monkeypatch) -> None:
     assert env["UV_CACHE_DIR"] == "/private/uv-cache"
     assert "DEEPSEEK_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+def test_scorer_venv_python_keeps_interpreter_symlink_identity(tmp_path: Path) -> None:
+    venv = tmp_path / "scorer-venv"
+    binary = venv / "bin"
+    binary.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+    python = binary / "python"
+    python.symlink_to(sys.executable)
+    assert MODULE.scorer_venv_python(python) == python.absolute()
+    assert MODULE.scorer_venv_python(python) != python.resolve()
+    with pytest.raises(MODULE.OracleError, match="virtual environment"):
+        MODULE.scorer_venv_python(Path("/bin/sh"))
 
 
 def test_image_requires_locked_platform_digest_and_accepts_docker_hub_normalization(
