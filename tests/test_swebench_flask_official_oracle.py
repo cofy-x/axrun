@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -170,6 +171,12 @@ def test_empty_is_official_unscored_classification() -> None:
 
 
 def test_offline_docker_invocation_is_fresh_and_bounded(tmp_path: Path, monkeypatch) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    wheel = wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME
+    wheel.write_bytes(b"safe")
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"safe"))
     calls = []
 
     def fake_run(command, **kwargs):
@@ -184,6 +191,7 @@ def test_offline_docker_invocation_is_fresh_and_bounded(tmp_path: Path, monkeypa
         eval_script=b"official eval script",
         output_dir=tmp_path,
         timeout_seconds=100,
+        wheelhouse=wheelhouse,
     )
     command, kwargs = calls[0]
     assert command[:2] == ["docker", "run"]
@@ -194,11 +202,90 @@ def test_offline_docker_invocation_is_fresh_and_bounded(tmp_path: Path, monkeypa
     assert command[command.index("--memory") + 1] == "4g"
     assert command[command.index("--pids-limit") + 1] == "256"
     assert command[command.index("--log-driver") + 1] == "none"
+    mounts = [command[i + 1] for i, value in enumerate(command[:-1]) if value == "--mount"]
+    assert any(
+        mount == f"type=bind,source={wheelhouse},target={MODULE.WHEELHOUSE_MOUNT},readonly"
+        for mount in mounts
+    )
+    env_values = [command[i + 1] for i, value in enumerate(command[:-1]) if value == "--env"]
+    assert env_values == ["PIP_NO_INDEX=1", f"PIP_FIND_LINKS={MODULE.WHEELHOUSE_MOUNT}"]
     assert command[-2] == MODULE.IMAGE
     assert kwargs["timeout"] == 100
     assert "DEEPSEEK_API_KEY" not in kwargs["env"]
     assert result["container_removed"] is True
     assert result["test_output_sha256"] == MODULE.sha256(b"")
+
+
+def test_pinned_setuptools_wheel_download_and_closed_wheelhouse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    data = b"fixed-wheel"
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", len(data))
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(data))
+
+    class Response(io.BytesIO):
+        def __init__(self, body: bytes):
+            super().__init__(body)
+            self.headers = {"Content-Length": str(len(body))}
+
+    monkeypatch.setattr(MODULE.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(data))
+    wheel = MODULE._download_locked_wheel(wheelhouse)
+    assert wheel.read_bytes() == data
+    assert MODULE.check_locked_wheelhouse(wheelhouse) == wheel
+    (wheelhouse / "unexpected.whl").write_bytes(data)
+    with pytest.raises(MODULE.OracleError, match="unknown artifacts"):
+        MODULE.check_locked_wheelhouse(wheelhouse)
+    (wheelhouse / "unexpected.whl").unlink()
+    wheel.write_bytes(b"tampered")
+    with pytest.raises(MODULE.OracleError, match="size or SHA-256"):
+        MODULE.check_locked_wheelhouse(wheelhouse)
+
+
+def test_setuptools_wheel_download_digest_mismatch_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class Response(io.BytesIO):
+        def __init__(self, body: bytes):
+            super().__init__(body)
+            self.headers = {"Content-Length": "4"}
+
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"good"))
+    monkeypatch.setattr(
+        MODULE.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(b"evil")
+    )
+    wheelhouse = tmp_path / "wheelhouse"
+    with pytest.raises(MODULE.OracleError, match="downloaded setuptools wheel"):
+        MODULE._download_locked_wheel(wheelhouse)
+    assert list(wheelhouse.iterdir()) == []
+
+
+def test_offline_install_preflight_uses_same_readonly_wheelhouse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / MODULE.SETUPTOOLS_WHEEL_NAME).write_bytes(b"safe")
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_BYTES", 4)
+    monkeypatch.setattr(MODULE, "SETUPTOOLS_WHEEL_SHA256", MODULE.sha256(b"safe"))
+    seen = []
+
+    def fake_run(command, **_kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    monkeypatch.setattr(MODULE, "_container_absent", lambda _name: True)
+    receipt = MODULE.check_offline_install(tmp_path, 120, wheelhouse)
+    command = seen[0]
+    assert command[:2] == ["docker", "run"]
+    assert command[command.index("--network") + 1] == "none"
+    assert f"type=bind,source={wheelhouse},target={MODULE.WHEELHOUSE_MOUNT},readonly" in command
+    assert "PIP_NO_INDEX=1" in command
+    assert f"PIP_FIND_LINKS={MODULE.WHEELHOUSE_MOUNT}" in command
+    assert command[-1] == MODULE.OFFLINE_INSTALL
+    assert receipt["container_removed"] is True
 
 
 def test_known_bad_patch_is_a_real_nonempty_patch(tmp_path: Path) -> None:

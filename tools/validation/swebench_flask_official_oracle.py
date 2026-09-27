@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import resource
+import stat
 import subprocess
 import sys
 import time
@@ -33,6 +34,15 @@ PARQUET_URL = (
     "https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/resolve/"
     f"{DATASET_COMMIT}/data/test-00000-of-00001.parquet"
 )
+SETUPTOOLS_WHEEL_NAME = "setuptools-70.0.0-py3-none-any.whl"
+SETUPTOOLS_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/de/88/"
+    "70c5767a0e43eb4451c2200f07d042a4bcd7639276003a9c54a68cfcc1f8/" + SETUPTOOLS_WHEEL_NAME
+)
+SETUPTOOLS_WHEEL_BYTES = 863_432
+SETUPTOOLS_WHEEL_SHA256 = "54faa7f2e8d2d11bcd2c07bed282eef1046b5c080d1c32add737d7b5817b1ad4"
+WHEELHOUSE_MOUNT = "/opt/axrun-wheelhouse"
+OFFLINE_PIP_ENV = ("PIP_NO_INDEX=1", f"PIP_FIND_LINKS={WHEELHOUSE_MOUNT}")
 HARNESS_URL = "https://github.com/SWE-bench/SWE-bench.git"
 IMAGE = (
     "docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-5014"
@@ -252,6 +262,63 @@ def _download_parquet(path: Path) -> None:
         raise
 
 
+def check_locked_wheelhouse(wheelhouse: Path) -> Path:
+    if wheelhouse.is_symlink() or not wheelhouse.is_dir():
+        raise OracleError("locked wheelhouse directory is missing or is a symlink")
+    entries = list(wheelhouse.iterdir())
+    if len(entries) != 1 or entries[0].name != SETUPTOOLS_WHEEL_NAME:
+        raise OracleError("locked wheelhouse contains missing or unknown artifacts")
+    wheel = entries[0]
+    if wheel.is_symlink() or not stat.S_ISREG(wheel.lstat().st_mode):
+        raise OracleError("locked setuptools wheel is not a regular file")
+    data = wheel.read_bytes()
+    if len(data) != SETUPTOOLS_WHEEL_BYTES or sha256(data) != SETUPTOOLS_WHEEL_SHA256:
+        raise OracleError("locked setuptools wheel size or SHA-256 differs")
+    return wheel
+
+
+def _download_locked_wheel(wheelhouse: Path) -> Path:
+    if wheelhouse.is_symlink():
+        raise OracleError("locked wheelhouse cannot be a symlink")
+    wheelhouse.mkdir(mode=0o700, exist_ok=True)
+    wheel = wheelhouse / SETUPTOOLS_WHEEL_NAME
+    if wheel.exists() or wheel.is_symlink():
+        check_locked_wheelhouse(wheelhouse)
+        return wheel
+    if list(wheelhouse.iterdir()):
+        raise OracleError("locked wheelhouse contains unknown artifacts")
+    temporary = wheelhouse / f".{SETUPTOOLS_WHEEL_NAME}.download"
+    request = urllib.request.Request(
+        SETUPTOOLS_WHEEL_URL, headers={"User-Agent": "axrun-stage-zero/1"}
+    )
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=60) as response,
+            temporary.open("xb") as stream,
+        ):
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) != SETUPTOOLS_WHEEL_BYTES:
+                raise OracleError("setuptools wheel response length differs from lock")
+            remaining = SETUPTOOLS_WHEEL_BYTES + 1
+            while remaining:
+                block = response.read(min(1024 * 1024, remaining))
+                if not block:
+                    break
+                stream.write(block)
+                remaining -= len(block)
+        data = temporary.read_bytes()
+        if len(data) != SETUPTOOLS_WHEEL_BYTES or sha256(data) != SETUPTOOLS_WHEEL_SHA256:
+            raise OracleError("downloaded setuptools wheel size or SHA-256 differs")
+        temporary.chmod(0o600)
+        temporary.replace(wheel)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+    check_locked_wheelhouse(wheelhouse)
+    return wheel
+
+
 def _prepare_harness(path: Path) -> None:
     if path.exists():
         check_source(path, HARNESS_COMMIT, "harness")
@@ -307,7 +374,9 @@ def prepare_assets(assets: Path) -> dict[str, Any]:
     parquet = assets / "test-00000-of-00001.parquet"
     harness = assets / "SWE-bench"
     scorer = assets / "scorer-venv"
+    wheelhouse = assets / "wheelhouse"
     _download_parquet(parquet)
+    _download_locked_wheel(wheelhouse)
     _prepare_harness(harness)
     _prepare_scorer(scorer, harness)
     freeze = _run(
@@ -339,6 +408,7 @@ def prepare_assets(assets: Path) -> dict[str, Any]:
         "scorer_packages_sha256": sha256(freeze.stdout.encode()),
         "image": IMAGE,
         "image_id": image_id,
+        "setuptools_wheel_sha256": SETUPTOOLS_WHEEL_SHA256,
     }
 
 
@@ -436,7 +506,23 @@ def _limit_log() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
 
 
-def check_offline_install(output_dir: Path, timeout_seconds: int) -> dict[str, Any]:
+def _wheelhouse_docker_args(wheelhouse: Path) -> list[str]:
+    check_locked_wheelhouse(wheelhouse)
+    if "," in str(wheelhouse):
+        raise OracleError("oracle wheelhouse path cannot contain a comma")
+    return [
+        "--mount",
+        f"type=bind,source={wheelhouse},target={WHEELHOUSE_MOUNT},readonly",
+        "--env",
+        OFFLINE_PIP_ENV[0],
+        "--env",
+        OFFLINE_PIP_ENV[1],
+    ]
+
+
+def check_offline_install(
+    output_dir: Path, timeout_seconds: int, wheelhouse: Path
+) -> dict[str, Any]:
     """Prove the official eval-script installation command works without egress."""
     name = f"axrun-sweb-flask-install-{uuid.uuid4().hex[:16]}"
     path = output_dir / "offline_install.txt"
@@ -457,6 +543,7 @@ def check_offline_install(output_dir: Path, timeout_seconds: int) -> dict[str, A
         "--workdir",
         "/testbed",
         *DOCKER_LIMITS,
+        *_wheelhouse_docker_args(wheelhouse),
         "--entrypoint",
         "/bin/bash",
         IMAGE,
@@ -499,6 +586,7 @@ def run_case(
     eval_script: bytes,
     output_dir: Path,
     timeout_seconds: int,
+    wheelhouse: Path,
 ) -> dict[str, Any]:
     case_dir = output_dir / name
     case_dir.mkdir(mode=0o700)
@@ -527,6 +615,7 @@ def run_case(
         "--workdir",
         "/testbed",
         *DOCKER_LIMITS,
+        *_wheelhouse_docker_args(wheelhouse),
         "--entrypoint",
         "/bin/bash",
     ]
@@ -688,6 +777,7 @@ def main() -> int:
         if not 60 <= args.timeout_seconds <= 3600:
             raise OracleError("timeout must be between 60 and 3600 seconds")
         assets = args.assets_dir.resolve()
+        wheelhouse = assets / "wheelhouse"
         if args.action in {"all", "prepare"}:
             prepared = prepare_assets(assets)
             if args.action == "prepare":
@@ -699,6 +789,7 @@ def main() -> int:
                             "harness_commit": HARNESS_COMMIT,
                             "scorer_packages_sha256": prepared["scorer_packages_sha256"],
                             "image_id": prepared["image_id"],
+                            "setuptools_wheel_sha256": prepared["setuptools_wheel_sha256"],
                         },
                         sort_keys=True,
                     )
@@ -728,6 +819,7 @@ def main() -> int:
                 "see private observed scorer package artifact)"
             )
         image_id = check_local_image(args.image)
+        check_locked_wheelhouse(wheelhouse)
         output_dir = (
             args.output_dir
             or DEFAULT_EVIDENCE / f"oracle-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -767,6 +859,18 @@ def main() -> int:
             "image_id": image_id,
             "platform": "linux/amd64",
             "network": "none",
+            "offline_build_wheel": {
+                "filename": SETUPTOOLS_WHEEL_NAME,
+                "bytes": SETUPTOOLS_WHEEL_BYTES,
+                "sha256": SETUPTOOLS_WHEEL_SHA256,
+                "source": SETUPTOOLS_WHEEL_URL,
+                "mount": WHEELHOUSE_MOUNT,
+                "readonly": True,
+            },
+            "offline_pip_environment": {
+                "PIP_NO_INDEX": "1",
+                "PIP_FIND_LINKS": WHEELHOUSE_MOUNT,
+            },
             "docker_limits": {"cpus": 2, "memory": "4g", "pids": 256, "log_driver": "none"},
             "case_timeout_seconds": args.timeout_seconds,
             "max_caller_log_bytes": MAX_LOG_BYTES,
@@ -774,11 +878,15 @@ def main() -> int:
             "official_test_spec_eval_script_and_grader_used": True,
             "harness_divergence": (
                 "Docker --network none and pinned platform digest are imposed by this tool; "
+                "the content-verified setuptools wheel is mounted read-only and PIP_NO_INDEX/"
+                "PIP_FIND_LINKS are fixed to make the official install command offline; "
                 "upstream run_instance does not expose these settings"
             ),
             "cases": {},
         }
-        receipt["offline_install"] = check_offline_install(output_dir, args.timeout_seconds)
+        receipt["offline_install"] = check_offline_install(
+            output_dir, args.timeout_seconds, wheelhouse
+        )
         _write_receipt(output_dir / "receipt.json", receipt)
         for name, patch in (("gold", row["patch"].encode()), ("known_bad", KNOWN_BAD_PATCH)):
             result = run_case(
@@ -787,6 +895,7 @@ def main() -> int:
                 eval_script=row["eval_script"].encode(),
                 output_dir=output_dir,
                 timeout_seconds=args.timeout_seconds,
+                wheelhouse=wheelhouse,
             )
             log_path = output_dir / name / "test_output.txt"
             result["classification"] = classify_case(name, result, log_path)
