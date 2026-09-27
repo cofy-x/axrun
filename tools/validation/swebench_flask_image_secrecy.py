@@ -38,6 +38,31 @@ MAX_TARGETS = 64
 MAX_AUDIT_OUTPUT = 16 << 10
 AUDIT_TIMEOUT_SECONDS = 600
 MIN_MEANINGFUL_ADDITION_BYTES = 24
+_CONTAINER_ERROR_CODES = frozenset(
+    {
+        "additional_git_repository_unscanned",
+        "filesystem_scan_failed",
+        "filesystem_scan_unbounded",
+        "git_object_scan_failed",
+        "git_object_scan_invalid",
+        "git_object_scan_unbounded",
+        "git_read_failed",
+        "image_git_invalid",
+        "patch_history_unavailable",
+        "patch_history_unbounded",
+        "patch_id_unavailable",
+        "request_shape_invalid",
+        "scan_content_truncated",
+        "signature_invalid",
+        "signature_missing",
+        "signatures_unbounded",
+        "target_current_object_invalid",
+        "target_current_unbounded",
+        "target_history_object_invalid",
+        "target_history_unavailable",
+        "target_history_unbounded",
+    }
+)
 
 
 class SecrecyError(RuntimeError):
@@ -668,6 +693,17 @@ def _docker_audit(image_id: str, row: dict[str, Any]) -> dict[str, Any]:
     if len(payload) > MAX_AUDIT_OUTPUT:
         raise SecrecyError("image_audit_output_unbounded")
     if completed.returncode:
+        try:
+            failed = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            failed = None
+        if (
+            isinstance(failed, dict)
+            and set(failed) == {"error"}
+            and isinstance(failed["error"], str)
+            and failed["error"] in _CONTAINER_ERROR_CODES
+        ):
+            raise SecrecyError(failed["error"])
         raise SecrecyError("image_audit_failed_closed")
     try:
         value = json.loads(payload)

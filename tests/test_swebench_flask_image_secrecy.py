@@ -176,6 +176,26 @@ def test_docker_inspection_is_pinned_readonly_offline_and_uses_stdin(
     assert secrecy.AUDIT_TIMEOUT_SECONDS == 600
 
 
+def test_container_failures_expose_only_allowlisted_reason_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = "additional_git_repository_unscanned"
+    original_run = secrecy.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if command[0] != "docker":
+            return original_run(command, **kwargs)
+        output = kwargs["stdout"]
+        assert hasattr(output, "write")
+        output.write(json.dumps({"error": code}).encode())  # type: ignore[union-attr]
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(secrecy.subprocess, "run", fake_run)
+    monkeypatch.setattr(secrecy, "_ensure_removed", lambda _name: None)
+    with pytest.raises(secrecy.SecrecyError, match=code):
+        secrecy._docker_audit("sha256:" + "a" * 64, {"patch": _MODIFIED, "test_patch": _ADDED})
+
+
 def test_cleanup_only_touches_named_container_and_confirms_absence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
