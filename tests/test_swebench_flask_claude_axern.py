@@ -440,3 +440,21 @@ def test_tunnel_cleanup_evidence_uses_real_sdk_client_without_storing_token(
     evidence.revoke_tunnel_session("tun-1")
     assert evidence.revoked is True
     assert token not in repr(cast(dict[str, Any], vars(evidence)))
+
+
+def test_tunnel_create_failure_records_only_safe_status() -> None:
+    class UnavailableError(RuntimeError):
+        def code(self) -> SimpleNamespace:
+            return SimpleNamespace(name="UNAVAILABLE", secret="never-record-me")
+
+    class Client:
+        def create_tunnel_session(self, **_kwargs: Any) -> None:
+            raise UnavailableError("sensitive server message")
+
+    evidence = claude._TunnelCleanupEvidence(cast(Any, Client()))
+    with pytest.raises(UnavailableError):
+        evidence.create_tunnel_session(allocation_id="alloc-1")
+    assert evidence.create_error_type == "UnavailableError"
+    assert evidence.create_grpc_status == "UNAVAILABLE"
+    assert "sensitive" not in repr(vars(evidence))
+    assert "never-record-me" not in repr(vars(evidence))

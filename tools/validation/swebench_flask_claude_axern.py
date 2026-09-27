@@ -58,6 +58,26 @@ _ROOTFS_IMAGE = (
 )
 _UPSTREAM = "https://api.deepseek.com/anthropic"
 _CREDENTIAL_ENV = "DEEPSEEK_API_KEY"
+_GRPC_STATUS_NAMES = frozenset(
+    {
+        "CANCELLED",
+        "UNKNOWN",
+        "INVALID_ARGUMENT",
+        "DEADLINE_EXCEEDED",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "PERMISSION_DENIED",
+        "RESOURCE_EXHAUSTED",
+        "FAILED_PRECONDITION",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "UNIMPLEMENTED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DATA_LOSS",
+        "UNAUTHENTICATED",
+    }
+)
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _EPISODE_ID = re.compile(r"^flask-5014-(?:gold|known_bad|empty)-[0-9a-f]{32}$")
 _PATH_KEYS = frozenset(
@@ -165,9 +185,27 @@ class _TunnelCleanupEvidence:
         self.client = client
         self.session_id = ""
         self.revoked = False
+        self.create_error_type = ""
+        self.create_grpc_status = ""
 
     def create_tunnel_session(self, **kwargs: Any) -> Any:
-        response = self.client.create_tunnel_session(**kwargs)
+        try:
+            response = self.client.create_tunnel_session(**kwargs)
+        except Exception as exc:
+            name = type(exc).__name__
+            self.create_error_type = (
+                name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) else "unknown"
+            )
+            status_fn = getattr(exc, "code", None)
+            if callable(status_fn):
+                try:
+                    status = status_fn()
+                    status_name = getattr(status, "name", "")
+                    if status_name in _GRPC_STATUS_NAMES:
+                        self.create_grpc_status = status_name
+                except Exception:
+                    pass
+            raise
         self.session_id = str(response.session.session_id)
         return response
 
@@ -751,6 +789,11 @@ def _execute(
                 if not tunnel_evidence.session_id
                 else "failed_or_ambiguous"
             )
+            receipt["tunnel_setup"] = {
+                "session_created": bool(tunnel_evidence.session_id),
+                "create_error_type": tunnel_evidence.create_error_type,
+                "create_grpc_status": tunnel_evidence.create_grpc_status,
+            }
             last_summary = proxy.last_summary
             if last_summary is not None:
                 receipt["model_last_summary"] = last_summary.as_safe_dict()
