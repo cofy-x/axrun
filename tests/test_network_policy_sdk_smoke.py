@@ -54,12 +54,42 @@ def test_probe_accepts_only_expected_policy_result(tmp_path: Path, monkeypatch, 
 
     monkeypatch.setattr(MODULE, "AxernBackend", Backend)
     monkeypatch.setattr(MODULE, "_status_name", lambda _run: "RUN_STATUS_SUCCEEDED")
-    result = MODULE._probe(Client(), "env", tmp_path, StageNetworkPolicy.DENY_ALL)
+    receipt = {"status": "started", "results": []}
+    result = MODULE._probe(Client(), "env", tmp_path, StageNetworkPolicy.DENY_ALL, receipt)
     assert result["bound_before_release"] is True
     assert result["run_id"] == "run" and result["allocation_id"] == "alloc"
     assert result["terminal_status"] == "RUN_STATUS_SUCCEEDED"
     assert result["egress_http_success"] is permitted
     assert result["direct_ip_tcp_connected"] is permitted
+    assert json.loads((tmp_path / "receipt.json").read_text())["results"] == [result]
+
+
+def test_probe_persists_run_identity_before_transport_failure(tmp_path: Path, monkeypatch):
+    class Backend:
+        def __init__(self, _client: object) -> None:
+            pass
+
+        def execute(self, _plan, *, artifact_dir, on_bound):
+            on_bound(ExecutionRef("env", "run-interrupted"))
+            assert (
+                json.loads((tmp_path / "receipt.json").read_text())["results"][0]["run_id"]
+                == "run-interrupted"
+            )
+            on_bound(ExecutionRef("env", "run-interrupted", "alloc-interrupted"))
+            raise ConnectionError("transport lost")
+
+    monkeypatch.setattr(MODULE, "AxernBackend", Backend)
+    receipt = {"status": "started", "results": []}
+    with pytest.raises(ConnectionError, match="transport lost"):
+        MODULE._probe(object(), "env", tmp_path, StageNetworkPolicy.DENY_ALL, receipt)
+    trial = json.loads((tmp_path / "receipt.json").read_text())["results"][0]
+    assert trial == {
+        "policy": "deny_all",
+        "environment_id": "env",
+        "status": "allocation_ready",
+        "run_id": "run-interrupted",
+        "allocation_id": "alloc-interrupted",
+    }
 
 
 def test_policy_result_pair_requires_isolation_and_public_egress() -> None:

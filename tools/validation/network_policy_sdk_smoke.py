@@ -19,6 +19,7 @@ from axern_sdk import AxernClient, SandboxNotFoundError
 
 from axrun.axern_backend import AxernBackend, _status_name
 from axrun.models import ExecutionRef, OutputSpec, StageNetworkPolicy, StagePlan
+from axrun.store import _atomic_write
 
 IMAGE = (
     "index.docker.io/library/python"
@@ -45,9 +46,25 @@ with open('/outputs/network.json', 'w', encoding='utf-8') as stream:
 """
 
 
+def _persist_receipt(root: Path, receipt: dict[str, Any]) -> None:
+    _atomic_write(root / "receipt.json", (json.dumps(receipt, indent=2) + "\n").encode())
+
+
 def _probe(
-    client: AxernClient, environment_id: str, root: Path, policy: StageNetworkPolicy
+    client: AxernClient,
+    environment_id: str,
+    root: Path,
+    policy: StageNetworkPolicy,
+    receipt: dict[str, Any],
 ) -> dict[str, Any]:
+    trial: dict[str, Any] = {
+        "policy": policy.value,
+        "environment_id": environment_id,
+        "status": "creating_run",
+    }
+    receipt["results"].append(trial)
+    _persist_receipt(root, receipt)
+
     plan = StagePlan(
         environment_id=environment_id,
         argv=("/usr/local/bin/python", "-c", _PROBE),
@@ -58,8 +75,19 @@ def _probe(
         labels={"axrun.validation": "network-policy", "axrun.policy": policy.value},
     )
     bound: list[ExecutionRef] = []
+
+    def persist_binding(execution: ExecutionRef) -> None:
+        bound.append(execution)
+        trial["run_id"] = execution.run_id
+        if execution.allocation_id:
+            trial["allocation_id"] = execution.allocation_id
+            trial["status"] = "allocation_ready"
+        else:
+            trial["status"] = "run_created"
+        _persist_receipt(root, receipt)
+
     result = AxernBackend(client).execute(
-        plan, artifact_dir=root / policy.value, on_bound=bound.append
+        plan, artifact_dir=root / policy.value, on_bound=persist_binding
     )
     if result.exit_code != 0 or not result.execution.allocation_id:
         raise RuntimeError(f"{policy.value} Run did not complete successfully")
@@ -80,21 +108,22 @@ def _probe(
         or payload["egress_http_success"] != (payload["https_status"] == 200)
     ):
         raise RuntimeError(f"{policy.value} network result has an invalid shape")
-    if len(bound) != 2 or bound[0].allocation_id:
+    if len(bound) != 2 or bound[0].allocation_id or bound[1] != result.execution:
         raise RuntimeError("Run identity was not persisted before Allocation readiness")
-    return {
-        "policy": policy.value,
-        "environment_id": environment_id,
-        "run_id": result.execution.run_id,
-        "allocation_id": result.execution.allocation_id,
-        "terminal_status": terminal_status,
-        "egress_http_success": payload["egress_http_success"],
-        "https_status": payload["https_status"],
-        "direct_ip_tcp_connected": payload["direct_ip_tcp_connected"],
-        "sealed_size": artifact.size_bytes,
-        "sealed_sha256": artifact.sha256,
-        "bound_before_release": True,
-    }
+    trial.update(
+        {
+            "status": "complete",
+            "terminal_status": terminal_status,
+            "egress_http_success": payload["egress_http_success"],
+            "https_status": payload["https_status"],
+            "direct_ip_tcp_connected": payload["direct_ip_tcp_connected"],
+            "sealed_size": artifact.size_bytes,
+            "sealed_sha256": artifact.sha256,
+            "bound_before_release": True,
+        }
+    )
+    _persist_receipt(root, receipt)
+    return trial
 
 
 def _assert_policy_results(results: list[dict[str, Any]]) -> None:
@@ -159,17 +188,23 @@ def main() -> None:
         proxy_mode="direct",
     )
     environment_id = ""
-    receipt: dict[str, Any] = {"status": "started", "image": IMAGE, "environment_id": ""}
+    receipt: dict[str, Any] = {
+        "status": "started",
+        "image": IMAGE,
+        "environment_id": "",
+        "results": [],
+    }
+    _persist_receipt(root, receipt)
     try:
         environment = client.create_environment(
             image_ref=IMAGE, labels={"axrun.validation": "network-policy"}
         )
         environment_id = environment.id
         receipt["environment_id"] = environment_id
-        results: list[dict[str, Any]] = []
-        receipt["results"] = results
+        _persist_receipt(root, receipt)
+        results: list[dict[str, Any]] = receipt["results"]
         for policy in (StageNetworkPolicy.DENY_ALL, StageNetworkPolicy.UNRESTRICTED):
-            results.append(_probe(client, environment_id, root, policy))
+            _probe(client, environment_id, root, policy, receipt)
         _assert_policy_results(results)
         receipt["status"] = "complete"
     except Exception as exc:
@@ -189,7 +224,7 @@ def main() -> None:
             try:
                 client.close()
             finally:
-                (root / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+                _persist_receipt(root, receipt)
     print(f"evidence={root}", flush=True)
     print(json.dumps(receipt, sort_keys=True), flush=True)
 
