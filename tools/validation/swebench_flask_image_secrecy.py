@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed, content-free image secrecy audit for one locked Flask task.
+"""Fail-closed image audit for locked Flask test/gold patch signatures.
 
 The private official row is read by the caller. Patches and target paths reach
 only a disposable, read-only Docker container over stdin, never argv, env, a
 host mount, or the receipt. The container has no network and prints aggregate
-booleans/counts only. This is a stage-zero gate, not a benchmark score.
+booleans/counts only. This proves absence of those locked signatures in the
+accessible image filesystem and Git object database, not absence of all
+possible undisclosed secrets. This is a stage-zero gate, not a benchmark score.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -28,12 +31,12 @@ else:
     import swebench_flask_official_oracle as oracle
 
 
-SCHEMA = "axrun.swebench-flask-image-secrecy@1"
+SCHEMA = "axrun.swebench-flask-image-secrecy@2"
 IMAGE_HEAD = "966bb873e3a1e42d857362a17f5af2533dfd8f46"
 MAX_PATCH_BYTES = 2 << 20
 MAX_TARGETS = 64
 MAX_AUDIT_OUTPUT = 16 << 10
-AUDIT_TIMEOUT_SECONDS = 180
+AUDIT_TIMEOUT_SECONDS = 600
 MIN_MEANINGFUL_ADDITION_BYTES = 24
 
 
@@ -169,7 +172,15 @@ def _patch_targets_and_hunks(patch: str) -> list[dict[str, Any]]:
 # patch bodies, or Git output. Every subprocess has a finite timeout and closed
 # stderr. A missing Git tool, truncated history, or unexpected shape blocks.
 _CONTAINER_CODE = r"""
-import base64, json, os, pathlib, subprocess, sys
+import base64, binascii, json, os, pathlib, stat, subprocess, sys
+
+MAX_FILESYSTEM_ENTRIES = 500000
+MAX_FILESYSTEM_BYTES = 16 << 30
+MAX_SINGLE_FILE_BYTES = 4 << 30
+MAX_GIT_OBJECTS = 250000
+MAX_GIT_OBJECT_BYTES = 8 << 30
+MAX_SINGLE_GIT_OBJECT_BYTES = 1 << 30
+SCAN_CHUNK_BYTES = 1 << 20
 
 def fail(code):
     print(json.dumps({"error": code}, sort_keys=True))
@@ -186,9 +197,185 @@ def git(*args, input_bytes=None, timeout=30):
     except (OSError, subprocess.TimeoutExpired):
         fail("git_read_failed")
 
+def signatures(request):
+    result = {}
+    total_count = 0
+    total_bytes = 0
+    for prefix in ("test", "gold"):
+        needles = set()
+        for target in request[prefix + "_targets"]:
+            for key in ("after_hunks", "added_fragments"):
+                for encoded in target[key]:
+                    try:
+                        needle = base64.b64decode(encoded, validate=True)
+                    except (ValueError, binascii.Error):
+                        fail("signature_invalid")
+                    if not needle:
+                        fail("signature_invalid")
+                    needles.add(needle)
+        if not needles:
+            fail("signature_missing")
+        result[prefix] = tuple(sorted(needles))
+        total_count += len(needles)
+        total_bytes += sum(map(len, needles))
+    if total_count > 4096 or total_bytes > 8 << 20:
+        fail("signatures_unbounded")
+    return result
+
+def scan_stream(stream, length, needles):
+    # Preserve the longest possible cross-chunk match without loading a file
+    # or Git object into memory. Always consume the whole object, even after
+    # both signatures have matched, so completion has a precise meaning.
+    maximum = max(map(len, (*needles["test"], *needles["gold"])))
+    tail = b""
+    matches = {"test": False, "gold": False}
+    remaining = length
+    while remaining:
+        chunk = stream.read(min(SCAN_CHUNK_BYTES, remaining))
+        if not chunk:
+            fail("scan_content_truncated")
+        remaining -= len(chunk)
+        window = tail + chunk
+        for prefix in ("test", "gold"):
+            if not matches[prefix] and any(item in window for item in needles[prefix]):
+                matches[prefix] = True
+        tail = window[-(maximum - 1):] if maximum > 1 else b""
+    return matches
+
+def scan_filesystem(needles, result):
+    entries = 0
+    regular_files = 0
+    regular_bytes = 0
+    matches = {"test": 0, "gold": 0}
+    def walk_error(_error):
+        fail("filesystem_scan_failed")
+    try:
+        for root, dirs, files in os.walk("/", topdown=True, followlinks=False,
+                                         onerror=walk_error):
+            if root == "/":
+                dirs[:] = [name for name in dirs if name not in {"proc", "sys", "dev"}]
+            dirs.sort()
+            files.sort()
+            kept_dirs = []
+            for name in dirs:
+                entries += 1
+                if entries > MAX_FILESYSTEM_ENTRIES:
+                    fail("filesystem_scan_unbounded")
+                path = os.path.join(root, name)
+                if name == ".git" and path != "/testbed/.git":
+                    fail("additional_git_repository_unscanned")
+                mode = os.lstat(path).st_mode
+                if path == "/testbed/.git" and not stat.S_ISDIR(mode):
+                    fail("image_git_invalid")
+                if stat.S_ISDIR(mode):
+                    kept_dirs.append(name)
+                elif not stat.S_ISLNK(mode):
+                    fail("filesystem_scan_failed")
+            dirs[:] = kept_dirs
+            for name in files:
+                entries += 1
+                if entries > MAX_FILESYSTEM_ENTRIES:
+                    fail("filesystem_scan_unbounded")
+                path = os.path.join(root, name)
+                if name == ".git":
+                    fail("additional_git_repository_unscanned")
+                metadata = os.lstat(path)
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                    continue
+                size = metadata.st_size
+                if (size < 0 or size > MAX_SINGLE_FILE_BYTES or
+                        regular_bytes + size > MAX_FILESYSTEM_BYTES):
+                    fail("filesystem_scan_unbounded")
+                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+                with os.fdopen(os.open(path, flags), "rb", closefd=True) as stream:
+                    opened = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(opened.st_mode) or opened.st_size != size:
+                        fail("filesystem_scan_failed")
+                    found = scan_stream(stream, size, needles)
+                    if stream.read(1):
+                        fail("filesystem_scan_failed")
+                regular_files += 1
+                regular_bytes += size
+                for prefix in matches:
+                    matches[prefix] += int(found[prefix])
+    except (OSError, OverflowError):
+        fail("filesystem_scan_failed")
+    result.update({
+        "filesystem_scan_complete": True,
+        "filesystem_entry_count": entries,
+        "filesystem_regular_file_count": regular_files,
+        "filesystem_regular_file_bytes": regular_bytes,
+        "test_full_filesystem_match_count": matches["test"],
+        "gold_full_filesystem_match_count": matches["gold"],
+    })
+
+def scan_git_objects(needles, result):
+    # --batch-all-objects includes unreachable and dangling loose/packed
+    # objects, unlike rev-list --all. Object content is streamed, not logged.
+    command = ["git", "cat-file", "--batch-all-objects", "--batch"]
+    try:
+        process = subprocess.Popen(
+            command, cwd="/testbed", stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_NOSYSTEM": "1",
+                 "GIT_CONFIG_GLOBAL": "/dev/null"},
+        )
+    except OSError:
+        fail("git_object_scan_failed")
+    objects = 0
+    object_bytes = 0
+    matches = {"test": 0, "gold": 0}
+    try:
+        if process.stdout is None:
+            fail("git_object_scan_failed")
+        while True:
+            header = process.stdout.readline(256)
+            if not header:
+                break
+            fields = header.removesuffix(b"\n").split(b" ")
+            if not header.endswith(b"\n") or len(fields) != 3:
+                fail("git_object_scan_invalid")
+            oid, kind, raw_size = fields
+            if (len(oid) not in (40, 64) or
+                    kind not in (b"blob", b"tree", b"commit", b"tag") or
+                    not raw_size.isdigit()):
+                fail("git_object_scan_invalid")
+            try:
+                bytes.fromhex(oid.decode("ascii"))
+                size = int(raw_size)
+            except (ValueError, UnicodeDecodeError):
+                fail("git_object_scan_invalid")
+            objects += 1
+            if (objects > MAX_GIT_OBJECTS or size > MAX_SINGLE_GIT_OBJECT_BYTES or
+                    object_bytes + size > MAX_GIT_OBJECT_BYTES):
+                fail("git_object_scan_unbounded")
+            found = scan_stream(process.stdout, size, needles)
+            if process.stdout.read(1) != b"\n":
+                fail("git_object_scan_invalid")
+            object_bytes += size
+            for prefix in matches:
+                matches[prefix] += int(found[prefix])
+        if process.wait(timeout=10):
+            fail("git_object_scan_failed")
+    except (OSError, subprocess.TimeoutExpired):
+        fail("git_object_scan_failed")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+    result.update({
+        "git_all_object_scan_complete": True,
+        "git_all_object_count": objects,
+        "git_all_object_bytes": object_bytes,
+        "test_all_git_object_match_count": matches["test"],
+        "gold_all_git_object_match_count": matches["gold"],
+    })
+
 request = json.load(sys.stdin)
 if set(request) != {"gold_patch", "test_patch", "gold_targets", "test_targets"}:
     fail("request_shape_invalid")
+needles = signatures(request)
 head = git("rev-parse", "--verify", "HEAD")
 dirty = git("status", "--porcelain=v1", "--untracked-files=all")
 base = git("cat-file", "-e", "7ee9ceb71e868944a46e1ff00b506772a53a4f1d^{commit}")
@@ -299,6 +486,8 @@ for prefix in ("test", "gold"):
     if patch_id.returncode or not patch_id.stdout.strip():
         fail("patch_id_unavailable")
     result[prefix + "_patch_id_in_history"] = patch_id.stdout.split()[0] in historic_ids
+scan_filesystem(needles, result)
+scan_git_objects(needles, result)
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 """
 
@@ -335,6 +524,17 @@ _AUDIT_FIELDS = frozenset(
         "history_patch_count",
         "test_patch_id_in_history",
         "gold_patch_id_in_history",
+        "filesystem_scan_complete",
+        "filesystem_entry_count",
+        "filesystem_regular_file_count",
+        "filesystem_regular_file_bytes",
+        "test_full_filesystem_match_count",
+        "gold_full_filesystem_match_count",
+        "git_all_object_scan_complete",
+        "git_all_object_count",
+        "git_all_object_bytes",
+        "test_all_git_object_match_count",
+        "gold_all_git_object_match_count",
     }
 )
 _BOOL_FIELDS = frozenset(
@@ -347,6 +547,8 @@ _BOOL_FIELDS = frozenset(
         "gold_patch_reverse_applies",
         "test_patch_id_in_history",
         "gold_patch_id_in_history",
+        "filesystem_scan_complete",
+        "git_all_object_scan_complete",
     }
 )
 
@@ -374,6 +576,12 @@ def _check_audit(value: object, target_count: int) -> dict[str, Any]:
 def _status(audit: dict[str, Any]) -> tuple[str, str]:
     if not audit["image_clean"] or not audit["row_base_present"]:
         return "blocked", "image_git_contract_invalid"
+    if not audit["filesystem_scan_complete"] or not audit["git_all_object_scan_complete"]:
+        return "blocked", "full_image_scan_incomplete"
+    if audit["test_full_filesystem_match_count"] or audit["test_all_git_object_match_count"]:
+        return "blocked", "test_added_content_reachable"
+    if audit["gold_full_filesystem_match_count"] or audit["gold_all_git_object_match_count"]:
+        return "blocked", "gold_added_content_reachable"
     if audit["test_unprovable_fragment_count"] or audit["gold_unprovable_fragment_count"]:
         return "blocked", "patch_content_history_unproven"
     if audit["added_current_count"] or audit["added_history_count"]:
@@ -393,7 +601,7 @@ def _status(audit: dict[str, Any]) -> tuple[str, str]:
         return "blocked", "gold_patch_reachable"
     if not audit["gold_patch_forward_applies"] or not audit["test_patch_forward_applies"]:
         return "blocked", "locked_patch_not_applicable_to_image"
-    return "passed", "no_locked_patch_content_reachable"
+    return "passed", "no_locked_patch_signatures_reachable"
 
 
 def _docker_audit(image_id: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -471,6 +679,8 @@ def _docker_audit(image_id: str, row: dict[str, Any]) -> dict[str, Any]:
 def _ensure_removed(container_name: str) -> None:
     # `--rm` handles normal exit; this exact-name cleanup also covers a Docker
     # client timeout without touching any other task's container.
+    if re.fullmatch(r"axrun-sweb-flask-secrecy-[0-9a-f]{16}", container_name) is None:
+        raise SecrecyError("image_audit_cleanup_name_invalid")
     try:
         subprocess.run(
             ["docker", "rm", "--force", container_name],
@@ -480,8 +690,26 @@ def _ensure_removed(container_name: str) -> None:
             check=False,
             env=oracle.safe_subprocess_env(),
         )
+        remaining = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                f"name=^/{container_name}$",
+                "--format",
+                "{{.Names}}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+            env=oracle.safe_subprocess_env(),
+        )
     except (OSError, subprocess.TimeoutExpired):
         raise SecrecyError("image_audit_cleanup_unconfirmed") from None
+    if remaining.returncode != 0 or remaining.stdout.strip():
+        raise SecrecyError("image_audit_cleanup_unconfirmed")
 
 
 def audit(row_path: Path) -> dict[str, Any]:
