@@ -145,6 +145,85 @@ def test_image_requires_locked_platform_digest_and_accepts_docker_hub_normalizat
         MODULE.check_local_image(MODULE.IMAGE)
 
 
+def test_image_contract_audit_is_readonly_bounded_and_reports_head_without_gating(
+    monkeypatch,
+) -> None:
+    image_head = "b" * 40
+    assert image_head != MODULE.BASE_COMMIT
+    payload = {
+        "git_head": image_head,
+        "git_dirty": True,
+        "base_commit_present": True,
+    }
+    calls = []
+    cleanup = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        kwargs["stdout"].write(MODULE.canonical_json(payload))
+        return subprocess.CompletedProcess(command, 0, None, None)
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    monkeypatch.setattr(MODULE, "_ensure_removed", cleanup.append)
+    assert MODULE.audit_official_image_contract() == payload
+    command, kwargs = calls[0]
+    assert command[:2] == ["docker", "run"]
+    assert command[command.index("--network") + 1] == "none"
+    assert command[command.index("--pull") + 1] == "never"
+    assert command[command.index("--platform") + 1] == "linux/amd64"
+    assert command[command.index("--cpus") + 1] == "2"
+    assert command[command.index("--memory") + 1] == "4g"
+    assert command[command.index("--pids-limit") + 1] == "256"
+    assert command[command.index("--log-driver") + 1] == "none"
+    assert "--read-only" in command
+    assert command[command.index("--cap-drop") + 1] == "ALL"
+    assert command[command.index("--security-opt") + 1] == "no-new-privileges"
+    assert "--mount" not in command
+    assert command[-3:-1] == [MODULE.IMAGE, "-c"]
+    assert "status --porcelain=v1 --untracked-files=all" in command[-1]
+    assert "GIT_OPTIONAL_LOCKS=0" in command[-1]
+    assert kwargs["timeout"] == MODULE.IMAGE_CONTRACT_TIMEOUT_SECONDS
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["preexec_fn"] == MODULE._limit_image_contract_output
+    assert "DEEPSEEK_API_KEY" not in kwargs["env"]
+    assert cleanup == [command[command.index("--name") + 1]]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"git_head": "not-a-commit", "git_dirty": False, "base_commit_present": True},
+        {"git_head": "a" * 40, "git_dirty": "false", "base_commit_present": True},
+        {"git_head": "a" * 40, "git_dirty": False, "base_commit_present": True, "files": []},
+    ],
+)
+def test_image_contract_audit_rejects_malformed_fields(monkeypatch, payload) -> None:
+    def fake_run(command, **kwargs):
+        kwargs["stdout"].write(MODULE.canonical_json(payload))
+        return subprocess.CompletedProcess(command, 0, None, None)
+
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        fake_run,
+    )
+    monkeypatch.setattr(MODULE, "_ensure_removed", lambda _name: None)
+    with pytest.raises(MODULE.OracleError, match="fields are invalid"):
+        MODULE.audit_official_image_contract()
+
+
+def test_image_contract_audit_rejects_nonzero_exit_without_exposing_stderr(monkeypatch) -> None:
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, None, b"private"),
+    )
+    monkeypatch.setattr(MODULE, "_ensure_removed", lambda _name: None)
+    with pytest.raises(MODULE.OracleError, match="contract audit failed") as exc:
+        MODULE.audit_official_image_contract()
+    assert "private" not in str(exc.value)
+
+
 def test_gold_grade_needs_every_expected_official_status() -> None:
     summary = MODULE.validate_official_grade(_row(), _grade())
     assert summary == {

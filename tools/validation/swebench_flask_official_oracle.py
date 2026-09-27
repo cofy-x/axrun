@@ -18,6 +18,7 @@ import resource
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -89,6 +90,8 @@ ROW_FIELDS = frozenset(
 ALLOWED_TEST_STATUSES = frozenset({"PASSED", "FAILED", "SKIPPED", "ERROR", "XFAIL"})
 APPLY_FAILURE_EXIT = 42
 MAX_LOG_BYTES = 16 * 1024 * 1024
+MAX_IMAGE_CONTRACT_OUTPUT_BYTES = 512
+IMAGE_CONTRACT_TIMEOUT_SECONDS = 60
 DOCKER_LIMITS = [
     "--cpus",
     "2",
@@ -122,6 +125,19 @@ source /opt/miniconda3/bin/activate
 conda activate testbed
 cd /testbed
 python -m pip install -e .
+"""
+IMAGE_CONTRACT_AUDIT = f"""set -euo pipefail
+export GIT_OPTIONAL_LOCKS=0
+head=$(git -C /testbed rev-parse --verify HEAD)
+status=$(git -C /testbed status --porcelain=v1 --untracked-files=all)
+dirty=false
+if [[ -n "$status" ]]; then dirty=true; fi
+base_present=false
+if git -C /testbed cat-file -e '{BASE_COMMIT}^{{commit}}' 2>/dev/null; then
+  base_present=true
+fi
+printf '{{"git_head":"%s","git_dirty":%s,"base_commit_present":%s}}\\n' \
+  "$head" "$dirty" "$base_present"
 """
 
 
@@ -544,6 +560,13 @@ def _limit_log() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
 
 
+def _limit_image_contract_output() -> None:
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE,
+        (MAX_IMAGE_CONTRACT_OUTPUT_BYTES, MAX_IMAGE_CONTRACT_OUTPUT_BYTES),
+    )
+
+
 def _wheelhouse_docker_args(wheelhouse: Path) -> list[str]:
     check_locked_wheelhouse(wheelhouse)
     if "," in str(wheelhouse):
@@ -556,6 +579,74 @@ def _wheelhouse_docker_args(wheelhouse: Path) -> list[str]:
         "--env",
         OFFLINE_PIP_ENV[1],
     ]
+
+
+def audit_official_image_contract() -> dict[str, str | bool]:
+    """Inspect only the locked image's /testbed Git identity, without listing files."""
+    name = f"axrun-sweb-flask-image-audit-{uuid.uuid4().hex[:16]}"
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--network",
+        "none",
+        "--pull",
+        "never",
+        "--platform",
+        "linux/amd64",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        "root",
+        "--workdir",
+        "/testbed",
+        *DOCKER_LIMITS,
+        "--entrypoint",
+        "/bin/bash",
+        IMAGE,
+        "-c",
+        IMAGE_CONTRACT_AUDIT,
+    ]
+    try:
+        with tempfile.TemporaryFile() as output:
+            result = subprocess.run(
+                command,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=IMAGE_CONTRACT_TIMEOUT_SECONDS,
+                env=safe_subprocess_env(),
+                preexec_fn=_limit_image_contract_output,
+            )
+            output.seek(0)
+            payload = output.read(MAX_IMAGE_CONTRACT_OUTPUT_BYTES + 1)
+    except subprocess.TimeoutExpired:
+        raise OracleError("official task image contract audit timed out") from None
+    finally:
+        _ensure_removed(name)
+    if result.returncode != 0:
+        raise OracleError("official task image contract audit failed")
+    if len(payload) > MAX_IMAGE_CONTRACT_OUTPUT_BYTES:
+        raise OracleError("official task image contract audit output exceeded limit")
+    try:
+        contract = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OracleError("official task image contract audit output is malformed") from exc
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"git_head", "git_dirty", "base_commit_present"}
+        or not isinstance(contract["git_head"], str)
+        or re.fullmatch(r"[0-9a-f]{40}", contract["git_head"]) is None
+        or not isinstance(contract["git_dirty"], bool)
+        or not isinstance(contract["base_commit_present"], bool)
+    ):
+        raise OracleError("official task image contract audit fields are invalid")
+    return contract
 
 
 def check_offline_install(
@@ -927,6 +1018,8 @@ def main() -> int:
             ),
             "cases": {},
         }
+        receipt["image_contract"] = audit_official_image_contract()
+        _write_receipt(output_dir / "receipt.json", receipt)
         receipt["offline_install"] = check_offline_install(
             output_dir, args.timeout_seconds, wheelhouse
         )
