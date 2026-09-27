@@ -18,7 +18,9 @@ possible unknown hidden artifact.
 - Axrun execution commit `bd2f6ed72b3032ae08be98121c83666da69a22d8` used the released
   `axern-sdk==0.12.0` PyPI wheel, locked at SHA-256
   `3adab79d86bd8dec8049f2ace66852ed76b27f6dda705876488b35302e4dd100`.
-  No Axern source package or private Proto was used.
+  The fixed-count post-change regression used Axrun commit
+  `7a852d91fa654c5ba4792b87b2c22694cc6a3316`. No Axern source package
+  or private Proto was used.
 - Locked official source `linux/amd64` platform manifest:
   `docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:eaf597005c159361cb8ee26018fb3741b320f331065f0c95726d83ccf2f1fba4`.
   Reloading it into the v0.12.0 node returned the immutable runtime ref
@@ -132,6 +134,42 @@ was `LINUX_VERIFY_HOST=wayne-hk-dev make linux-run REPO=axrun
 PROFILE=swebench-flask-claude-axern` after the v0.12.0 parity profile on the
 same committed Axrun candidate. The closed private configuration and full
 per-test logs remain Git-ignored on the validation host.
+
+## Final-code regression
+
+After adding explicit stage-zero record verification and fail-closed verifier
+identity checks, one preplanned new episode ran on commit `7a852d9`. It was
+not a retry of the first successful candidate and used new Environments,
+Runs, Allocations, and a different candidate patch. Episode
+`flask-5014-claude-5c61795e72f44f9c8c11a01243009fb2` qualified the
+readonly mount and separate verifier, then completed inference
+`run-a9afc061-092f-41bd-82ef-d4806efdd7f3` /
+`alloc-41fefbab-b052-4123-a71f-a34255ca2303` and fresh verification
+`run-0c252ef7-977d-4e98-9ebd-a9217324c837` /
+`alloc-28efffd3-1b4d-404e-adab-e7bd9e302d42`. It used inference and
+verification Environments `env-17efceda-e61b-4828-afb5-13628e401f79` and
+`env-78c84507-cf27-491c-9fba-280c1dab0e94` respectively.
+
+| Regression sealed output | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `candidate.patch` | 1,840 | `6836b6acf06eafaa8d22496d9450d491df7f04935745b7c320e04d99d9f0cf01` |
+| `trajectory.jsonl` | 58,309 | `a036767d5c5216f7159f6ca7f22eb014fee57b314c2ef0bd759a1e2d23bbd4b9` |
+| `harness.log` | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `usage.json` | 146 | `77340e37c7bbf57cd6c80d8662c5b40f1242dbb43903c4f0396fb75855eeb78e` |
+
+The regression CandidateBundle digest was
+`87236d0eb1c3cc49cf88ce219a3e0d52dbc9e1526f7e3a7460fb8fca7acb37a2`,
+TrajectoryBundle digest
+`c792b75b6b7034f6529b40b8f1fdd612fa7104c1d1d25849c12f34255a5ea0fe`,
+and VerificationResult digest
+`61fa18aa869df27789cefffd10ea1b0039cd2acb9db2fd453c224f36da59fba9`.
+The tool's independent `verify_record` pass reported
+`record_integrity_verified=true`; the new verifier returned 60/60, score 1.0,
+`passed`. The ModelProxy preflight was upstream HTTP 200, 20 safe model
+request summaries were recorded, Tunnel was revoked, ModelProxy stopped,
+the caller client closed, both Environments were deleted and confirmed
+absent, and the private credential scan again found zero matches. The two
+candidate patches were not compared or selected by score.
 
 ## Boundary and follow-up
 

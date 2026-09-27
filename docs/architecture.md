@@ -156,6 +156,13 @@ manifest digest. Verification uploads only the candidate patch, evaluation scrip
 grader into a fresh deny-all Allocation. Expanding to another instance requires an explicit parser
 and offline-image qualification rather than shape-based acceptance.
 
+A separate, still unregistered `pallets__flask-5014` stage-zero resolver fixes its
+own official row and evaluator assets. Its released Axern v0.12.0 acceptance first
+gates the inference image against locked hidden-test and reference-patch
+signatures, then proves deterministic oracle parity and real Claude candidate
+verification across distinct Environments. Its explicit validation selection
+does not broaden the curated catalog or replace the pre-inference image audit.
+
 The task image and harness image have separate ownership. An Environment is created from the task image. Claude inference additionally attaches the versioned Claude Code rootfs read-only at `/__claude_code`; static inference and verification do not. The task image and Claude rootfs each publish amd64 and arm64 variants, and a Run must select matching platform digests. Benchmark and production acceptance are canonical on amd64; arm64 exists for local source-cluster validation and does not change episode semantics. Both Claude variants expose the same mount ABI. This keeps benchmark state in the task image and reusable harness tooling in the mount image.
 
 Axrun-owned control code does not run under the repository's benchmark interpreter. The closed
