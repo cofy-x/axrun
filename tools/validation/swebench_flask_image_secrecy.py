@@ -666,6 +666,8 @@ def _docker_audit(image_id: str, row: dict[str, Any]) -> dict[str, Any]:
         "0:0",
         "--cap-drop",
         "ALL",
+        "--cap-add",
+        "DAC_READ_SEARCH",
         "--security-opt",
         "no-new-privileges",
         "--cpus",

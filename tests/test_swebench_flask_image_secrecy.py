@@ -178,6 +178,8 @@ def test_docker_inspection_is_pinned_readonly_offline_and_uses_stdin(
         assert required in command
     assert "--mount" not in command
     assert "--volume" not in command
+    assert command[command.index("--cap-drop") + 1] == "ALL"
+    assert command[command.index("--cap-add") + 1] == "DAC_READ_SEARCH"
     assert "sha256:" + "a" * 64 in command
     assert "a_private_test" not in " ".join(command)
     assert b"a_private_test" in payload
