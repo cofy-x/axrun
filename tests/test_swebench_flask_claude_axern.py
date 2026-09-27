@@ -125,6 +125,8 @@ def test_image_safety_receipt_is_sha_locked_and_recomputed(tmp_path: Path) -> No
         image_head=claude.image_secrecy.IMAGE_HEAD,
         image_clean=True,
         row_base_present=True,
+        filesystem_scan_complete=True,
+        git_all_object_scan_complete=True,
         test_patch_forward_applies=True,
         gold_patch_forward_applies=True,
         test_target_count=1,
@@ -140,7 +142,7 @@ def test_image_safety_receipt_is_sha_locked_and_recomputed(tmp_path: Path) -> No
         "test_patch_sha256": hashlib.sha256(row["test_patch"].encode()).hexdigest(),
         "gold_patch_sha256": hashlib.sha256(row["patch"].encode()).hexdigest(),
         "status": "passed",
-        "reason_code": "no_locked_patch_content_reachable",
+        "reason_code": "no_locked_patch_signatures_reachable",
         **details,
     }
     path = _write(tmp_path / "safety.json", receipt)
@@ -360,6 +362,46 @@ def test_credential_scan_and_environment_cleanup(tmp_path: Path) -> None:
         == "deleted_and_absent"
     )
     assert deleted == ["env-i", "env-v"]
+
+
+def test_sealed_outputs_reject_ambiguous_manifest_and_changed_digest(tmp_path: Path) -> None:
+    payload = b"sealed candidate"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    def entry(path: str, output_id: str, sha256: str = digest) -> SimpleNamespace:
+        return SimpleNamespace(
+            path=path,
+            output_id=output_id,
+            status="available",
+            size_bytes=len(payload),
+            sha256=sha256,
+        )
+
+    class Client:
+        def __init__(self, manifest: list[SimpleNamespace], verified: SimpleNamespace) -> None:
+            self.manifest = manifest
+            self.verified = verified
+
+        def get_sealed_output_manifest(self, _run_id: str) -> list[SimpleNamespace]:
+            return self.manifest
+
+        def download_sealed_output(
+            self, _run_id: str, _output_id: str, stream: Any
+        ) -> SimpleNamespace:
+            stream.write(payload)
+            return self.verified
+
+    first = entry("/outputs/candidate.patch", "out-1")
+    with pytest.raises(claude.ValidationError, match="manifest_ambiguous"):
+        claude._sealed_outputs(
+            cast(Any, Client([first, entry(first.path, "out-2")], first)), "run-1", tmp_path
+        )
+    with pytest.raises(claude.ValidationError, match="integrity_mismatch"):
+        claude._sealed_outputs(
+            cast(Any, Client([entry(first.path, "out-1", "0" * 64)], first)),
+            "run-1",
+            tmp_path,
+        )
 
 
 def test_tunnel_cleanup_evidence_uses_real_sdk_client_without_storing_token(

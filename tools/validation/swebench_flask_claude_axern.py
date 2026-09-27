@@ -285,7 +285,7 @@ def _image_safety_gate(
         or type(receipt["gold_target_count"]) is not int
         or receipt["gold_target_count"] <= 0
         or receipt["status"] != "passed"
-        or receipt["reason_code"] != "no_locked_patch_content_reachable"
+        or receipt["reason_code"] != "no_locked_patch_signatures_reachable"
         or recomputed_status != receipt["status"]
         or recomputed_reason != receipt["reason_code"]
     ):
@@ -509,6 +509,10 @@ def _assert_safe_plan(episode: Any, selection: AdapterSelection, credential: str
 
 def _sealed_outputs(client: AxernClient, run_id: str, root: Path) -> dict[str, dict[str, Any]]:
     manifest = client.get_sealed_output_manifest(run_id)
+    if len({item.path for item in manifest}) != len(manifest) or len(
+        {item.output_id for item in manifest}
+    ) != len(manifest):
+        raise ValidationError("claude_sealed_output_manifest_ambiguous")
     by_path = {item.path: item for item in manifest}
     destination = root / "sealed"
     destination.mkdir(mode=0o700)
@@ -525,6 +529,10 @@ def _sealed_outputs(client: AxernClient, run_id: str, root: Path) -> dict[str, d
         if (
             len(data) != int(item.size_bytes)
             or len(data) != int(verified.size_bytes)
+            or verified.output_id != item.output_id
+            or verified.path != item.path
+            or item.sha256 != verified.sha256
+            or digest != item.sha256
             or digest != verified.sha256
         ):
             raise ValidationError("claude_sealed_output_integrity_mismatch")
