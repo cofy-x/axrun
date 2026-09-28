@@ -248,7 +248,19 @@ class AxernBackend:
         artifact_dir: Path,
         download_outputs: bool = True,
     ) -> StageResult | None:
+        if plan.environment_id != execution.environment_id:
+            raise InfrastructureError("recovery plan differs from the persisted Environment")
         run = self.client.get_run(execution.run_id)
+        # Public Run facts are authoritative. A local plan must not relabel a
+        # foreign Run, and a saved Allocation must never change on recovery.
+        allocation_id = getattr(run, "allocation_id", None)
+        if (
+            getattr(run, "id", None) != execution.run_id
+            or getattr(run, "environment_id", None) != execution.environment_id
+            or not isinstance(allocation_id, str)
+            or (execution.allocation_id and allocation_id != execution.allocation_id)
+        ):
+            raise InfrastructureError("recovered Run does not match the persisted Axern execution")
         if _status_name(run) not in {
             "RUN_STATUS_SUCCEEDED",
             "RUN_STATUS_FAILED",
@@ -265,7 +277,7 @@ class AxernBackend:
             run.id, artifact_dir, follow=False, timeout=30.0
         )
         return StageResult(
-            execution=ExecutionRef(plan.environment_id, run.id, run.allocation_id),
+            execution=ExecutionRef(run.environment_id, run.id, allocation_id),
             exit_code=exit_code,
             diagnostic_code=_diagnostic_name(run),
             artifacts=artifacts,

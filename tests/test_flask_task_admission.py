@@ -359,6 +359,58 @@ def test_runner_run_wait_recover_and_report_require_existing_qualification(
     assert backend.executed == backend.recovered == backend.waited == []
 
 
+@pytest.mark.parametrize("operation", ["run", "recover"])
+def test_caller_inference_adapter_cannot_execute_outside_qualified_flask_environment(
+    episode: ResolvedEpisode,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    selection = resolve_adapters(episode)
+    store = EpisodeStore(tmp_path / "state")
+    qualify_episode(episode, client=_client(), backend=_Backend(), store=store)
+    require_admission(store, episode)
+
+    class WrongEnvironmentInference:
+        def plan(self, episode, capture):
+            return replace(
+                selection.inference.plan(episode, capture), environment_id="env-unadmitted"
+            )
+
+    class TripwireBackend(_Backend):
+        def execute(self, plan, **_kwargs):
+            self.executed.append(plan)
+            raise AssertionError("unadmitted Environment must not execute a Run")
+
+        def recover(self, execution, plan, **_kwargs):
+            self.recovered.append(execution)
+            raise AssertionError("unadmitted Environment must not recover a Run")
+
+    if operation == "recover":
+        record = store.load(episode.episode_id)
+        assert record is not None
+        record.phase = EpisodePhase.INFERENCE_RUNNING
+        record.inference = ExecutionRef("env-inference", "run-existing", "alloc-existing")
+        store.save(record)
+    backend = TripwireBackend()
+    runner = EpisodeRunner(backend=backend, store=store)
+    with pytest.raises(ContractError, match=r"[Ee]nvironment"):
+        if operation == "run":
+            runner.run(
+                episode,
+                inference=WrongEnvironmentInference(),
+                candidate=selection.candidate,
+                verifier=selection.verifier,
+            )
+        else:
+            runner.recover(
+                episode.episode_id,
+                inference=WrongEnvironmentInference(),
+                candidate=selection.candidate,
+                verifier=selection.verifier,
+            )
+    assert backend.executed == backend.recovered == backend.waited == []
+
+
 def test_qualified_record_loads_rechecks_and_cannot_be_restored_without_admission(
     episode: ResolvedEpisode,
     tmp_path: Path,

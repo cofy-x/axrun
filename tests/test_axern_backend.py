@@ -749,7 +749,11 @@ def test_recover_redownloads_interrupted_sealed_output_from_original_run(
         def get_run(self, run_id):
             assert run_id == "persisted-run"
             return SimpleNamespace(
-                id=run_id, allocation_id="persisted-allocation", exit_code=0, diagnostic_code=""
+                id=run_id,
+                environment_id="env",
+                allocation_id="persisted-allocation",
+                exit_code=0,
+                diagnostic_code="",
             )
 
         def get_sealed_output_manifest(self, run_id):
@@ -785,6 +789,114 @@ def test_recover_redownloads_interrupted_sealed_output_from_original_run(
     assert Path(artifact.path).read_bytes() == b"sealed"
     assert (artifact.size_bytes, artifact.sha256) == (sealed.size_bytes, sealed.sha256)
     assert {path.name for path in tmp_path.iterdir()} == {"00-result"}
+
+
+def test_recovery_rejects_plan_environment_before_querying_run(tmp_path: Path) -> None:
+    class Client:
+        def get_run(self, _run_id):
+            pytest.fail("conflicting local recovery identities must not query the Run")
+
+    with pytest.raises(InfrastructureError, match="plan differs from the persisted Environment"):
+        AxernBackend(Client()).recover(
+            ExecutionRef("env-original", "run-original", "alloc-original"),
+            StagePlan("env-other", ("true",), "/workspace", ()),
+            artifact_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "persisted_allocation_id"),
+    [
+        ("id", "private-foreign-run", "alloc-original"),
+        ("environment_id", "private-foreign-environment", "alloc-original"),
+        ("environment_id", "private-foreign-environment", ""),
+        ("environment_id", None, ""),
+        ("allocation_id", "private-foreign-allocation", "alloc-original"),
+        ("allocation_id", "", "alloc-original"),
+        ("allocation_id", None, ""),
+    ],
+)
+@pytest.mark.parametrize("status", ["RUN_STATUS_RUNNING", "RUN_STATUS_SUCCEEDED"])
+def test_recovery_rejects_foreign_public_execution_before_dataplane(
+    tmp_path: Path,
+    monkeypatch,
+    field: str,
+    value: object,
+    persisted_allocation_id: str,
+    status: str,
+) -> None:
+    run = SimpleNamespace(
+        id="run-original",
+        environment_id="env-original",
+        allocation_id="alloc-original",
+        exit_code=0,
+        diagnostic_code="",
+    )
+    setattr(run, field, value)
+
+    class Client:
+        def get_run(self, run_id):
+            assert run_id == "run-original"
+            return run
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(backend_module, "_status_name", lambda _run: status)
+    monkeypatch.setattr(
+        backend,
+        "_download_outputs",
+        lambda *_args, **_kwargs: pytest.fail("foreign execution must not download outputs"),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_capture_output",
+        lambda *_args, **_kwargs: pytest.fail("foreign execution must not read logs"),
+    )
+    with pytest.raises(InfrastructureError, match="persisted Axern execution") as raised:
+        backend.recover(
+            ExecutionRef("env-original", "run-original", persisted_allocation_id),
+            StagePlan("env-original", ("true",), "/workspace", ()),
+            artifact_dir=tmp_path,
+        )
+    assert "private" not in str(raised.value)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("allocation_bound", [False, True])
+def test_recovery_preserves_original_run_and_accepts_new_allocation_binding(
+    tmp_path: Path, monkeypatch, allocation_bound: bool
+) -> None:
+    run = SimpleNamespace(
+        id="run-original",
+        environment_id="env-original",
+        allocation_id="alloc-original" if allocation_bound else "",
+        exit_code=0,
+        diagnostic_code="",
+    )
+
+    class Client:
+        def get_run(self, run_id):
+            assert run_id == "run-original"
+            return run
+
+    backend = AxernBackend(Client())
+    monkeypatch.setattr(
+        backend_module,
+        "_status_name",
+        lambda _run: "RUN_STATUS_SUCCEEDED" if allocation_bound else "RUN_STATUS_PENDING",
+    )
+    monkeypatch.setattr(
+        backend, "_capture_output", lambda *_args, **_kwargs: (tmp_path / "out", tmp_path / "err")
+    )
+    result = backend.recover(
+        ExecutionRef("env-original", "run-original"),
+        StagePlan("env-original", ("true",), "/workspace", ()),
+        artifact_dir=tmp_path,
+    )
+    if allocation_bound:
+        assert result is not None
+        assert result.execution == ExecutionRef("env-original", "run-original", "alloc-original")
+    else:
+        assert result is None
 
 
 def test_transport_failure_after_launch_does_not_implicitly_cancel(
@@ -981,6 +1093,7 @@ def test_unreleased_cancel_failure_has_safe_diagnostic(tmp_path: Path, monkeypat
 def test_recovery_normalizes_unset_exit_code_on_failed_run(tmp_path: Path, monkeypatch) -> None:
     failed = SimpleNamespace(
         id="run-failed",
+        environment_id="env",
         allocation_id="alloc-failed",
         exit_code=0,
         diagnostic_code="WORKLOAD_DIAGNOSTIC_CODE_RUNTIME_START_ERROR",

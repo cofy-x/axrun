@@ -30,6 +30,7 @@ from axrun.models import (
     ExecutionRef,
     ResolvedEpisode,
     StageNetworkPolicy,
+    StagePlan,
     StageResult,
     VerificationResult,
 )
@@ -90,8 +91,7 @@ class EpisodeRunner:
             self.store.save(record)
         try:
             plan = inference.plan(episode, candidate.capture_plan(episode))
-            if plan.network_policy != episode.inference_network:
-                raise ContractError("inference plan conflicts with resolved episode network policy")
+            self._require_plan(episode, EpisodePhase.INFERENCE_RUNNING, plan)
             destination = self.store.root / "artifacts" / episode.episode_id / "inference"
             stage = self.backend.execute(
                 plan,
@@ -139,8 +139,7 @@ class EpisodeRunner:
             raise RecoveryRequiredError(f"{phase.value} Run identity was not persisted")
         if phase == EpisodePhase.INFERENCE_RUNNING:
             plan = inference.plan(episode, candidate.capture_plan(episode))
-            if plan.network_policy != episode.inference_network:
-                raise ContractError("inference plan conflicts with resolved episode network policy")
+            self._require_plan(episode, phase, plan)
             destination = self.store.root / "artifacts" / episode_id / "inference"
         else:
             try:
@@ -151,9 +150,9 @@ class EpisodeRunner:
             if bool(getattr(verifier, "multi_run", False)):
                 return self._run_multi_verification(episode, bundle, verifier)
             plan = verifier.plan(episode, bundle)
-            if plan.network_policy != episode.verification_network:
-                raise ContractError("verifier plan conflicts with resolved episode network policy")
+            self._require_plan(episode, phase, plan)
             destination = self.store.root / "artifacts" / episode_id / "verification"
+        self._require_execution(record, phase, execution)
         stage = self.backend.recover(execution, plan, artifact_dir=destination)
         if stage is None:
             if phase == EpisodePhase.INFERENCE_RUNNING and bool(
@@ -189,6 +188,7 @@ class EpisodeRunner:
             else None
         )
         if execution is not None:
+            self._require_execution(record, record.phase, execution)
             self.backend.wait(execution, timeout=timeout)
         return self.recover(
             episode_id,
@@ -243,10 +243,12 @@ class EpisodeRunner:
             if record.phase != expected_phase:
                 cancel = record.phase == EpisodePhase.CANCELLED
             elif expected_phase == EpisodePhase.INFERENCE_RUNNING:
+                self._require_environment(episode_id, expected_phase, execution)
                 record.inference = _merge_execution(record.inference, execution)
                 self.store.save(record)
                 return
             else:
+                self._require_environment(episode_id, expected_phase, execution)
                 if record.inference is not None and execution.run_id == record.inference.run_id:
                     raise InfrastructureError("verification must use a fresh Axern Run")
                 record.verification = _merge_execution(record.verification, execution)
@@ -264,6 +266,12 @@ class EpisodeRunner:
         trajectory_adapter: TrajectoryAdapter | None,
         result: StageResult,
     ) -> CandidateBundle:
+        with self.store.lock(episode.episode_id):
+            self._require_execution(
+                self._required_record(episode.episode_id),
+                EpisodePhase.INFERENCE_RUNNING,
+                result.execution,
+            )
         if bool(getattr(adapter, "requires_trajectory", False)) and trajectory_adapter is None:
             raise ContractError("inference adapter requires a canonical trajectory adapter")
         if result.exit_code != 0:
@@ -327,8 +335,7 @@ class EpisodeRunner:
             if bool(getattr(adapter, "multi_run", False)):
                 return self._run_multi_verification(episode, candidate, adapter)
             plan = adapter.plan(episode, candidate)
-            if plan.network_policy != episode.verification_network:
-                raise ContractError("verifier plan conflicts with resolved episode network policy")
+            self._require_plan(episode, EpisodePhase.VERIFICATION_RUNNING, plan)
             destination = self.store.root / "artifacts" / episode.episode_id / "verification"
             stage = self.backend.execute(
                 plan,
@@ -417,6 +424,12 @@ class EpisodeRunner:
     def _finish_verification(
         self, episode_id: str, stage: StageResult, adapter: VerifierAdapter
     ) -> VerificationResult:
+        with self.store.lock(episode_id):
+            self._require_execution(
+                self._required_record(episode_id),
+                EpisodePhase.VERIFICATION_RUNNING,
+                stage.execution,
+            )
         try:
             verification = adapter.parse_result(stage)
         except Exception as exc:
@@ -487,9 +500,8 @@ class EpisodeRunner:
                 record.message = f"{type(exc).__name__}: {exc}"
             self.store.save(record)
 
-    @staticmethod
     def _require_execution(
-        record: EpisodeRecord, phase: EpisodePhase, execution: ExecutionRef
+        self, record: EpisodeRecord, phase: EpisodePhase, execution: ExecutionRef
     ) -> None:
         if record.phase != phase:
             raise RecoveryRequiredError(f"episode moved to {record.phase.value}")
@@ -502,6 +514,32 @@ class EpisodeRunner:
             or (persisted.allocation_id and persisted.allocation_id != execution.allocation_id)
         ):
             raise InfrastructureError("stage result does not match the persisted Axern execution")
+        self._require_environment(record.episode_id, phase, execution)
+
+    def _require_environment(
+        self, episode_id: str, phase: EpisodePhase, execution: ExecutionRef
+    ) -> None:
+        episode = self.store.load_spec(episode_id)
+        environment = (
+            episode.inference_environment
+            if phase == EpisodePhase.INFERENCE_RUNNING
+            else episode.verification_environment
+        )
+        if execution.environment_id != environment.environment_id:
+            raise InfrastructureError("stage Axern execution conflicts with resolved Environment")
+
+    @staticmethod
+    def _require_plan(episode: ResolvedEpisode, phase: EpisodePhase, plan: StagePlan) -> None:
+        inference = phase == EpisodePhase.INFERENCE_RUNNING
+        environment = (
+            episode.inference_environment if inference else episode.verification_environment
+        )
+        stage = "inference" if inference else "verifier"
+        if plan.environment_id != environment.environment_id:
+            raise ContractError(f"{stage} plan conflicts with resolved Environment")
+        network = episode.inference_network if inference else episode.verification_network
+        if plan.network_policy != network:
+            raise ContractError(f"{stage} plan conflicts with resolved episode network policy")
 
     def _load_candidate(self, record: EpisodeRecord) -> CandidateBundle:
         candidate = load_candidate(Path(record.candidate_manifest))
@@ -542,8 +580,12 @@ class EpisodeRunner:
 
 
 def _merge_execution(current: ExecutionRef | None, update: ExecutionRef) -> ExecutionRef:
-    if current is not None and current.run_id != update.run_id:
-        raise InfrastructureError("Axern Run identity changed during stage execution")
+    if current is not None and (
+        current.run_id != update.run_id
+        or current.environment_id != update.environment_id
+        or (current.allocation_id and current.allocation_id != update.allocation_id)
+    ):
+        raise InfrastructureError("Axern execution identity changed during stage execution")
     return update
 
 
