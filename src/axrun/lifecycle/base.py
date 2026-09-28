@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, cast
 
+from axrun.errors import DiagnosedInfrastructureError
 from axrun.models import ExecutionRef
 
 
@@ -33,20 +34,28 @@ class CompositePreStartLifecycle:
             raise RuntimeError("composite lifecycle has already started")
         try:
             for lifecycle in self._lifecycles:
-                lifecycle.start(execution, allocation)
+                # Start may create resources before it fails. Keep that child
+                # reachable for cleanup and for retrying an incomplete close.
                 self._started.append(lifecycle)
+                lifecycle.start(execution, allocation)
         except BaseException:
             self.close()
             raise
 
     def close(self) -> None:
-        started, self._started = self._started, []
+        pending: list[PreStartLifecycle] = []
         error: BaseException | None = None
-        for lifecycle in reversed(started):
+        for lifecycle in reversed(self._started):
             try:
                 lifecycle.close()
             except BaseException as exc:
+                pending.append(lifecycle)
                 if error is None:
                     error = exc
+        self._started = list(reversed(pending))
         if error is not None:
-            raise error
+            if isinstance(error, DiagnosedInfrastructureError) or not isinstance(error, Exception):
+                raise error from None
+            raise DiagnosedInfrastructureError(
+                "lifecycle_cleanup_failed", {"reason_code": "component_cleanup_failed"}
+            ) from None

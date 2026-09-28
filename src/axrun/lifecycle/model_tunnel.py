@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from typing import Any
 
 from axrun.errors import DiagnosedInfrastructureError, InfrastructureError
@@ -51,7 +50,7 @@ class ModelTunnelLifecycle:
     def start(self, execution: ExecutionRef, allocation: Any) -> None:
         if not execution.allocation_id:
             raise InfrastructureError("Allocation identity must be persisted before tunnel setup")
-        if self._connector is not None:
+        if self._connector is not None or self._session_id:
             raise InfrastructureError("tunnel lifecycle has already started")
         self._proxy.start()
         try:
@@ -87,18 +86,33 @@ class ModelTunnelLifecycle:
             raise
 
     def close(self) -> None:
-        session_id, connector = self._session_id, self._connector
-        self._session_id = ""
-        self._connector = None
-        if session_id:
-            with suppress(Exception):
+        # Retain only failed resources in memory so a later explicit close can
+        # finish cleanup. Never persist session credentials or error payloads.
+        failures: list[str] = []
+        if self._session_id:
+            try:
                 self._client.revoke_tunnel_session(
-                    session_id, reason="axrun stage finished", timeout=10.0
+                    self._session_id, reason="axrun stage finished", timeout=10.0
                 )
-        if connector is not None:
-            with suppress(Exception):
-                connector.stop(timeout=5.0)
-        self._proxy.stop()
+            except Exception:
+                failures.append("tunnel_revoke_failed")
+            else:
+                self._session_id = ""
+        if self._connector is not None:
+            try:
+                self._connector.stop(timeout=5.0)
+            except Exception:
+                failures.append("connector_stop_failed")
+            else:
+                self._connector = None
+        try:
+            self._proxy.stop()
+        except Exception:
+            failures.append("model_proxy_stop_failed")
+        if failures:
+            raise DiagnosedInfrastructureError(
+                "model_tunnel_cleanup_failed", {"reason_code": failures[0]}
+            ) from None
 
     def _wait_for_preflight(self, allocation: Any, session: Any) -> None:
         bound_addr = str(session.bound_addr or f"127.0.0.1:{session.remote_port}")
