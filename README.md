@@ -103,9 +103,9 @@ episode state; it does not enable other SWE-bench instances or a suite.
 | Status | Flask scope |
 | --- | --- |
 | Implemented | Locked resolver, runtime image admission, qualification, execution/recovery, sealed outputs, and record/report verification |
-| Accepted | Historical deterministic oracle parity and two real Claude episodes on released Axern v0.12.0 through the dedicated validation tools; see [the acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md) |
+| Accepted | Deterministic gold/known-bad/empty oracle parity and a new real Claude episode through the normal CLI on released Axern v0.12.0; see [CLI admission acceptance](docs/validation/2026-09-28-flask-cli-admission.md). The [earlier dedicated-tool acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md) remains historical evidence |
 | Registered | Normal CLI uses the same reviewed catalog and mandatory admission checks, without caller-built adapter selection |
-| Not implied | A new CLI deployment acceptance, generic SWE-bench support, suite support, or leaderboard submission eligibility |
+| Not implied | Generic SWE-bench support, suite support, full official environment equivalence, or leaderboard submission eligibility |
 
 The model-free admission command scans the **actual imported runtime image** in a
 separate fresh SDK Run, not a source image assumed to be equivalent. The receipt

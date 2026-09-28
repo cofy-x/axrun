@@ -155,7 +155,7 @@ effect of adding an adapter.
 
 | Family | Candidate boundary | Current status |
 | --- | --- | --- |
-| SWE-bench-style repository repair | `git-patch@1` | Synthetic and closed Django paths are implemented; locked Flask is registered with mandatory runtime admission and has historical dedicated-tool acceptance, not general suite support |
+| SWE-bench-style repository repair | `git-patch@1` | Synthetic and closed Django paths are implemented; locked Flask is registered with mandatory runtime admission and has native amd64 normal-CLI deterministic/Claude acceptance, not general suite support |
 | Greenfield repository creation | `workspace-archive@1` | Static and real Claude Code verticals are implemented and accepted on the local arm64 development path |
 | ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a rootfs result | The 1.2.4 calculator fixture and closed official tty-clock and seqtk multi-Run verifiers are implemented; this is not general suite support |
 | Terminal-Bench 2.1 official tasks | Shared verifier, incompatible with accepted candidate isolation | Unsupported; no inference-rootfs candidate or approximate workspace-archive substitution |
@@ -205,8 +205,8 @@ Implemented now:
 - a separately locked official seqtk instance with deterministic parity and real Claude Code
   inference-to-fresh-verification acceptance on Axern v0.11.3;
 - a locked registered Flask task/verifier pair with model-free actual-runtime image
-  admission, normal CLI resolution/recovery/reporting and historical dedicated-tool
-  deterministic/Claude acceptance on Axern v0.12.0;
+  admission and normal CLI resolution/recovery/reporting, accepted with deterministic
+  parity and a new Claude candidate on Axern v0.12.0;
 - static candidate and Claude Code harness paths;
 - canonical trajectory, per-inference-stage ModelProxy/Tunnel lifecycle, fresh offline
   verification, recovery, safe progress, and record verification.

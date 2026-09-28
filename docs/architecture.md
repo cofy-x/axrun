@@ -58,6 +58,12 @@ CLI paths cannot bypass it by omitting qualification or restoring the older
 private stage-zero records. Cancellation is a rescue operation and can use the
 original public Run identity even when admission evidence is damaged.
 
+The locked Flask normal-CLI path has [native amd64 acceptance](validation/2026-09-28-flask-cli-admission.md):
+one gold, known-bad and empty control each, then one new Claude candidate. This
+is single-instance acceptance, not general SWE-bench support or leaderboard
+eligibility. Admission uses scheduling requests and a finite scanner deadline;
+it does not claim deployment-specific cgroup hard-limit enforcement.
+
 ## Output and isolation boundary
 
 Inference declares an adapter-specific bounded output set. Candidate production is a separate
@@ -110,7 +116,7 @@ trajectory.
 
 ## Dataset boundary
 
-Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces canonical `ResolvedEpisode v1` with a stable seed digest. The contract contains `TaskSpec`, stage-specific `EnvironmentBinding`, `HarnessSpec`, `CandidateSpec`, and `VerifierSpec`. Git commits belong only to Git task configuration; they are not core episode or CandidateBundle fields. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields.
+Dataset-native rows never enter the runner or execution backend. An explicitly selected, versioned resolver validates one row once and produces a canonical `ResolvedEpisode` with a stable seed digest. The contract contains `TaskSpec`, stage-specific `EnvironmentBinding`, `HarnessSpec`, `CandidateSpec`, and `VerifierSpec`. Git commits belong only to Git task configuration; they are not core episode or CandidateBundle fields. Adapter-owned configuration may contain fixed local artifact references needed to create StagePlans, while core contracts remain free of benchmark-specific fields.
 
 The v1 episode's network semantics remain implicit deny-all. V2 requires explicit, closed `inference_network_policy` and `verification_network_policy` fields; existing v1 serialized specs and digests are unchanged. A harness may realize but not override the resolved inference policy; the runner rejects conflicting single-Run stage plans before creating an Axern Run. The backend maps `deny_all` to the released SDK's strict policy and maps `unrestricted` to the SDK's documented omitted-policy behavior. Unknown values fail closed. Qualification stays deny-all; benchmark-owned multi-Run verifiers must explicitly enforce the resolved verification policy for each internal Run rather than treating that policy as a generic scheduler feature.
 
