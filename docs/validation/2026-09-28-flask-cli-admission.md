@@ -293,3 +293,10 @@ clean up owned Environments. Do not rely on validation tools, historical caller
 state, source-checkout imports, or implicit environment configuration. That
 separate acceptance requires no model credential and does not add a benchmark,
 harness or scheduler.
+
+The subsequent [independent-wheel cold-start attempt](2026-09-28-flask-wheel-cold-start.md)
+passed clean installation but remains unaccepted: its new runtime admission Run
+was infrastructure-failed by a preactivation capability fail-stop, tracked in
+[Axern #190](https://github.com/cofy-x/axern/issues/190). That failed Run's sealed
+scan bytes and successful tiny SDK controls do not substitute for admission or
+complete the pending five-Run CLI flow.
