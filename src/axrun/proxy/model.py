@@ -171,14 +171,18 @@ class ModelProxy:
         server, thread = self._server, self._thread
         self._credential = ""
         if server is not None:
-            server.shutdown()
+            # BaseServer.shutdown waits for serve_forever. If thread creation
+            # or start failed, that loop never ran and shutdown would deadlock.
+            if thread is not None and thread.ident is not None:
+                server.shutdown()
             server.server_close()
             if self._server is server:
                 self._server = None
         if thread is not None:
-            thread.join(timeout=5.0)
-            if thread.is_alive():
-                raise InfrastructureError("model proxy shutdown did not finish")
+            if thread.ident is not None:
+                thread.join(timeout=5.0)
+                if thread.is_alive():
+                    raise InfrastructureError("model proxy shutdown did not finish")
             if self._thread is thread:
                 self._thread = None
 

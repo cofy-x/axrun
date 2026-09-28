@@ -420,3 +420,37 @@ def test_model_proxy_keeps_thread_until_bounded_join_finishes(
     finally:
         release.set()
         proxy.stop()
+
+
+def test_lifecycle_closes_real_proxy_socket_when_serving_thread_never_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = ModelProxy(
+        upstream_url="http://127.0.0.1:1",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+    )
+
+    def fail_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("thread creation failed")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    with pytest.raises(RuntimeError, match="thread creation failed"):
+        proxy.start()
+    server, thread = proxy._server, proxy._thread
+    assert server is not None and thread is not None and thread.ident is None
+    assert server.socket.fileno() != -1
+
+    def forbid_blocking_cleanup(*_args, **_kwargs) -> None:
+        pytest.fail("an unstarted serving thread cannot be shut down or joined")
+
+    monkeypatch.setattr(server, "shutdown", forbid_blocking_cleanup)
+    monkeypatch.setattr(thread, "join", forbid_blocking_cleanup)
+    lifecycle = ModelTunnelLifecycle(client=object(), proxy=proxy, model="test")
+    try:
+        lifecycle.close()
+        assert server.socket.fileno() == -1
+        assert proxy._server is None and proxy._thread is None and proxy._credential == ""
+        lifecycle.close()
+    finally:
+        proxy.stop()
