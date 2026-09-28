@@ -261,7 +261,10 @@ class AxernBackend:
             or (execution.allocation_id and allocation_id != execution.allocation_id)
         ):
             raise InfrastructureError("recovered Run does not match the persisted Axern execution")
-        if _status_name(run) not in {
+        status = _status_name(run)
+        if status in {"RUN_STATUS_RUNNING", "RUN_STATUS_SUCCEEDED"} and not allocation_id:
+            raise InfrastructureError("recovered Run does not match the persisted Axern execution")
+        if status not in {
             "RUN_STATUS_SUCCEEDED",
             "RUN_STATUS_FAILED",
             "RUN_STATUS_CANCELLED",

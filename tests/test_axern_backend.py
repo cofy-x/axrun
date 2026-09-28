@@ -899,6 +899,65 @@ def test_recovery_preserves_original_run_and_accepts_new_allocation_binding(
         assert result is None
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "RUN_STATUS_PLACED",
+        "RUN_STATUS_RUNNING",
+        "RUN_STATUS_SUCCEEDED",
+        "RUN_STATUS_FAILED",
+        "RUN_STATUS_CANCELLED",
+    ],
+)
+def test_recovery_checks_empty_public_allocation_before_dataplane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    # Model the public Run fields, including the SDK's empty-string default,
+    # without coupling the regression to generated protobuf implementation.
+    run = SimpleNamespace(
+        id="run-original",
+        environment_id="env-original",
+        allocation_id="",
+        exit_code=0,
+        diagnostic_code="",
+    )
+    monkeypatch.setattr(backend_module, "_status_name", lambda _run: status)
+
+    class Client:
+        def get_run(self, run_id: str):
+            assert run_id == "run-original"
+            return run
+
+    backend = AxernBackend(Client())
+    captured: list[str] = []
+
+    def capture(run_id: str, *_args, **_kwargs):
+        captured.append(run_id)
+        return tmp_path / "out", tmp_path / "err"
+
+    monkeypatch.setattr(backend, "_capture_output", capture)
+    monkeypatch.setattr(
+        backend,
+        "_download_outputs",
+        lambda *_args, **_kwargs: pytest.fail("a preallocation Run cannot have sealed outputs"),
+    )
+    execution = ExecutionRef("env-original", "run-original")
+    plan = StagePlan("env-original", ("true",), "/workspace", (OutputSpec("/outputs/result"),))
+    if status in {"RUN_STATUS_RUNNING", "RUN_STATUS_SUCCEEDED"}:
+        with pytest.raises(InfrastructureError, match="persisted Axern execution"):
+            backend.recover(execution, plan, artifact_dir=tmp_path)
+        assert captured == []
+    else:
+        result = backend.recover(execution, plan, artifact_dir=tmp_path)
+        if status == "RUN_STATUS_PLACED":
+            assert result is None and captured == []
+        else:
+            assert result is not None and result.exit_code != 0
+            assert result.execution == execution
+            assert captured == ["run-original"]
+    assert not list(tmp_path.iterdir())
+
+
 def test_transport_failure_after_launch_does_not_implicitly_cancel(
     tmp_path: Path, monkeypatch
 ) -> None:
