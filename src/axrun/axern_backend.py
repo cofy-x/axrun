@@ -13,7 +13,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from axrun.errors import ContractError, InfrastructureError, SdkCapabilityError
+from axrun.errors import (
+    ContractError,
+    DiagnosedInfrastructureError,
+    InfrastructureError,
+    SdkCapabilityError,
+)
 from axrun.lifecycle.base import PreStartLifecycle
 from axrun.models import (
     Artifact,
@@ -160,23 +165,19 @@ class AxernBackend:
 
         run = self.client.create_run(**kwargs)
         execution = ExecutionRef(plan.environment_id, run.id)
-        on_bound(execution)
+        released = False
         try:
+            # Binding is part of setup: a rejected local publication must not
+            # leave an unowned Run waiting indefinitely for its ready marker.
+            on_bound(execution)
             run = _wait_running(
                 self.client,
                 run.id,
                 timeout_seconds=self.allocation_ready_timeout_seconds,
             )
-        except BaseException:
-            # No input or readiness marker has been written yet. Cancellation is authoritative
-            # here and prevents an unowned Run from starting after the caller's readiness timeout.
-            self.client.cancel_run(run.id)
-            raise
-        execution = ExecutionRef(plan.environment_id, run.id, run.allocation_id)
-        on_bound(execution)
-        allocation = self.client.allocation(run.allocation_id)
-        released = False
-        try:
+            execution = ExecutionRef(plan.environment_id, run.id, run.allocation_id)
+            on_bound(execution)
+            allocation = self.client.allocation(run.allocation_id)
             if lifecycle is not None:
                 lifecycle.start(execution, allocation)
             for item in plan.inputs:
@@ -190,10 +191,26 @@ class AxernBackend:
             allocation.write_file(ready_marker, b"ready\n")
             released = True
         except BaseException:
-            if lifecycle is not None:
-                lifecycle.close()
-            if not released:
-                self.client.cancel_run(run.id)
+            try:
+                if lifecycle is not None:
+                    try:
+                        lifecycle.close()
+                    except Exception:
+                        raise DiagnosedInfrastructureError(
+                            "lifecycle_cleanup_failed",
+                            {"reason_code": "component_cleanup_failed"},
+                        ) from None
+            finally:
+                # A cleanup error cannot skip cancellation before release. SDK
+                # exception text is not safe to expose as a cleanup diagnostic.
+                if not released:
+                    try:
+                        self.client.cancel_run(run.id)
+                    except Exception:
+                        raise DiagnosedInfrastructureError(
+                            "prestart_cleanup_failed",
+                            {"reason_code": "unreleased_run_cancel_failed"},
+                        ) from None
             raise
         try:
             # Once the process is released, an ambiguous transport failure must be
@@ -231,8 +248,23 @@ class AxernBackend:
         artifact_dir: Path,
         download_outputs: bool = True,
     ) -> StageResult | None:
+        if plan.environment_id != execution.environment_id:
+            raise InfrastructureError("recovery plan differs from the persisted Environment")
         run = self.client.get_run(execution.run_id)
-        if _status_name(run) not in {
+        # Public Run facts are authoritative. A local plan must not relabel a
+        # foreign Run, and a saved Allocation must never change on recovery.
+        allocation_id = getattr(run, "allocation_id", None)
+        if (
+            getattr(run, "id", None) != execution.run_id
+            or getattr(run, "environment_id", None) != execution.environment_id
+            or not isinstance(allocation_id, str)
+            or (execution.allocation_id and allocation_id != execution.allocation_id)
+        ):
+            raise InfrastructureError("recovered Run does not match the persisted Axern execution")
+        status = _status_name(run)
+        if status in {"RUN_STATUS_RUNNING", "RUN_STATUS_SUCCEEDED"} and not allocation_id:
+            raise InfrastructureError("recovered Run does not match the persisted Axern execution")
+        if status not in {
             "RUN_STATUS_SUCCEEDED",
             "RUN_STATUS_FAILED",
             "RUN_STATUS_CANCELLED",
@@ -248,7 +280,7 @@ class AxernBackend:
             run.id, artifact_dir, follow=False, timeout=30.0
         )
         return StageResult(
-            execution=ExecutionRef(plan.environment_id, run.id, run.allocation_id),
+            execution=ExecutionRef(run.environment_id, run.id, allocation_id),
             exit_code=exit_code,
             diagnostic_code=_diagnostic_name(run),
             artifacts=artifacts,
@@ -349,29 +381,75 @@ class AxernBackend:
                         "sealed output manifest did not become available"
                     ) from exc
                 time.sleep(0.25)
+        paths = [value.path for value in manifest]
+        output_ids = [value.output_id for value in manifest]
+        if (
+            any(not isinstance(value, str) or not value.startswith("/") for value in paths)
+            or any(not isinstance(value, str) or not value for value in output_ids)
+            or len(paths) != len(set(paths))
+            or len(output_ids) != len(set(output_ids))
+        ):
+            raise InfrastructureError("sealed output manifest identity is ambiguous")
         by_path = {value.path: value for value in manifest}
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifacts: list[Artifact] = []
         for index, expected in enumerate(plan.outputs):
             sealed = by_path.get(expected.path)
             if sealed is None or sealed.status != "available":
-                reason = "missing" if sealed is None else f"{sealed.status}: {sealed.reason}"
+                # SDK diagnostic payloads are not a safe log boundary.
+                reason = "missing" if sealed is None else "not_available"
                 raise ContractError(f"declared output {expected.path} is unavailable: {reason}")
-            if int(sealed.size_bytes) > expected.max_bytes:
+            if (
+                not isinstance(sealed.size_bytes, int)
+                or isinstance(sealed.size_bytes, bool)
+                or sealed.size_bytes < 0
+            ):
+                raise InfrastructureError("sealed output manifest size is invalid")
+            if sealed.size_bytes > expected.max_bytes:
                 raise ContractError(
                     f"declared output {expected.path} exceeds {expected.max_bytes} bytes"
                 )
-            destination = artifact_dir / f"{index:02d}-{Path(expected.path).name}"
-            with destination.open("wb") as stream:
-                verified = self.client.download_sealed_output(run_id, sealed.output_id, stream)
             if (
-                destination.stat().st_size != verified.size_bytes
-                or _sha256(destination) != verified.sha256
+                not isinstance(sealed.sha256, str)
+                or len(sealed.sha256) != 64
+                or any(value not in "0123456789abcdef" for value in sealed.sha256)
+                or sealed.media_type != expected.media_type
             ):
-                destination.unlink(missing_ok=True)
-                raise InfrastructureError(
-                    f"downloaded output failed integrity check: {expected.path}"
-                )
+                raise InfrastructureError("sealed output manifest metadata is invalid")
+            destination = artifact_dir / f"{index:02d}-{Path(expected.path).name}"
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", suffix=".partial", dir=artifact_dir
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    try:
+                        verified = self.client.download_sealed_output(
+                            run_id, sealed.output_id, stream
+                        )
+                    except Exception:
+                        raise InfrastructureError(
+                            f"sealed output download failed: {expected.path}"
+                        ) from None
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if verified.status != "available" or any(
+                    getattr(verified, field) != getattr(sealed, field)
+                    for field in ("output_id", "path", "size_bytes", "sha256", "media_type")
+                ):
+                    raise InfrastructureError(
+                        f"sealed output metadata changed during download: {expected.path}"
+                    )
+                if (
+                    temporary.stat().st_size != sealed.size_bytes
+                    or _sha256(temporary) != sealed.sha256
+                ):
+                    raise InfrastructureError(
+                        f"downloaded output failed integrity check: {expected.path}"
+                    )
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
             artifacts.append(
                 Artifact(
                     name=expected.path,

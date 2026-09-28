@@ -15,7 +15,7 @@ from axern_sdk import AxernError
 
 from axrun.adapters._candidate import load_candidate
 from axrun.axern_backend import AxernBackend
-from axrun.catalog import resolve_adapters, resolve_model_protocol
+from axrun.catalog import resolve_adapters, resolve_model_protocol, resolve_verifier
 from axrun.datasets import (
     ProgramBenchCompatibilityResolver,
     ProgramBenchOfficialSingleResolver,
@@ -23,6 +23,7 @@ from axrun.datasets import (
     SyntheticCodeTaskResolver,
     SyntheticGreenfieldResolver,
 )
+from axrun.datasets.swebench_flask_official import SweBenchFlaskOfficialResolver
 from axrun.errors import AxrunError, ContractError
 from axrun.lifecycle.base import CompositePreStartLifecycle, PreStartLifecycle
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
@@ -44,10 +45,11 @@ from axrun.preparation import (
 )
 from axrun.progress.store import ProgressStore
 from axrun.proxy.model import ModelProxy
-from axrun.qualification import qualify_episode
+from axrun.qualification import qualify_episode, require_admission
 from axrun.report import canonical_report_json, report_markdown, verify_record
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
+from axrun.tasks.flask_admission import admit_flask_image
 from axrun.trajectories.bundle import load_trajectory_bundle
 from axrun.verification.programbench_provenance import review_programbench_seqtk
 
@@ -57,6 +59,21 @@ def _episode(path: Path) -> ResolvedEpisode:
     if not isinstance(raw, dict):
         raise ContractError("ResolvedEpisode must be a JSON object")
     return resolved_episode_from_dict(cast(dict[str, Any], raw))
+
+
+def _flask_import_receipt(path: Path) -> dict[str, str]:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1 << 20:
+        raise ContractError("Flask image import receipt must be a bounded regular file")
+    value: object = json.loads(path.read_text(encoding="utf-8"))
+    fields = {"source_ref", "canonical_ref", "immutable_ref", "content_digest", "platform"}
+    if not isinstance(value, dict):
+        raise ContractError("Flask image import receipt has an invalid shape")
+    entries = cast(dict[object, object], value)
+    if set(entries) != fields or any(
+        not isinstance(item, str) or not item for item in entries.values()
+    ):
+        raise ContractError("Flask image import receipt has an invalid shape")
+    return cast(dict[str, str], entries)
 
 
 def _client(args: argparse.Namespace) -> Any:
@@ -295,6 +312,34 @@ def _parser() -> argparse.ArgumentParser:
     swebench.add_argument("--inference-environment", required=True)
     swebench.add_argument("--verification-environment", required=True)
     swebench.add_argument("--output", type=Path, required=True)
+    flask = commands.add_parser(
+        "resolve-swebench-flask-official",
+        help="resolve only the locked official pallets__flask-5014 instance",
+    )
+    flask.add_argument("row", type=Path)
+    flask.add_argument("--episode-id", required=True)
+    flask.add_argument(
+        "--harness", choices=("static-candidate", "claude-code"), default="static-candidate"
+    )
+    flask.add_argument("--candidate-file", type=Path)
+    flask.add_argument("--assets-dir", type=Path, required=True)
+    flask.add_argument("--wheelhouse-dir", type=Path, required=True)
+    flask.add_argument("--task-image", required=True)
+    flask.add_argument("--image-import-receipt", type=Path, required=True)
+    flask.add_argument("--admission-receipt", type=Path, required=True)
+    flask.add_argument("--inference-environment", required=True)
+    flask.add_argument("--verification-environment", required=True)
+    _add_claude_arguments(flask)
+    flask.add_argument("--output", type=Path, required=True)
+    admission = commands.add_parser(
+        "admit-swebench-flask-image",
+        help="perform the locked model-free Flask image admission audit",
+    )
+    admission.add_argument("row", type=Path)
+    admission.add_argument("--environment", required=True)
+    admission.add_argument("--task-image", required=True)
+    admission.add_argument("--image-import-receipt", type=Path, required=True)
+    admission.add_argument("--output", type=Path, required=True)
     run = commands.add_parser("run", help="execute inference and isolated verification")
     run.add_argument("episode", type=Path)
     qualify = commands.add_parser(
@@ -433,6 +478,9 @@ def _preparation_service(
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        # Durable paths must have one identity across resolve, run and recovery.
+        # An equivalent relative working directory must not change progress paths.
+        args.state_dir = args.state_dir.resolve()
         if args.command == "validate":
             episode = _episode(args.episode)
             _print({"episode_id": episode.episode_id, "spec_digest": episode.digest})
@@ -582,6 +630,30 @@ def main(argv: list[str] | None = None) -> int:
             )
             _write_episode(episode, args.output)
             return 0
+        if args.command == "resolve-swebench-flask-official":
+            raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+            if not isinstance(raw_value, dict):
+                raise ContractError("official Flask enriched row must be a JSON object")
+            harness = (
+                HarnessSpec("static-candidate", "1")
+                if args.harness == "static-candidate"
+                else _claude_harness(args, working_directory="/testbed")
+            )
+            episode = SweBenchFlaskOfficialResolver().resolve(
+                cast(dict[str, Any], raw_value),
+                asset_dir=args.assets_dir,
+                episode_id=args.episode_id,
+                inference_environment_id=args.inference_environment,
+                verification_environment_id=args.verification_environment,
+                task_image=args.task_image,
+                image_import_receipt=_flask_import_receipt(args.image_import_receipt),
+                wheelhouse_dir=args.wheelhouse_dir,
+                admission_receipt_file=args.admission_receipt,
+                harness=harness,
+                static_candidate_file=args.candidate_file,
+            )
+            _write_episode(episode, args.output)
+            return 0
         store = EpisodeStore(args.state_dir)
         if args.command == "status":
             _print(_status(store, args.episode_id))
@@ -623,6 +695,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         client = _client(args)
         try:
+            if args.command == "admit-swebench-flask-image":
+                receipt = admit_flask_image(
+                    args.row,
+                    client=client,
+                    backend=AxernBackend(client, namespace=args.namespace),
+                    state_root=store.root,
+                    environment_id=args.environment,
+                    task_image=args.task_image,
+                    image_import_receipt=_flask_import_receipt(args.image_import_receipt),
+                    output=args.output,
+                )
+                _print(receipt)
+                return 0
             runner = _runner(args, client)
             if args.command == "qualify":
                 episode = _episode(args.episode)
@@ -646,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
                     backend=runner.backend,
                     store=store,
                 )
+                require_admission(store, episode)
                 result = runner.run(
                     episode,
                     inference=selection.inference,
@@ -658,13 +744,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.command == "cancel":
                 episode = store.load_spec(args.episode_id)
-                selection = resolve_adapters(episode)
-                _print(runner.cancel(args.episode_id, verifier=selection.verifier).as_dict())
+                # Cancellation is a rescue operation, not authorization to run.
+                # Damaged admission evidence must not keep the original Run alive.
+                verifier = resolve_verifier(episode)
+                _print(runner.cancel(args.episode_id, verifier=verifier).as_dict())
                 return 0
             else:
                 episode = store.load_spec(args.episode_id)
                 selection = resolve_adapters(episode)
                 if args.command in {"wait", "resume"}:
+                    require_admission(store, episode)
                     result = runner.wait(
                         args.episode_id,
                         inference=selection.inference,

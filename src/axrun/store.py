@@ -43,7 +43,7 @@ class EpisodeStore:
             return existing
         now = _now()
         record = EpisodeRecord(1, episode.episode_id, episode.digest, created_at=now)
-        _atomic_write(
+        atomic_write(
             self.spec_path_for(episode.episode_id), canonical_json(episode.as_dict()) + b"\n"
         )
         self.save(record)
@@ -51,7 +51,7 @@ class EpisodeStore:
 
     def save(self, record: EpisodeRecord) -> None:
         payload = json.dumps(record.as_dict(), sort_keys=True, indent=2).encode() + b"\n"
-        _atomic_write(self.path_for(record.episode_id), payload)
+        atomic_write(self.path_for(record.episode_id), payload)
 
     def load(self, episode_id: str) -> EpisodeRecord | None:
         path = self.path_for(episode_id)
@@ -95,7 +95,7 @@ class EpisodeStore:
         value = asdict(result)
         digest = canonical_digest(value)
         path = self.root / "results" / "sha256" / digest / "verification-result.json"
-        _atomic_write(path, json.dumps(value, sort_keys=True, indent=2).encode() + b"\n")
+        atomic_write(path, json.dumps(value, sort_keys=True, indent=2).encode() + b"\n")
         return path, digest
 
     def load_result(self, path: str, digest: str) -> VerificationResult:
@@ -122,7 +122,7 @@ def _optional_execution(raw: Any) -> ExecutionRef | None:
     return None if raw is None else ExecutionRef(**raw)
 
 
-def _atomic_write(path: Path, payload: bytes) -> None:
+def atomic_write(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:

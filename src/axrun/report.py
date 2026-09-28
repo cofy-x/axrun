@@ -11,7 +11,8 @@ from axrun.catalog import AdapterSelection
 from axrun.errors import ContractError
 from axrun.models import EpisodePhase
 from axrun.progress.store import ProgressStore
-from axrun.qualification import load_qualification_result
+from axrun.provenance import validate_candidate_provenance, validate_result_provenance
+from axrun.qualification import load_qualification_result, require_admission
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import load_trajectory_bundle
 
@@ -25,6 +26,7 @@ def verify_record(
     if record is None:
         raise ContractError(f"episode record does not exist: {episode_id}")
     episode = store.load_spec(episode_id)
+    admission = require_admission(store, episode)
     candidate = None
     trajectory = None
     result = None
@@ -41,16 +43,7 @@ def verify_record(
         candidate = load_candidate(Path(record.candidate_manifest))
         if candidate.digest != record.candidate_digest:
             raise ContractError("CandidateBundle record digest mismatch")
-        if (
-            candidate.episode_id != episode_id
-            or candidate.task_id != episode.task_id
-            or candidate.seed_digest != episode.seed_digest
-            or candidate.candidate != episode.candidate.identity
-            or candidate.candidate_version != episode.candidate.version
-            or record.inference is None
-            or candidate.inference_run_id != record.inference.run_id
-        ):
-            raise ContractError("CandidateBundle provenance mismatch")
+        validate_candidate_provenance(candidate, episode, record.inference)
 
     if bool(record.trajectory_manifest) != bool(record.trajectory_digest):
         raise ContractError("TrajectoryBundle record is incomplete")
@@ -62,6 +55,8 @@ def verify_record(
             trajectory.episode_id != episode_id
             or trajectory.task_id != episode.task_id
             or trajectory.seed_digest != episode.seed_digest
+            or (trajectory.harness, trajectory.harness_version)
+            != (episode.harness.identity, episode.harness.version)
             or record.inference is None
             or trajectory.inference_run_id != record.inference.run_id
         ):
@@ -71,13 +66,9 @@ def verify_record(
         raise ContractError("VerificationResult record is incomplete")
     if record.verification_result:
         result = store.load_result(record.verification_result, record.verification_result_digest)
-        if candidate is None or result.candidate_digest != candidate.digest:
+        if candidate is None:
             raise ContractError("VerificationResult CandidateBundle mismatch")
-        if (result.verifier, result.verifier_version) != (
-            episode.verifier.identity,
-            episode.verifier.version,
-        ):
-            raise ContractError("VerificationResult verifier identity mismatch")
+        validate_result_provenance(result, episode, candidate)
 
     if record.inference is not None and (
         record.inference.environment_id != episode.inference_environment.environment_id
@@ -128,6 +119,7 @@ def verify_record(
             "identity": episode.verifier.identity,
             "version": episode.verifier.version,
         },
+        "admission": admission,
         "qualifications": (
             [
                 {

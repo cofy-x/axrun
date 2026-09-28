@@ -69,13 +69,17 @@ class StageProgressObserver:
     def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
-        thread, self._thread = self._thread, None
+        thread = self._thread
         self._stop.set()
         if thread is not None:
             thread.join(timeout=max(5.0, self._poll_seconds + 2.0))
-            if thread.is_alive() and not self._failure_reason:
-                self._failure_reason = "observer_shutdown_timeout"
+            if thread.is_alive():
+                raise DiagnosedInfrastructureError(
+                    "progress_observer_failed",
+                    {"reason_code": self._failure_reason or "observer_shutdown_timeout"},
+                )
+        self._thread = None
+        self._closed = True
         if self._failure_reason:
             raise DiagnosedInfrastructureError(
                 "progress_observer_failed", {"reason_code": self._failure_reason}

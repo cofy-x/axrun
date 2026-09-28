@@ -93,12 +93,80 @@ working directory is explicit in the resolved harness configuration. The fresh v
 only the CandidateBundle patch, the content-addressed official evaluation script, and Axrun's
 packaged grader; it has deny-all networking and no inference mount, process, Tunnel, or credential.
 
-A separate, explicitly composed stage-zero validation for the locked official
-`pallets__flask-5014` instance completed deterministic oracle parity and two
-real Claude candidate → fresh verifier episodes on released Axern v0.12.0.
-See the [single-instance acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md).
-It is not catalog-registered, suite support, or a leaderboard submission claim;
-the pre-inference image-secrecy gate remains part of its explicit validation tool.
+### Locked Flask CLI vertical
+
+`pallets__flask-5014` is registered as the closed task/verifier pair
+`swebench-flask-official@1`, with `git-patch@1` and either static-candidate or
+Claude Code 2.1.205. Registration requires mandatory image admission and qualified
+episode state; it does not enable other SWE-bench instances or a suite.
+
+| Status | Flask scope |
+| --- | --- |
+| Implemented | Locked resolver, runtime image admission, qualification, execution/recovery, sealed outputs, and record/report verification |
+| Accepted | Deterministic gold/known-bad/empty oracle parity and a new real Claude episode through the normal CLI on released Axern v0.12.0; see [CLI admission acceptance](docs/validation/2026-09-28-flask-cli-admission.md). The [earlier dedicated-tool acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md) remains historical evidence |
+| Registered | Normal CLI uses the same reviewed catalog and mandatory admission checks, without caller-built adapter selection |
+| Not implied | Generic SWE-bench support, suite support, full official environment equivalence, or leaderboard submission eligibility |
+
+The model-free admission command scans the **actual imported runtime image** in a
+separate fresh SDK Run, not a source image assumed to be equivalent. The receipt
+binds source and runtime digests separately, platform, complete row/asset digests,
+import provenance, scanner implementation, public execution identity, and verified
+sealed audit output. Missing, corrupt, mismatched, old-contract or incomplete-scan
+evidence fails closed. Locked hidden-test/reference signatures are temporary
+audit-only inputs, never inference inputs. Passing proves absence of those locked
+signatures within the bounded scan, not absence of every unknown secret.
+
+Receipts and episode state are caller-owned evidence, not signed attestations.
+A receipt hash proves integrity, not provenance by itself; the runtime audit and
+execution evidence establish the reviewed local path. Axrun does not defend
+against a caller who can rewrite all local evidence. Import provenance also does
+not prove source/runtime filesystem equality; runtime scanning remains mandatory.
+
+The following flow assumes a locked row, the exact verifier wheelhouse, a public
+image-import receipt, and three caller-created amd64 Environments from its
+canonical runtime digest: a disposable audit Environment and distinct inference
+and verification Environments. Set the named variables to your own paths/IDs;
+`TASK_IMAGE` is the receipt's immutable runtime reference, never its source digest
+or a mutable tag. Use a new episode ID for each execution.
+
+```bash
+uv run axrun --state-dir .axrun/flask-cli --context-file "$AXERN_CONTEXT_FILE" \
+  admit-swebench-flask-image "$FLASK_ROW" \
+  --environment "$AUDIT_ENVIRONMENT_ID" --task-image "$TASK_IMAGE" \
+  --image-import-receipt "$IMAGE_IMPORT_RECEIPT" --output admission.json
+
+uv run axrun resolve-swebench-flask-official "$FLASK_ROW" \
+  --episode-id flask-cli-static-new --harness static-candidate \
+  --candidate-file "$STATIC_PATCH" --assets-dir .axrun/flask-assets \
+  --wheelhouse-dir "$FLASK_WHEELHOUSE" --task-image "$TASK_IMAGE" \
+  --image-import-receipt "$IMAGE_IMPORT_RECEIPT" --admission-receipt admission.json \
+  --inference-environment "$INFERENCE_ENVIRONMENT_ID" \
+  --verification-environment "$VERIFICATION_ENVIRONMENT_ID" --output episode.json
+
+uv run axrun --state-dir .axrun/flask-cli --context-file "$AXERN_CONTEXT_FILE" \
+  qualify episode.json
+uv run axrun --state-dir .axrun/flask-cli --context-file "$AXERN_CONTEXT_FILE" \
+  run episode.json
+uv run axrun --state-dir .axrun/flask-cli verify-record flask-cli-static-new
+uv run axrun --state-dir .axrun/flask-cli report flask-cli-static-new --format json
+```
+
+For Claude, use a fresh episode/Environment pair, select `--harness claude-code`,
+omit `--candidate-file`, and add `--claude-mount-image "$CLAUDE_AMD64_ROOTFS"`
+and `--model "$MODEL_ID"` to the same resolver. Optional model aliases default to
+that opaque model ID. Invoke `run` with caller-only
+`--model-upstream-url "$MODEL_UPSTREAM_URL" --model-credential-env MODEL_API_KEY`,
+with `MODEL_API_KEY` already set securely in the caller environment; do not put
+its value in argv, the episode, or sandbox configuration. Flask remains deny-all
+and requires both WebFetch and WebSearch disabled.
+
+After a caller interruption, `resume flask-cli-static-new` with the same
+`--state-dir` and Axern context queries the original Run; it does not create a
+replacement inference. Running Claude cannot recreate its lost Proxy/Tunnel.
+`resume`, `verify-record`, and `report` recheck mandatory evidence; `cancel` may
+still cancel the original Run when evidence is damaged. These Environments remain
+caller-owned: inspect Run terminal state and use the public SDK to clean them up
+after collecting evidence. The CLI does not implicitly delete them.
 
 ## Supported harness paths
 
@@ -134,7 +202,8 @@ Claude runs offline with `WebFetch` and `WebSearch` explicitly disabled by defau
 Code's `--disallowedTools` contract. `--claude-disallowed-tools` records a deterministic explicit
 replacement; passing the option with no values deliberately removes the default tool restriction.
 This tool policy is separate from Axern's deny-all network policy, which remains the sandbox
-enforcement boundary.
+enforcement boundary. Locked Flask admission rejects configurations that remove
+either WebFetch or WebSearch from the disallowed set.
 
 Canonical trajectories and candidates have separate ownership. `CandidateBundle v1` records
 the candidate adapter identity/version and contains only verifier-required files with unique semantic
@@ -146,7 +215,16 @@ workspace. See [the trajectory contract](src/axrun/trajectories/README.md).
 
 `workspace-archive@1` sorts paths, fixes ownership and mtime, preserves ordinary permission bits, and rejects symlinks, devices, FIFOs, sockets, absolute paths, traversal, duplicate entries, oversized paths, excessive entries, archives over 64 MiB, and extracted payloads over 512 MiB. Extraction repeats the closed validation in the fresh verification Allocation. The archive never includes `/inputs`, `/outputs`, `/run/axrun`, model transport state, or harness outputs because its root is the explicit task working directory.
 
-This contract supports the closed ProgramBench single-instance adapters below and may cover a file-only Terminal-Bench subset. Axern's released rootfs result can carry filesystem changes from a successful finite Run into fresh Runs through a derived Environment. It does not carry mounts, secrets, processes, sockets, kernel state, or live services; those require explicit benchmark-specific modeling. Openbench remains a research and parity input, never an Axrun runtime dependency. Axrun does not claim full ProgramBench or Terminal-Bench support. A mini-SWE-agent readonly mount should be considered only if future official-baseline parity requires it; it is not a prerequisite for using Claude Code.
+This contract supports the closed ProgramBench single-instance adapters below.
+ProgramBench uses a released rootfs result only **inside verification**, from a
+fresh compile Run into independent branch Runs through a derived Environment;
+it is not an inference-rootfs candidate. Mounts, secrets, processes, sockets,
+kernel state and live services are not carried. Terminal-Bench 2.1's official
+shared-verifier contract is unsupported by the accepted CandidateBundle → fresh
+verifier boundary; a workspace archive or derived Environment must not be presented
+as faithful support. Openbench remains read-only research/parity input, not a
+runtime dependency. Axrun does not claim general ProgramBench or Terminal-Bench
+support, and no second real harness is required for this vertical.
 
 The repository now includes a closed ProgramBench 1.2.4 calculator compatibility fixture. It uses
 ProgramBench's own `testorg__calculator.abc1234` fixture identity, not an official benchmark task,
@@ -190,14 +268,18 @@ Code 2.1.205 inference-to-verification acceptance on released Axern v0.11.3. See
 [deterministic acceptance](docs/validation/2026-09-23-programbench-seqtk-axern-v0.11.3.md) and
 [Claude acceptance](docs/validation/2026-09-23-programbench-seqtk-claude-v0.11.3.md). These are
 two closed official-instance verticals, not general ProgramBench, suite scheduling, leaderboard
-support, or a generic workflow engine. The tty-clock partial TUI parity question remains open.
+support, or a generic workflow engine. The tty-clock partial TUI parity question
+remains unverified; [#3](https://github.com/cofy-x/axrun/issues/3) was closed as
+not planned, not fixed.
 
 ProgramBench scorer parity is separate from upstream submission integrity. The locked seqtk `v2`
 row makes the behavioral-observation-only policy explicit; after a completed Claude episode,
 `axrun review-programbench-provenance EPISODE_ID` returns body-free risk counts from verified
 bundles. Its status is always `human_attestation_required`, including when all counts are zero.
 The historical `v1` Claude acceptance remains execution/scoring evidence, not an integrity
-attestation or leaderboard submission claim.
+attestation or leaderboard submission claim. Closing
+[#6](https://github.com/cofy-x/axrun/issues/6) as not planned did not remove the
+human review required before an official submission.
 
 An explicit Claude `error_max_turns` result is an agent-budget terminal state, not an execution
 transport failure: Axrun seals its patch and trajectory and lets the fresh verifier determine the
@@ -272,7 +354,10 @@ uv run axrun export EPISODE_ID ./exported-result
 
 The repository-owned [Claude Code rootfs build](docker/claude-code-rootfs/README.md) fixes Claude Code `2.1.205`, runtime identity `2.1.205-20260812-234142`, and Node.js `22.23.2`. The same Dockerfile builds amd64 and arm64 variants with the identical read-only mount `/__claude_code` and entry `/__claude_code/usr/local/bin/claude`, including their own platform glibc loader and libraries without a global `LD_LIBRARY_PATH`. It is an image mount layered onto the task-image Environment; it is not the task seed and does not own `/workspace`. The caller must select a digest matching the Environment platform. Production and benchmark acceptance remain amd64; arm64 is for local Axern source-cluster development. A rebuilt or copied image must be imported or published and then selected by its resolved digest; this repository does not claim or embed a registry digest.
 
-Without `--context-file`, remote commands use the explicit Axern SDK environment configuration. `status`, `inspect`, `validate`, and `export` are local and do not open an SDK channel.
+Without `--context-file`, remote commands use the explicit Axern SDK environment
+configuration. Resolver commands, `status`, `inspect`, `validate`, `verify-record`,
+`report`, and `export` are local and do not open an SDK channel. Model-free image
+admission and qualification use the SDK without a model credential.
 
 ## Credentials and network access
 

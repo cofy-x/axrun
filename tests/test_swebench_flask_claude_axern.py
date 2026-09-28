@@ -12,8 +12,18 @@ from typing import Any, cast
 
 import pytest
 from axern_sdk import SandboxNotFoundError
+from flask_admission_fixtures import RUNTIME_IMAGE, receipt, write_receipt
 
-from axrun.models import EpisodePhase, ImageMountSpec, OutputSpec, StagePlan
+from axrun.cli import _parser
+from axrun.models import (
+    EpisodePhase,
+    EpisodeRecord,
+    ExecutionRef,
+    ImageMountSpec,
+    OutputSpec,
+    StagePlan,
+)
+from axrun.store import EpisodeStore
 
 PATH = Path(__file__).parents[1] / "tools/validation/swebench_flask_claude_axern.py"
 SPEC = importlib.util.spec_from_file_location("swebench_flask_claude_axern", PATH)
@@ -29,8 +39,6 @@ def _config(tmp_path: Path) -> dict[str, Any]:
     value.update(
         endpoint="127.0.0.1:25000",
         parity_receipt_sha256="a" * 64,
-        image_safety_receipt_sha256="b" * 64,
-        image_safety_image_id=f"sha256:{'c' * 64}",
         inference_environment_id="env-new-inference",
         verification_environment_id="env-new-verification",
         claude_rootfs_image=claude._ROOTFS_IMAGE,
@@ -71,7 +79,7 @@ def test_config_is_closed_and_cannot_contain_credential(tmp_path: Path) -> None:
 
 def _parity_receipt(task_image: str) -> dict[str, Any]:
     return {
-        "schema_version": "axrun.swebench-flask-axern-parity@1",
+        "schema_version": "axrun.swebench-flask-axern-parity@2",
         "status": "complete",
         "platform": "linux/amd64",
         "axern_sdk": claude.parity._SDK_VERSION,
@@ -82,8 +90,36 @@ def _parity_receipt(task_image: str) -> dict[str, Any]:
         "oracle_receipt_sha256": claude.parity._ORACLE_RECEIPT_SHA256,
         "environment_cleanup": "caller_owned_retained",
         "client_cleanup": "closed",
+        "admission_receipt": "admission.json",
+        "admission_receipt_sha256": "1" * 64,
+        "execution_path": "formal_cli",
+        "cli_commands": [
+            "admit-swebench-flask-image",
+            "resolve-swebench-flask-official",
+            "qualify",
+            "run",
+            "resume",
+            "verify-record",
+            "report",
+        ],
         "cases": [],
     }
+
+
+class AdmissionClient:
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self.entry = entry
+
+    def get_sealed_output_manifest(self, run_id: str) -> list[SimpleNamespace]:
+        assert run_id == self.entry["execution"]["run_id"]
+        return [
+            SimpleNamespace(
+                path=claude._ADMISSION_OUTPUT,
+                status="available",
+                size_bytes=self.entry["sealed_size_bytes"],
+                sha256=self.entry["sealed_sha256"],
+            )
+        ]
 
 
 def _gate(path: Path, value: dict[str, Any], task_image: str) -> tuple[str, set[str], set[str]]:
@@ -92,7 +128,7 @@ def _gate(path: Path, value: dict[str, Any], task_image: str) -> tuple[str, set[
     return claude._parity_gate(
         path,
         digest,
-        client=cast(Any, object()),
+        client=cast(Any, AdmissionClient(receipt(task_image))),
         task_image=task_image,
         model_environment_ids=("env-new-inference", "env-new-verification"),
     )
@@ -113,71 +149,49 @@ def test_parity_gate_rejects_incomplete_cases_and_reused_environment(tmp_path: P
         _gate(path, value, task_image)
 
 
-def test_image_safety_receipt_is_sha_locked_and_recomputed(tmp_path: Path) -> None:
-    row = {"test_patch": "private-test-patch", "patch": "private-gold-patch"}
-    task_image = f"example.invalid/task@sha256:{'d' * 64}"
-    image_id = f"sha256:{'e' * 64}"
-    details: dict[str, Any] = {
-        key: False if key in claude.image_secrecy._BOOL_FIELDS else 0
-        for key in claude.image_secrecy._AUDIT_FIELDS
-    }
-    details.update(
-        image_head=claude.image_secrecy.IMAGE_HEAD,
-        image_clean=True,
-        row_base_present=True,
-        filesystem_scan_complete=True,
-        git_all_object_scan_complete=True,
-        test_patch_forward_applies=True,
-        gold_patch_forward_applies=True,
-        test_target_count=1,
-        gold_target_count=1,
-        added_target_count=1,
-    )
-    receipt = {
-        "schema_version": claude.image_secrecy.SCHEMA,
-        "instance_id": "pallets__flask-5014",
-        "row_sha256": claude.parity._ROW_SHA256,
-        "source_image": claude.parity._SOURCE_IMAGE,
-        "image_id": image_id,
-        "test_patch_sha256": hashlib.sha256(row["test_patch"].encode()).hexdigest(),
-        "gold_patch_sha256": hashlib.sha256(row["patch"].encode()).hexdigest(),
-        "status": "passed",
-        "reason_code": "no_locked_patch_signatures_reachable",
-        **details,
-    }
-    path = _write(tmp_path / "safety.json", receipt)
+def test_runtime_admission_is_sha_locked_and_recomputed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = receipt()
+    path = write_receipt(tmp_path / "admission.json", admission)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    image_import = {"source_ref": claude.parity._SOURCE_IMAGE, "immutable_ref": task_image}
-
-    def gate(value: dict[str, Any], expected_digest: str = digest) -> str:
-        _write(path, value)
-        return claude._image_safety_gate(
+    monkeypatch.setattr(claude.parity, "_terminal_execution", lambda *_args: None)
+    client = AdmissionClient(admission)
+    assert (
+        claude._admission_gate(path, digest, client=cast(Any, client), task_image=RUNTIME_IMAGE)
+        == admission
+    )
+    with pytest.raises(ValueError, match="SHA-256"):
+        claude._admission_gate(path, "0" * 64, client=cast(Any, client), task_image=RUNTIME_IMAGE)
+    wrong_seal = {**admission, "sealed_size_bytes": admission["sealed_size_bytes"] + 1}
+    with pytest.raises(claude.ValidationError, match="public_seal_mismatch"):
+        claude._admission_gate(
             path,
-            expected_digest,
-            expected_image_id=image_id,
-            row=row,
-            task_image=task_image,
-            image_import=image_import,
+            digest,
+            client=cast(Any, AdmissionClient(wrong_seal)),
+            task_image=RUNTIME_IMAGE,
         )
-
-    assert gate(receipt) == digest
-    with pytest.raises(claude.ValidationError, match="integrity_invalid"):
-        gate(receipt, "0" * 64)
-    blocked = {**receipt, "status": "blocked"}
-    with pytest.raises(claude.ValidationError, match="not_passed"):
-        gate(blocked, hashlib.sha256(_write(path, blocked).read_bytes()).hexdigest())
-    wrong_identity = {**receipt, "image_id": f"sha256:{'0' * 64}"}
-    with pytest.raises(claude.ValidationError, match="identity_mismatch"):
-        gate(wrong_identity, hashlib.sha256(_write(path, wrong_identity).read_bytes()).hexdigest())
+    legacy = {"schema_version": "axrun.flask-image-secrecy@1", "status": "passed"}
+    write_receipt(path, legacy)
+    with pytest.raises(ValueError):
+        claude._admission_gate(
+            path,
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            client=cast(Any, client),
+            task_image=RUNTIME_IMAGE,
+        )
 
 
 def test_parity_gate_rechecks_every_run_and_result_digest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    task_image = f"example.invalid/task@sha256:{'b' * 64}"
+    task_image = RUNTIME_IMAGE
     value = _parity_receipt(task_image)
+    admission_path = write_receipt(tmp_path / "admission.json")
+    value["admission_receipt_sha256"] = hashlib.sha256(admission_path.read_bytes()).hexdigest()
     records: dict[str, Any] = {}
     episodes: dict[str, Any] = {}
+    result_overrides: dict[str, dict[str, Any]] = {}
     queried: list[tuple[str, str]] = []
     for index, case in enumerate(("gold", "known_bad", "empty")):
         episode_id = f"flask-5014-{case}-{'a' * 31}{index}"
@@ -238,7 +252,14 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
                 "verification_result_digest": "d" * 64,
                 "verdict": "passed" if case == "gold" else "failed",
                 "score": 1.0 if case == "gold" else 0.0 if case == "known_bad" else None,
-                "diagnostic_code": "",
+                "diagnostic_code": ""
+                if case == "gold"
+                else "SWEBENCH_EMPTY_PATCH"
+                if case == "empty"
+                else "SWEBENCH_TESTS_FAILED",
+                "completed_resume_verified": True,
+                "record_integrity_verified": True,
+                "report_sha256": "1" * 64,
                 "sealed_outputs": {},
                 "parity": {
                     "schema_version": "axrun.swebench-flask-parity@1",
@@ -250,7 +271,11 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
                             claude._EMPTY_CHECKS if case == "empty" else claude._SCORING_CHECKS
                         )
                     },
-                    "official_sha256": "f" * 64,
+                    "official_sha256": {
+                        "gold": claude.parity._GOLD_GRADE_SHA256,
+                        "known_bad": claude.parity._KNOWN_BAD_GRADE_SHA256,
+                        "empty": claude.parity._EMPTY_REPORT_SHA256,
+                    }[case],
                     "axrun_verification_sha256": result_sha,
                     "expected_tests": None if case == "empty" else 60,
                     "official_observed_tests": None if case == "empty" else 60,
@@ -272,12 +297,29 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
         def load_result(self, path: str, digest: str) -> Any:
             assert digest == "d" * 64 and Path(path).is_file()
             case = Path(path).stem
-            return SimpleNamespace(
+            result = SimpleNamespace(
                 candidate_digest="c" * 64,
                 verdict="passed" if case == "gold" else "failed",
                 score=1.0 if case == "gold" else 0.0 if case == "known_bad" else None,
-                diagnostic_code="",
+                diagnostic_code=""
+                if case == "gold"
+                else "SWEBENCH_EMPTY_PATCH"
+                if case == "empty"
+                else "SWEBENCH_TESTS_FAILED",
+                details={
+                    "classification": "empty_patch_unscored" if case == "empty" else "scored",
+                    "patch_successfully_applied": None if case == "empty" else True,
+                    "status_map": None
+                    if case == "empty"
+                    else {f"synthetic-{index}": "PASSED" for index in range(60)},
+                    "tests_status": None if case == "empty" else {},
+                    "missing_expected": None if case == "empty" else [],
+                    "eval_exit_code": None if case == "empty" else 0,
+                },
             )
+            for key, value in result_overrides.get(case, {}).items():
+                setattr(result, key, value)
+            return result
 
     monkeypatch.setattr(claude, "EpisodeStore", Store)
 
@@ -296,7 +338,59 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
     )
     path = tmp_path / "receipt.json"
     _gate(path, value, task_image)
-    assert len(queried) == 12
+    assert len(queried) == 13
+    for field, altered in (
+        ("official_sha256", "0" * 64),
+        ("expected_tests", 1),
+        ("official_observed_tests", 1),
+        ("axrun_observed_tests", 1),
+    ):
+        old = value["cases"][0]["parity"][field]
+        value["cases"][0]["parity"][field] = altered
+        with pytest.raises(claude.ValidationError, match="locked_oracle_mismatch"):
+            _gate(path, value, task_image)
+        value["cases"][0]["parity"][field] = old
+    value["cases"][2]["parity"]["expected_tests"] = 0
+    with pytest.raises(claude.ValidationError, match="locked_oracle_mismatch"):
+        _gate(path, value, task_image)
+    value["cases"][2]["parity"]["expected_tests"] = None
+    value["cases"][0]["verdict"] = "failed"
+    with pytest.raises(claude.ValidationError, match="result_mismatch"):
+        _gate(path, value, task_image)
+    value["cases"][0]["verdict"] = "passed"
+    result_overrides["gold"] = {
+        "verdict": "failed",
+        "score": 0.0,
+        "diagnostic_code": "SWEBENCH_TESTS_FAILED",
+    }
+    with pytest.raises(claude.ValidationError, match="control_result_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
+    result_overrides["known_bad"] = {
+        "details": {
+            "classification": "scored",
+            "patch_successfully_applied": True,
+            "status_map": {f"synthetic-{index}": "PASSED" for index in range(59)},
+            "missing_expected": [],
+            "eval_exit_code": 0,
+        }
+    }
+    with pytest.raises(claude.ValidationError, match="control_details_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
+    result_overrides["empty"] = {
+        "details": {
+            "classification": "empty_patch_unscored",
+            "patch_successfully_applied": None,
+            "status_map": {},
+            "tests_status": None,
+            "missing_expected": None,
+            "eval_exit_code": None,
+        }
+    }
+    with pytest.raises(claude.ValidationError, match="control_details_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
     value["cases"][1]["parity"]["checks"]["all_test_statuses"] = False
     with pytest.raises(claude.ValidationError, match="test_level_parity_missing"):
         _gate(path, value, task_image)
@@ -364,6 +458,50 @@ def test_credential_scan_and_environment_cleanup(tmp_path: Path) -> None:
     assert deleted == ["env-i", "env-v"]
 
 
+@pytest.mark.parametrize("status", ["RUN_STATUS_RUNNING", "RUN_STATUS_UNKNOWN", "query_error"])
+def test_cleanup_preserves_environment_for_active_or_unknown_qualification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    store = EpisodeStore(tmp_path / "state")
+    store.save(
+        EpisodeRecord(
+            1,
+            "qualification-disconnected",
+            "a" * 64,
+            qualifications=(ExecutionRef("env-i", "run-qualify", "alloc-qualify"),),
+        )
+    )
+    deleted: list[str] = []
+    queried: list[str] = []
+    monkeypatch.setattr(claude.parity, "_status_name", lambda run: run.status)
+
+    class Client:
+        def get_run(self, run_id: str) -> SimpleNamespace:
+            queried.append(run_id)
+            if status == "query_error":
+                raise RuntimeError("private transport error must not escape reason code")
+            return SimpleNamespace(status=status)
+
+        def delete_environment(self, environment_id: str) -> None:
+            deleted.append(environment_id)
+
+    expected = (
+        "run_status_unknown_retained_for_recovery"
+        if status == "query_error"
+        else "active_run_retained_for_recovery"
+    )
+    with pytest.raises(claude.ValidationError, match=expected):
+        claude._cleanup_environments(
+            cast(Any, Client()),
+            ("env-i", "env-v"),
+            state=store,
+            episode_id="qualification-disconnected",
+        )
+    assert queried == ["run-qualify"]
+    assert deleted == []
+    assert store.load("qualification-disconnected").qualifications[0].run_id == "run-qualify"
+
+
 def test_sealed_outputs_reject_ambiguous_manifest_and_changed_digest(tmp_path: Path) -> None:
     payload = b"sealed candidate"
     digest = hashlib.sha256(payload).hexdigest()
@@ -404,57 +542,133 @@ def test_sealed_outputs_reject_ambiguous_manifest_and_changed_digest(tmp_path: P
         )
 
 
-def test_tunnel_cleanup_evidence_uses_real_sdk_client_without_storing_token(
-    monkeypatch: pytest.MonkeyPatch,
+def test_tool_does_not_own_a_second_runner_or_model_lifecycle() -> None:
+    for name in ("EpisodeRunner", "ModelProxy", "ModelTunnelLifecycle", "TunnelConnector"):
+        assert not hasattr(claude, name)
+    assert not hasattr(claude, "_selection")
+    assert not hasattr(claude, "_image_safety_gate")
+
+
+def test_parity_gate_does_not_accept_historical_source_only_receipt(tmp_path: Path) -> None:
+    value = _parity_receipt(RUNTIME_IMAGE)
+    value["schema_version"] = "axrun.swebench-flask-axern-parity@1"
+    with pytest.raises(claude.ValidationError, match="receipt_invalid"):
+        _gate(tmp_path / "receipt.json", value, RUNTIME_IMAGE)
+
+
+@pytest.mark.parametrize("fail_command", ["run", "resume"])
+def test_model_validation_uses_formal_cli_and_does_not_claim_failed_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_command: str
 ) -> None:
-    token = "ephemeral-token-never-persist"
-
-    class Client:
-        def create_tunnel_session(self, **_kwargs: Any) -> SimpleNamespace:
-            return SimpleNamespace(session=SimpleNamespace(session_id="tun-1"), client_token=token)
-
-        def revoke_tunnel_session(self, session_id: str, **_kwargs: Any) -> None:
-            assert session_id == "tun-1"
-
-    client = Client()
-    evidence = claude._TunnelCleanupEvidence(cast(Any, client))
-    response = evidence.create_tunnel_session(allocation_id="alloc-1")
-    assert response.client_token == token
-    assert evidence.session_id == "tun-1" and evidence.revoked is False
-    connector_args: dict[str, Any] = {}
-
-    def fake_connector(**kwargs: Any) -> object:
-        connector_args.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(claude, "TunnelConnector", fake_connector)
-    session = response.session
-    evidence.connector_factory(
-        client=evidence,
-        session=session,
-        client_token=token,
-        local_target="127.0.0.1:9999",
+    """Coordinator calls real parser-shaped CLI; validators are tested separately above."""
+    config = claude._config(_write(tmp_path / "config.json", _config(tmp_path)))
+    admitted = receipt()
+    admission = write_receipt(tmp_path / "admission.json", admitted)
+    parity_receipt = _parity_receipt(RUNTIME_IMAGE)
+    parity_receipt["admission_receipt_sha256"] = hashlib.sha256(admission.read_bytes()).hexdigest()
+    _write(config["parity_receipt"], parity_receipt)
+    config["parity_receipt_sha256"] = hashlib.sha256(
+        config["parity_receipt"].read_bytes()
+    ).hexdigest()
+    monkeypatch.setattr(
+        claude.parity, "_image_import_receipt", lambda _path: admitted["import_provenance"]
     )
-    assert connector_args["client"] is client
-    assert connector_args["session"] is session
-    evidence.revoke_tunnel_session("tun-1")
-    assert evidence.revoked is True
-    assert token not in repr(cast(dict[str, Any], vars(evidence)))
+    monkeypatch.setattr(
+        claude,
+        "_parity_gate",
+        lambda _path, digest, **_kwargs: (digest, {"run-old"}, {"alloc-old"}),
+    )
+    monkeypatch.setattr(claude.parity, "_check_environment", lambda *_args: None)
+    monkeypatch.setattr(claude.parity, "_terminal_execution", lambda *_args: None)
+    secret = "secret-sentinel-never-write"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+    episode = SimpleNamespace(seed_digest="a" * 64)
 
+    class Store:
+        def __init__(self, _root: Path) -> None:
+            pass
 
-def test_tunnel_create_failure_records_only_safe_status() -> None:
-    class UnavailableError(RuntimeError):
-        def code(self) -> SimpleNamespace:
-            return SimpleNamespace(name="UNAVAILABLE", secret="never-record-me")
+        def load_spec(self, _episode_id: str) -> SimpleNamespace:
+            return episode
 
-    class Client:
-        def create_tunnel_session(self, **_kwargs: Any) -> None:
-            raise UnavailableError("sensitive server message")
+    monkeypatch.setattr(claude, "EpisodeStore", Store)
+    selected = object()
+    selected_calls: list[object] = []
 
-    evidence = claude._TunnelCleanupEvidence(cast(Any, Client()))
-    with pytest.raises(UnavailableError):
-        evidence.create_tunnel_session(allocation_id="alloc-1")
-    assert evidence.create_error_type == "UnavailableError"
-    assert evidence.create_grpc_status == "UNAVAILABLE"
-    assert "sensitive" not in repr(vars(evidence))
-    assert "never-record-me" not in repr(vars(evidence))
+    def select(value: object) -> object:
+        selected_calls.append(value)
+        return selected
+
+    monkeypatch.setattr(claude, "resolve_adapters", select)
+
+    def assert_safe(value: object, selection: object, credential: str) -> None:
+        assert value is episode and selection is selected and credential == secret
+
+    monkeypatch.setattr(claude, "_assert_safe_plan", assert_safe)
+    commands: list[list[str]] = []
+    options: list[tuple[str, ...]] = []
+
+    def invoke(**kwargs: Any) -> dict[str, Any]:
+        command = kwargs["command"]
+        assert kwargs["context_config"] == config["context_config"]
+        _parser().parse_args([*kwargs["model_options"], *command])
+        assert secret not in repr(kwargs)
+        commands.append(command)
+        options.append(kwargs["model_options"])
+        if command[0] == fail_command:
+            raise claude.CliValidationError("formal_cli_command_failed")
+        if command[0] == "qualify":
+            return {
+                "targets": [
+                    {
+                        "role": role,
+                        "run_id": f"run-q-{role}",
+                        "allocation_id": f"alloc-q-{role}",
+                        "output_sha256": "b" * 64,
+                        "checks": {
+                            "claude": {
+                                "mount_readonly": True,
+                                "node_version": "v22.23.2",
+                                "version": "2.1.205 (Claude Code)",
+                            }
+                        },
+                    }
+                    for role in ("inference", "verification")
+                ]
+            }
+        return {"verdict": "failed"} if command[0] == "run" else {}
+
+    monkeypatch.setattr(claude, "run_cli", invoke)
+    result: dict[str, Any] = {}
+    root = tmp_path / "private-evidence"
+    root.mkdir()
+    with pytest.raises(claude.CliValidationError, match="formal_cli_command_failed"):
+        claude._execute(config, root, result, cast(Any, AdmissionClient(admitted)))
+    assert selected_calls == [episode]
+    assert [command[0] for command in commands] == [
+        "resolve-swebench-flask-official",
+        "qualify",
+        "run",
+        *(["resume"] if fail_command == "resume" else []),
+    ]
+    assert options[:2] == [(), ()]
+    assert options[2] == (
+        "--model-upstream-url",
+        "https://api.deepseek.com/anthropic",
+        "--model-credential-env",
+        "DEEPSEEK_API_KEY",
+    )
+    assert "--wheelhouse-dir" in commands[0]
+    assert "--admission-receipt" in commands[0]
+    assert "--harness" in commands[0] and "claude-code" in commands[0]
+    if fail_command == "run":
+        assert "cleanup_evidence" not in result
+        assert "model_preflight" not in result
+    else:
+        assert result["cleanup_evidence"] == "formal_cli_success_contract"
+        assert result["tunnel_cleanup"] == "revocation_completed_by_cli_lifecycle"
+        assert result["model_proxy_cleanup"] == "caller_process_exited"
+        assert result["model_preflight"]["evidence"] == "formal_cli_success_contract"
+        assert "http_status" not in result["model_preflight"]
+    assert secret not in repr(result)
+    assert claude._credential_scan(root, secret) == 0

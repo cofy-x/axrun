@@ -33,6 +33,7 @@ from axrun.models import (
     TaskSpec,
     VerificationResult,
     VerifierSpec,
+    canonical_digest,
 )
 from axrun.runner import EpisodeRunner
 from axrun.store import EpisodeStore
@@ -312,6 +313,148 @@ def test_runner_rejects_harness_network_policy_override_before_run(tmp_path: Pat
     with pytest.raises(ContractError, match="inference plan conflicts"):
         runner.run(resolved, inference=Inference(), candidate=Inference(), verifier=Verifier())
     assert backend.executions == []
+
+
+@pytest.mark.parametrize("stage", ["inference", "verification"])
+def test_runner_rejects_adapter_environment_override_before_execute(
+    tmp_path: Path, stage: str
+) -> None:
+    class ForeignInference(Inference):
+        def plan(self, episode, capture):
+            return replace(super().plan(episode, capture), environment_id="env-unadmitted")
+
+    class ForeignVerifier(Verifier):
+        def plan(self, episode, candidate):
+            return replace(super().plan(episode, candidate), environment_id="env-unadmitted")
+
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="plan conflicts with resolved Environment"):
+        runner.run(
+            episode(tmp_path),
+            inference=ForeignInference() if stage == "inference" else Inference(),
+            candidate=Inference(),
+            verifier=ForeignVerifier() if stage == "verification" else Verifier(),
+        )
+    assert len(backend.executions) == (0 if stage == "inference" else 1)
+    assert all(plan.environment_id != "env-unadmitted" for plan in backend.plans)
+    assert runner.inspect("ep").verification_result == ""
+
+
+@pytest.mark.parametrize(
+    "phase", [EpisodePhase.INFERENCE_RUNNING, EpisodePhase.VERIFICATION_RUNNING]
+)
+def test_recovery_rejects_adapter_environment_override_before_backend(
+    tmp_path: Path, phase: EpisodePhase
+) -> None:
+    class ForeignInference(Inference):
+        def plan(self, episode, capture):
+            return replace(super().plan(episode, capture), environment_id="env-unadmitted")
+
+    class ForeignVerifier(Verifier):
+        def plan(self, episode, candidate):
+            return replace(super().plan(episode, candidate), environment_id="env-unadmitted")
+
+    class TripwireBackend(FakeBackend):
+        def recover(self, execution, plan, *, artifact_dir):
+            pytest.fail("a conflicting plan must not reach recovery")
+
+    backend = TripwireBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    runner.run(episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier())
+    record = runner.inspect("ep")
+    record.phase = phase
+    store.save(record)
+    with pytest.raises(ContractError, match="plan conflicts with resolved Environment"):
+        runner.recover(
+            "ep",
+            inference=ForeignInference(),
+            candidate=Inference(),
+            verifier=ForeignVerifier(),
+        )
+    assert len(backend.executions) == 2
+
+
+@pytest.mark.parametrize(
+    "phase", [EpisodePhase.INFERENCE_RUNNING, EpisodePhase.VERIFICATION_RUNNING]
+)
+@pytest.mark.parametrize("operation", ["recover", "wait"])
+def test_recovery_rejects_persisted_environment_drift_before_backend(
+    tmp_path: Path, phase: EpisodePhase, operation: str
+) -> None:
+    class TripwireBackend(FakeBackend):
+        def recover(self, execution, plan, *, artifact_dir):
+            pytest.fail("a foreign persisted Environment must not reach recovery")
+
+        def wait(self, execution, *, timeout=None):
+            pytest.fail("a foreign persisted Environment must not reach wait")
+
+    backend = TripwireBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    runner.run(episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier())
+    record = runner.inspect("ep")
+    record.phase = phase
+    if phase == EpisodePhase.INFERENCE_RUNNING:
+        assert record.inference is not None
+        record.inference = replace(record.inference, environment_id="env-foreign")
+    else:
+        assert record.verification is not None
+        record.verification = replace(record.verification, environment_id="env-foreign")
+    store.save(record)
+    with pytest.raises(InfrastructureError, match="conflicts with resolved Environment"):
+        getattr(runner, operation)(
+            "ep", inference=Inference(), candidate=Inference(), verifier=Verifier()
+        )
+    assert len(backend.executions) == 2
+
+
+@pytest.mark.parametrize("stage", ["inference", "verification"])
+def test_runner_rejects_backend_environment_binding_drift(tmp_path: Path, stage: str) -> None:
+    class ForeignBindingBackend(FakeBackend):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+            target = "env-i" if stage == "inference" else "env-v"
+            if plan.environment_id == target:
+                execution = ExecutionRef("env-foreign", "run-foreign", "alloc-foreign")
+                self.executions.append(execution)
+                on_bound(execution)
+                pytest.fail("foreign binding cannot proceed to dataplane work")
+            return super().execute(
+                plan, artifact_dir=artifact_dir, on_bound=on_bound, lifecycle=lifecycle
+            )
+
+    backend = ForeignBindingBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(InfrastructureError, match="conflicts with resolved Environment"):
+        runner.run(
+            episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+        )
+    record = runner.inspect("ep")
+    assert (record.inference if stage == "inference" else record.verification) is None
+    assert record.verification_result == ""
+
+
+@pytest.mark.parametrize("allocation_id", ["", "alloc-foreign"])
+def test_binding_cannot_drop_or_replace_an_existing_allocation(
+    tmp_path: Path, allocation_id: str
+) -> None:
+    class ChangingBindingBackend(FakeBackend):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+            execution = ExecutionRef(plan.environment_id, "run-original", "alloc-original")
+            self.executions.append(execution)
+            on_bound(execution)
+            on_bound(replace(execution, allocation_id=allocation_id))
+            pytest.fail("changed allocation cannot proceed to dataplane work")
+
+    backend = ChangingBindingBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(InfrastructureError, match="execution identity changed"):
+        runner.run(
+            episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+        )
+    assert runner.inspect("ep").inference == ExecutionRef("env-i", "run-original", "alloc-original")
+    assert runner.inspect("ep").candidate_manifest == ""
 
 
 def test_multi_run_verifier_cannot_silently_ignore_public_policy(tmp_path: Path) -> None:
@@ -707,3 +850,145 @@ def test_terminal_success_with_missing_declared_output_fails_contract(tmp_path: 
             verifier=Verifier(),
         )
     assert runner.inspect("missing").phase == EpisodePhase.FAILED
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("episode_id", "foreign-episode"),
+        ("task_id", "foreign-task"),
+        ("seed_digest", "c" * 64),
+        ("harness", "foreign-harness"),
+        ("harness_version", "2"),
+        ("candidate", "foreign-candidate"),
+        ("candidate_version", "2"),
+        ("inference_run_id", "foreign-run"),
+    ],
+)
+def test_recovery_rejects_integrity_valid_foreign_candidate(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    backend = FakeBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    runner.run(episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier())
+    record = runner.inspect("ep")
+    original = Path(record.candidate_manifest)
+    manifest = json.loads(original.read_text(encoding="utf-8"))
+    manifest[field] = value
+    manifest["digest"] = canonical_digest(
+        {key: item for key, item in manifest.items() if key != "digest"}
+    )
+    foreign = original.parent / "foreign-manifest.json"
+    foreign.write_text(json.dumps(manifest), encoding="utf-8")
+    # The foreign bundle is structurally valid and its content checks pass.
+    assert load_candidate(foreign).digest == manifest["digest"]
+    record.candidate_manifest = str(foreign)
+    record.candidate_digest = manifest["digest"]
+    record.phase = EpisodePhase.CANDIDATE_READY
+    store.save(record)
+
+    with pytest.raises(ContractError, match="CandidateBundle provenance mismatch"):
+        runner.recover("ep", inference=Inference(), candidate=Inference(), verifier=Verifier())
+    assert len(backend.executions) == 2
+    assert runner.inspect("ep").phase == EpisodePhase.FAILED
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("candidate_digest", "c" * 64),
+        ("verifier", "foreign-verifier"),
+        ("verifier_version", "2"),
+    ],
+)
+def test_completed_recovery_rechecks_result_provenance(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    backend = FakeBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    result = runner.run(
+        episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+    )
+    record = runner.inspect("ep")
+    path, digest = store.save_result(replace(result, **{field: value}))
+    record.verification_result = str(path)
+    record.verification_result_digest = digest
+    store.save(record)
+
+    with pytest.raises(ContractError, match="VerificationResult"):
+        runner.recover("ep", inference=Inference(), candidate=Inference(), verifier=Verifier())
+    assert len(backend.executions) == 2
+
+
+@pytest.mark.parametrize("field", ["environment_id", "run_id"])
+def test_completed_recovery_rechecks_fresh_verification_execution(
+    tmp_path: Path, field: str
+) -> None:
+    backend = FakeBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    runner.run(episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier())
+    record = runner.inspect("ep")
+    assert record.inference is not None and record.verification is not None
+    value = "foreign-environment" if field == "environment_id" else record.inference.run_id
+    record.verification = replace(record.verification, **{field: value})
+    store.save(record)
+    with pytest.raises(ContractError, match="execution provenance mismatch"):
+        runner.recover("ep", inference=Inference(), candidate=Inference(), verifier=Verifier())
+    assert len(backend.executions) == 2
+
+
+@pytest.mark.parametrize("field", ["environment_id", "allocation_id"])
+def test_stage_result_cannot_change_bound_execution_identity(tmp_path: Path, field: str) -> None:
+    class ForeignExecutionBackend(FakeBackend):
+        def _result(self, plan, artifact_dir, ref):
+            return replace(
+                super()._result(plan, artifact_dir, ref),
+                execution=replace(ref, **{field: "foreign-identity"}),
+            )
+
+    backend = ForeignExecutionBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(InfrastructureError, match="persisted Axern execution"):
+        runner.run(
+            episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+        )
+    assert len(backend.executions) == 1
+    assert runner.inspect("ep").candidate_manifest == ""
+
+
+def test_cancelled_episode_rejects_late_success_without_starting_verifier(tmp_path: Path) -> None:
+    class LateSuccessBackend(BlockingBackend):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+            ref = ExecutionRef(plan.environment_id, "run-late-success", "alloc-late-success")
+            self.executions.append(ref)
+            on_bound(ref)
+            self.bound.set()
+            assert self.released.wait(5)
+            return self._result(plan, artifact_dir, ref)
+
+    backend = LateSuccessBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    errors: list[Exception] = []
+
+    def execute() -> None:
+        try:
+            runner.run(
+                episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=Verifier()
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert backend.bound.wait(5)
+    runner.cancel("ep")
+    thread.join(5)
+    assert not thread.is_alive()
+    assert errors and isinstance(errors[0], RecoveryRequiredError)
+    record = runner.inspect("ep")
+    assert record.phase == EpisodePhase.CANCELLED
+    assert record.candidate_manifest == "" and record.verification is None
+    assert len(backend.executions) == 1

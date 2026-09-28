@@ -31,6 +31,8 @@ from axrun.qualification import QualificationResult, QualificationTargetResult
 from axrun.report import REPORT_FORMAT, report_markdown, verify_record
 from axrun.store import EpisodeStore
 from axrun.tasks import GitWorktreeTaskAdapter
+from axrun.trajectories.bundle import persist_trajectory_bundle
+from axrun.trajectories.schema import TrajectoryEvent
 
 
 def _episode(tmp_path: Path) -> ResolvedEpisode:
@@ -97,7 +99,7 @@ def _completed_store(
         "role": "inference",
         "base_commit": episode.task.config["base_commit"],
         "git": "git version 2.51.0",
-        "machine": "aarch64",
+        "machine": "x86_64",
         "python": "3.12.11",
         "working_directory": "/workspace",
         "workspace_empty": None,
@@ -148,6 +150,72 @@ def _completed_store(
     return store, Path(candidate.root) / candidate.files[0].bundle_path
 
 
+def _attach_trajectory(
+    store: EpisodeStore, tmp_path: Path, *, harness: str, harness_version: str
+) -> None:
+    record = store.load("episode")
+    assert record is not None and record.inference is not None
+    episode = store.load_spec("episode")
+    event = TrajectoryEvent(
+        1,
+        0,
+        "event-00000000",
+        None,
+        "session_start",
+        "runtime",
+        None,
+        None,
+        None,
+        {
+            "harness": harness,
+            "harness_version": harness_version,
+            "runtime_version": "1",
+            "tools": [],
+        },
+    )
+    trajectory_path = tmp_path / "trajectory.jsonl"
+    trajectory_path.write_text(json.dumps(event.as_dict()) + "\n", encoding="utf-8")
+    usage_path = tmp_path / "usage.json"
+    usage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "observations": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifacts = tuple(
+        Artifact(
+            f"/outputs/{path.name}",
+            str(path),
+            path.stat().st_size,
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            media_type,
+        )
+        for path, media_type in (
+            (trajectory_path, "application/x-ndjson"),
+            (usage_path, "application/json"),
+        )
+    )
+    bundle = persist_trajectory_bundle(
+        episode,
+        StageResult(record.inference, 0, "", artifacts),
+        destination=store.root / "trajectories",
+        trajectory_path="/outputs/trajectory.jsonl",
+        usage_path="/outputs/usage.json",
+        harness=harness,
+        harness_version=harness_version,
+    )
+    record.trajectory_manifest = str(Path(bundle.root) / "trajectory-manifest.json")
+    record.trajectory_digest = bundle.digest
+    store.save(record)
+
+
 def test_verify_record_rechecks_full_completed_digest_chain(tmp_path: Path) -> None:
     store, _ = _completed_store(tmp_path)
     report = verify_record(store, "episode")
@@ -160,6 +228,27 @@ def test_verify_record_rechecks_full_completed_digest_chain(tmp_path: Path) -> N
     assert report["inference"]["run_id"] == "run-inference"
     assert report["verification"]["run_id"] == "run-verification"
     assert "CandidateBundle" in report_markdown(report)
+
+
+def test_verify_record_accepts_matching_trajectory_harness(tmp_path: Path) -> None:
+    store, _ = _completed_store(tmp_path)
+    _attach_trajectory(store, tmp_path, harness="static-candidate", harness_version="1")
+
+    assert verify_record(store, "episode")["integrity_verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("harness", "harness_version"),
+    [("other-harness", "1"), ("static-candidate", "2")],
+)
+def test_verify_record_rejects_integrity_valid_trajectory_harness_mismatch(
+    tmp_path: Path, harness: str, harness_version: str
+) -> None:
+    store, _ = _completed_store(tmp_path)
+    _attach_trajectory(store, tmp_path, harness=harness, harness_version=harness_version)
+
+    with pytest.raises(ContractError, match="TrajectoryBundle provenance mismatch"):
+        verify_record(store, "episode")
 
 
 def test_verify_record_accepts_explicit_stage_zero_selection(tmp_path: Path) -> None:

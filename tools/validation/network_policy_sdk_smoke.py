@@ -19,7 +19,7 @@ from axern_sdk import AxernClient, SandboxNotFoundError
 
 from axrun.axern_backend import AxernBackend, _status_name
 from axrun.models import ExecutionRef, OutputSpec, StageNetworkPolicy, StagePlan
-from axrun.store import _atomic_write
+from axrun.store import atomic_write
 
 IMAGE = (
     "index.docker.io/library/python"
@@ -47,7 +47,7 @@ with open('/outputs/network.json', 'w', encoding='utf-8') as stream:
 
 
 def _persist_receipt(root: Path, receipt: dict[str, Any]) -> None:
-    _atomic_write(root / "receipt.json", (json.dumps(receipt, indent=2) + "\n").encode())
+    atomic_write(root / "receipt.json", (json.dumps(receipt, indent=2) + "\n").encode())
 
 
 def _probe(

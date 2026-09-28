@@ -272,3 +272,68 @@ def test_tunnel_model_preflight_failure_reports_only_proxy_safe_summary() -> Non
     assert error.details == summary.as_safe_dict()
     assert token not in str(error) and credential not in str(error)
     assert "response-secret" not in str(error)
+
+
+@pytest.mark.parametrize(
+    ("component", "reason"),
+    [
+        ("revoke", "tunnel_revoke_failed"),
+        ("connector", "connector_stop_failed"),
+        ("proxy", "model_proxy_stop_failed"),
+    ],
+)
+def test_partial_cleanup_retains_only_failed_resource_and_never_echoes_token(
+    component: str, reason: str
+) -> None:
+    secret = "never-echo-cleanup-token"
+    attempts = {"revoke": 0, "connector": 0, "proxy": 0}
+
+    def cleanup(name: str) -> None:
+        attempts[name] += 1
+        if name == component and attempts[name] == 1:
+            raise RuntimeError(secret)
+
+    class Proxy:
+        def stop(self):
+            cleanup("proxy")
+
+    class Client:
+        def revoke_tunnel_session(self, session_id, **_kwargs):
+            assert session_id == "session-pending"
+            cleanup("revoke")
+
+    class Connector:
+        def stop(self, **_kwargs):
+            cleanup("connector")
+
+    lifecycle = ModelTunnelLifecycle(client=Client(), proxy=Proxy(), model="test-model")
+    lifecycle._session_id = "session-pending"
+    lifecycle._connector = Connector()
+    with pytest.raises(DiagnosedInfrastructureError) as raised:
+        lifecycle.close()
+    assert raised.value.diagnostic_code == "model_tunnel_cleanup_failed"
+    assert raised.value.details == {"reason_code": reason}
+    assert secret not in str(raised.value) and secret not in repr(lifecycle)
+    assert attempts == {"revoke": 1, "connector": 1, "proxy": 1}
+    assert bool(lifecycle._session_id) is (component == "revoke")
+    assert (lifecycle._connector is not None) is (component == "connector")
+
+    lifecycle.close()
+    assert lifecycle._session_id == "" and lifecycle._connector is None
+    assert attempts["revoke"] == (2 if component == "revoke" else 1)
+    assert attempts["connector"] == (2 if component == "connector" else 1)
+    assert attempts["proxy"] == 2
+    lifecycle.close()
+    assert attempts["revoke"] == (2 if component == "revoke" else 1)
+    assert attempts["connector"] == (2 if component == "connector" else 1)
+
+
+def test_failed_revoke_prevents_restarting_lifecycle_over_pending_session() -> None:
+    class Proxy:
+        def start(self):
+            pytest.fail("pending session must be closed before restart")
+
+    lifecycle = ModelTunnelLifecycle(client=object(), proxy=Proxy(), model="test-model")
+    lifecycle._session_id = "session-pending"
+    with pytest.raises(InfrastructureError, match="already started"):
+        lifecycle.start(ExecutionRef("env", "run", "alloc"), object())

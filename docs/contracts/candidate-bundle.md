@@ -138,8 +138,11 @@ schema solely for compatibility.
 Schema and candidate versions are separate: the CandidateBundle schema describes
 the common manifest, while `candidate_version` describes an artifact contract.
 
-Potential future types such as a bounded `text-response` or immutable
-`environment-snapshot` require concrete benchmark semantics, qualification, and
-fresh-verification evidence before entering the catalog. In particular, an
-environment snapshot must wait for a public Axern snapshot-to-fresh-Allocation
-boundary and must not be emulated with a workspace tar.
+Potential future types such as a bounded `text-response` require concrete
+benchmark semantics, qualification and fresh-verification evidence before
+entering the catalog. Axrun does not accept an inference-rootfs candidate.
+Axern's released derived Environment capability is used only inside a fresh
+ProgramBench verifier, from its compile Run to isolated branch Runs; it is not
+a CandidateBundle identity or an inference-to-verifier bridge. Terminal-Bench
+2.1's shared-verifier contract therefore remains unsupported, not approximated
+with a workspace tar or promoted inference rootfs.
