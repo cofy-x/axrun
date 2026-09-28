@@ -14,13 +14,13 @@ closed catalog; they do not add benchmark-specific branches to the runner.
 ```text
 dataset-native row
   -> explicitly selected DatasetAdapter / resolver (exactly once)
-  -> ResolvedEpisode v1
+  -> versioned ResolvedEpisode (v2 materializes both stage network policies)
        TaskSpec
        inference + verification EnvironmentBinding
        HarnessSpec
        CandidateSpec
        VerifierSpec
-  -> closed catalog lookup and stage-specific qualification
+  -> closed catalog lookup, required benchmark admission and stage-specific qualification
   -> HarnessAdapter + CandidateCapturePlan
   -> fresh inference Run / Allocation
   -> sealed outputs and independent SHA-256 verification
@@ -107,6 +107,27 @@ A successful qualification target is reusable only for the identical resolved
 episode contract. It never proves a mutable tag, a different platform, or another
 stage image.
 
+The locked Flask task adds one benchmark-owned mandatory admission check, not a
+generic policy engine. `admit-swebench-flask-image` performs a separate model-free
+runtime audit using the public SDK. The closed resolver requires the resulting
+receipt, and catalog/runner/recovery/report independently enforce its identity
+and qualified episode state. No normal option, caller-built adapter selection,
+or old private record supplies an alternative gate. `cancel` remains available
+for the original Run when evidence is damaged.
+
+Evidence binds source and runtime image digests separately, platform, row/assets,
+scanner implementation, import provenance and sealed public audit execution.
+This is caller-owned evidence, not an attestation against local-state forgery;
+hashing a caller-supplied `passed` value is not admission. Runtime scanning is
+required even when source provenance is fixed. A complete bounded scan only
+supports absence of locked signatures, not every unknown secret.
+
+V2 records explicit `deny_all` or `unrestricted` for each stage. Plans must
+realize, not override, that policy; only explicit unrestricted maps to the public
+SDK's omitted-policy behavior. Unknown values fail closed. V1 retains implicit
+deny-all and its original digest. Qualification and Flask stages are deny-all;
+a model Tunnel is a finite local port capability, not sandbox egress permission.
+
 ## Adding a benchmark
 
 A benchmark integration should be the narrowest vertical that proves the
@@ -134,15 +155,30 @@ effect of adding an adapter.
 
 | Family | Candidate boundary | Current status |
 | --- | --- | --- |
-| SWE-bench-style repository repair | `git-patch@1` | Synthetic vertical and one deliberately closed SWE-bench Verified instance are implemented |
+| SWE-bench-style repository repair | `git-patch@1` | Synthetic and closed Django paths are implemented; locked Flask is registered with mandatory runtime admission and has historical dedicated-tool acceptance, not general suite support |
 | Greenfield repository creation | `workspace-archive@1` | Static and real Claude Code verticals are implemented and accepted on the local arm64 development path |
 | ProgramBench-style file/project output | `workspace-archive@1` with an explicit seed-owned reference exclusion; verifier-internal setup may request a rootfs result | The 1.2.4 calculator fixture and closed official tty-clock and seqtk multi-Run verifiers are implemented; this is not general suite support |
-| Terminal benchmark, file-only subset | `workspace-archive@1` may be sufficient | Requires explicit task selection and a benchmark adapter; not implemented |
-| Terminal benchmark with packages or system-file changes | A successful finite setup Run may publish a derived Environment | Requires benchmark-specific phase semantics; mounts, secrets, processes, sockets, kernel state, and live services are not captured |
+| Terminal-Bench 2.1 official tasks | Shared verifier, incompatible with accepted candidate isolation | Unsupported; no inference-rootfs candidate or approximate workspace-archive substitution |
 | Text/API answer benchmarks | Future bounded `text-response` candidate | Not implemented; add only with a concrete benchmark and verifier |
 
 Openbench may supply reference tasks, official semantics, and parity evidence, but
 it is not an Axrun runtime dependency.
+
+ProgramBench's derived Environment is a verifier-internal compile-to-branch
+intermediate from a fresh verification Run, not inference state, a new candidate
+type or an implicit cross-episode cache. Workload completion and rootfs readiness
+are separate checks. Mounts, secrets, processes, sockets, kernel state and live
+services are not snapshot contents; branch assets remain explicit inputs.
+
+Implemented, accepted and registered are different claims: source code can exist
+before deployment acceptance; deployment evidence must name its exact path and
+versions; registration additionally requires a non-bypassable reviewed catalog
+path. Flask's historical acceptance was through dedicated tools, so CLI
+registration alone does not establish a new CLI deployment acceptance. An
+unsupported official contract remains unsupported even if its tracking issue is
+closed. The tty-clock partial parity limitation (#3) is unverified, and
+ProgramBench provenance (#6) still requires human submission review; both were
+closed as not planned, not repaired.
 
 ## Mini-SWE-agent policy
 
@@ -158,8 +194,8 @@ model canonical.
 
 Implemented now:
 
-- canonical `ResolvedEpisode v1` with task, stage bindings, harness, candidate,
-  verifier, and stable seed digest;
+- canonical episode contracts with task, stage bindings, harness, candidate,
+  verifier, stable seed digest and explicit v2 stage network policies;
 - closed adapter catalog and composed stage qualification;
 - independent harness and candidate contracts;
 - `git-patch@1` and `workspace-archive@1` CandidateBundles;
@@ -168,6 +204,9 @@ Implemented now:
   verifier, durable recovery record, and released-SDK derived-Environment reproducer;
 - a separately locked official seqtk instance with deterministic parity and real Claude Code
   inference-to-fresh-verification acceptance on Axern v0.11.3;
+- a locked registered Flask task/verifier pair with model-free actual-runtime image
+  admission, normal CLI resolution/recovery/reporting and historical dedicated-tool
+  deterministic/Claude acceptance on Axern v0.12.0;
 - static candidate and Claude Code harness paths;
 - canonical trajectory, per-inference-stage ModelProxy/Tunnel lifecycle, fresh offline
   verification, recovery, safe progress, and record verification.
@@ -175,7 +214,7 @@ Implemented now:
 Deliberately deferred:
 
 - general ProgramBench, suite scheduling, leaderboard, or Terminal-Bench support;
-- additional official instances beyond the locked tty-clock and seqtk verticals;
+- additional official instances beyond the explicitly locked verticals;
 - dynamic plugins, multi-tenant model proxying, a shared harness service, dataset
   hosting, suite scheduling, and leaderboard orchestration;
 - a second real harness without a benchmark-driven acceptance case.

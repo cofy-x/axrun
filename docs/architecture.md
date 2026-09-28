@@ -16,6 +16,7 @@ artifact boundary.
 | --- | --- | --- |
 | Canonical seed, task, harness, candidate and verifier selection | Axrun resolver/caller | immutable `spec.json` |
 | Task image and mount qualification evidence | Axrun + Axern Run | content-verified qualification record |
+| Mandatory benchmark image admission | benchmark task adapter + model-free Axern Run | caller-owned receipt binding source/runtime, assets, scanner and sealed audit evidence |
 | Task semantics and adapter-owned configuration | Axrun dataset adapter | immutable `spec.json` |
 | Task repository, tools and optional base commit | task OCI image | Axern Environment rootfs |
 | Run specification, lifecycle and terminal exit | Axern | Run |
@@ -47,6 +48,15 @@ The Run ID is persisted from the backend's binding callback before further data 
 The file lock protects short local transitions. It is not held while waiting for a remote Run. Cancellation serializes its bounded Axern control call with terminal publication so a late stage result cannot overwrite the accepted local cancellation.
 
 Qualification is a precondition on `new`, not another inference phase. The static catalog composes task, harness, candidate, and verifier requirements into separate bounded inference and verification targets. Each target binds the exact Environment, OCI digest, platform, working directory, public Run/Allocation, sealed evidence digest, and checks. Git requirements apply only to Git tasks; no-Git greenfield tasks require an empty working directory. Claude mount checks apply only to inference, the archive finalizer is checked only where candidate capture occurs, and verifier prerequisites are checked in the verification Environment. Qualification is deny-all, model-free, credential-free, and reusable only for the identical episode contract.
+
+A benchmark task may require a narrow, mandatory admission check in addition to
+runtime qualification. The locked Flask task requires an actual-runtime image
+audit receipt before qualification and verified qualification before execution,
+recovery or reporting. This requirement is selected from the reviewed task
+identity, not supplied by a caller-selected adapter or a `passed` flag. Normal
+CLI paths cannot bypass it by omitting qualification or restoring the older
+private stage-zero records. Cancellation is a rescue operation and can use the
+original public Run identity even when admission evidence is damaged.
 
 ## Output and isolation boundary
 
@@ -121,9 +131,9 @@ cleanroom and evaluation images, test-blob revision, and official-evaluator pari
 
 The first official-instance vertical locks `xorg62__tty-clock.f2f847c`, the upstream
 1.2.4 commit, its official amd64 cleanroom platform manifest, all six test-branch blob digests, and
-the complete expected/ignored test metadata. The benchmark-owned verifier snapshots the whole
-post-compile container and
-starts every branch from it. `axern-sdk==0.12.0` exposes that boundary as an explicitly requested
+the complete expected/ignored test metadata. The benchmark-owned verifier seals
+the post-compile rootfs of its fresh compile Run and starts every branch from it.
+`axern-sdk==0.12.0` exposes that boundary as an explicitly requested
 successful-Run rootfs result whose content-addressed image backs an ordinary derived Environment.
 Fresh Runs from that Environment receive isolated writable layers. Re-uploading only `/workspace`
 would still lose candidate build effects outside that path and is not official parity. A bounded
@@ -131,20 +141,31 @@ coordinator creates or recovers the compile Run and branch Runs while the adapte
 ProgramBench assets, failure taxonomy and scoring. The public-SDK-only reproducer audits the exact
 request/wait contract rather than guessing from method names.
 
+The returned derived Environment is an ordinary immutable Environment used only
+as verifier-internal intermediate state. It is not CandidateBundle or trajectory,
+does not come from inference, and is never an implicit cross-episode cache. The
+workload terminal result and rootfs result are confirmed separately; only a
+successful compile workload with a ready rootfs can start branch Runs. Assets
+previously supplied as mounts/inputs must be explicitly supplied to each branch.
+
 A second closed ProgramBench 1.2.4 vertical locks `lh3__seqtk.94e7070`. Its deterministic
 reference-build, public partial, and compile-failure paths were compared with the native
 evaluator on released Axern v0.11.3. A real Claude Code 2.1.205 candidate then produced sealed
 outputs and an immutable CandidateBundle; fresh compile and branch Runs returned 429/429 passed.
 That result proves this instance's execution path, not general ProgramBench support or submission
 eligibility under every benchmark integrity rule. The separate tty-clock partial TUI discrepancy
-remains unresolved.
+remains unresolved; closing Axrun #3 as not planned did not prove parity. Axrun
+#6's closure also did not make the behavioral-observation provenance review a
+submission-eligibility attestation: human integrity review remains required.
 
-A file-only Terminal-Bench subset may also reuse workspace archives. Tasks that preserve package
-or system-file changes across finite setup and test phases may use the rootfs-result
-boundary, but mounts, secrets, processes, sockets, kernel state, and services are deliberately not
-captured and require benchmark-specific modeling. Openbench is read-only research and parity input
-rather than a runtime dependency. Axrun intentionally has no dataset platform, scheduler, general
-workflow engine, plugin marketplace, or second real harness.
+Terminal-Bench 2.1's official tasks use a shared verifier. That contract is
+unsupported by Axrun's accepted CandidateBundle → fresh verifier boundary;
+Axrun does not promote the inference rootfs into a candidate or reinterpret a
+workspace archive as complete shared-state parity. Closing Axrun #9 as not
+planned documents this compatibility limit, not benchmark support. Openbench
+is read-only research/parity input, never a runtime dependency. Axrun has no
+dataset platform, scheduler, workflow engine, plugin marketplace, or second real
+harness.
 
 The first benchmark resolver is intentionally narrower than the contract. It accepts only the
 official enriched-v1 row for `django__django-12419`, validates its fixed repository, base commit,
@@ -156,12 +177,36 @@ manifest digest. Verification uploads only the candidate patch, evaluation scrip
 grader into a fresh deny-all Allocation. Expanding to another instance requires an explicit parser
 and offline-image qualification rather than shape-based acceptance.
 
-A separate, still unregistered `pallets__flask-5014` stage-zero resolver fixes its
-own official row and evaluator assets. Its released Axern v0.12.0 acceptance first
-gates the inference image against locked hidden-test and reference-patch
-signatures, then proves deterministic oracle parity and real Claude candidate
-verification across distinct Environments. Its explicit validation selection
-does not broaden the curated catalog or replace the pre-inference image audit.
+`pallets__flask-5014` is registered as the closed `swebench-flask-official@1`
+task/verifier pair. Its resolver locks the official row, complete seed digest,
+evaluation inputs, amd64 image contract and materialized harness defaults. The
+normal CLI selects the same reviewed composition for qualification, static or
+Claude inference, recovery, verification and local record/report checks; callers
+do not construct AdapterSelection. Its historical released Axern v0.12.0
+acceptance used dedicated validation tools for deterministic test-level oracle
+parity and two real Claude episodes. Registration is an implementation fact;
+that historical evidence does not itself prove a new CLI deployment acceptance
+or authorize other instances or official leaderboard submission.
+
+`admit-swebench-flask-image` runs a bounded, deny-all, model-free scan in a fresh
+Allocation rooted in the actual imported runtime image. Hidden test/reference
+signatures reach only a private temporary input and this audit Allocation; the
+audit consumes and removes that input before scanning, and never releases a
+model. The non-sensitive receipt binds the original source image and runtime
+digest separately, import provenance, platform, row/assets, implementation SHA,
+public audit Run/Allocation and independently verified sealed output. It rejects
+incomplete scans, identity/contract drift and corrupt evidence. A source-image
+scan cannot substitute for this runtime scan.
+
+Admission is caller-owned evidence, not a signing service. Receipt SHA-256 alone
+is not proof of origin, and a caller able to forge all local files remains outside
+the trust boundary. The result only proves absence of the locked signatures
+within the declared bounded scan, not absence of every unknown secret or all
+official-environment contamination. Import provenance is not proof of exact
+source/runtime filesystem equivalence. Admission references are copied into
+content-addressed resolver assets and rechecked along with qualification during
+execution/recovery and independent reporting. Hidden inputs never enter
+inference StagePlan, prompt, trajectory or CandidateBundle.
 
 The task image and harness image have separate ownership. An Environment is created from the task image. Claude inference additionally attaches the versioned Claude Code rootfs read-only at `/__claude_code`; static inference and verification do not. The task image and Claude rootfs each publish amd64 and arm64 variants, and a Run must select matching platform digests. Benchmark and production acceptance are canonical on amd64; arm64 exists for local source-cluster validation and does not change episode semantics. Both Claude variants expose the same mount ABI. This keeps benchmark state in the task image and reusable harness tooling in the mount image.
 
