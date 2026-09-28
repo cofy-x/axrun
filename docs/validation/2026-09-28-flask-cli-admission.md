@@ -257,3 +257,39 @@ the scoped scan/parity does not replace those reviews. Terminal-Bench 2.1 remain
 unsupported. Axrun #3's tty-clock partial parity is still unverified and #6's
 ProgramBench provenance still needs human submission review; their not-planned
 closures are not fixes or qualification evidence.
+
+## PR review follow-up and cold-start boundary
+
+The native acceptance above remains evidence for `b178e2a`; its identities and
+results were not rewritten or rerun during [PR #12](https://github.com/cofy-x/axrun/pull/12)
+preparation. Focused independent review identified additional caller-side
+identity and partial-cleanup gaps, addressed in signed follow-up commits:
+
+- `a627e0c`: reject adapter plans outside the resolved Environment before
+  execute/recover, reject persisted/bound/result identity drift, and verify the
+  actual public SDK Run identity before reading logs or sealed outputs.
+- `f696ed2`: retain real Proxy/socket and observer-thread handles after failed
+  cleanup so the next close retries the actual resource, not an empty wrapper.
+- `ca022ef`: directly close a Proxy socket when its serving thread never
+  started; avoid blocking `BaseServer.shutdown` or an invalid join in that case.
+- `3700b9d`: reject running/successful Runs without a public Allocation identity,
+  preserving unallocated placed/failed/cancelled Run handling.
+
+Regression tests cover the original adapter-override bypass, recovery identity
+substitution, the SDK's empty-string Allocation default, real HTTP server
+shutdown/socket-close failures, and real observer/Proxy thread join retries.
+These fixes do not change benchmark inputs, scoring, timeout, model configuration
+or network semantics. Final local quality gates pass with **569 tests**, zero
+typing errors, and successful sdist/wheel construction. Publication of this PR's
+head uses devbox-x only; it is not a merge, tag or release.
+
+Independent wheel installation and cold-start acceptance remain **pending**.
+After merge, install the built wheel in a clean directory outside the source
+checkout. Use an explicit public SDK context, fresh owned amd64 Environments,
+new admission evidence, a new episode, and a fixed static candidate. Invoke only
+the installed formal CLI for admission, resolve, qualify, run, completed resume,
+verify-record and report; then confirm terminal Runs/inactive Allocations and
+clean up owned Environments. Do not rely on validation tools, historical caller
+state, source-checkout imports, or implicit environment configuration. That
+separate acceptance requires no model credential and does not add a benchmark,
+harness or scheduler.
