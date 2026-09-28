@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from axrun.adapters import CommandVerifierAdapter, StaticCandidateHarness
 from axrun.adapters._candidate import persist_candidate
+from axrun.candidates import GitPatchCandidateAdapter
+from axrun.catalog import AdapterSelection
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
@@ -26,6 +30,7 @@ from axrun.models import (
 from axrun.qualification import QualificationResult, QualificationTargetResult
 from axrun.report import REPORT_FORMAT, report_markdown, verify_record
 from axrun.store import EpisodeStore
+from axrun.tasks import GitWorktreeTaskAdapter
 
 
 def _episode(tmp_path: Path) -> ResolvedEpisode:
@@ -47,9 +52,14 @@ def _episode(tmp_path: Path) -> ResolvedEpisode:
     )
 
 
-def _completed_store(tmp_path: Path) -> tuple[EpisodeStore, Path]:
+def _completed_store(
+    tmp_path: Path, *, task_identity: str = "git-worktree"
+) -> tuple[EpisodeStore, Path]:
     store = EpisodeStore(tmp_path / "state")
-    episode = _episode(tmp_path)
+    episode = replace(
+        _episode(tmp_path),
+        task=TaskSpec(task_identity, "1", {"base_commit": "b" * 40}),
+    )
     record = store.initialize(episode)
     patch = tmp_path / "candidate.patch"
     patch.write_bytes(b"patch")
@@ -150,6 +160,43 @@ def test_verify_record_rechecks_full_completed_digest_chain(tmp_path: Path) -> N
     assert report["inference"]["run_id"] == "run-inference"
     assert report["verification"]["run_id"] == "run-verification"
     assert "CandidateBundle" in report_markdown(report)
+
+
+def test_verify_record_accepts_explicit_stage_zero_selection(tmp_path: Path) -> None:
+    store, _ = _completed_store(tmp_path, task_identity="unregistered-stage-zero")
+    with pytest.raises(ContractError, match="unsupported task adapter"):
+        verify_record(store, "episode")
+    harness = StaticCandidateHarness()
+    selection = AdapterSelection(
+        task=GitWorktreeTaskAdapter(name="unregistered-stage-zero"),
+        inference=harness,
+        candidate=GitPatchCandidateAdapter(),
+        verifier=CommandVerifierAdapter(),
+        trajectory=None,
+        runtime=harness.runtime_requirements,
+    )
+    report = verify_record(store, "episode", selection=selection)
+    assert report["integrity_verified"] is True
+    assert report["task"] == {"identity": "unregistered-stage-zero", "version": "1"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("verifier", "other-verifier"), ("verifier_version", "2")],
+)
+def test_verify_record_rejects_result_verifier_identity_mismatch(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    store, _ = _completed_store(tmp_path)
+    record = store.load("episode")
+    assert record is not None
+    result = store.load_result(record.verification_result, record.verification_result_digest)
+    path, digest = store.save_result(replace(result, **{field: value}))
+    record.verification_result = str(path)
+    record.verification_result_digest = digest
+    store.save(record)
+    with pytest.raises(ContractError, match="verifier identity mismatch"):
+        verify_record(store, "episode")
 
 
 def test_verify_record_fails_closed_on_bundle_tampering(tmp_path: Path) -> None:

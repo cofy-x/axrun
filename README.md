@@ -93,6 +93,13 @@ working directory is explicit in the resolved harness configuration. The fresh v
 only the CandidateBundle patch, the content-addressed official evaluation script, and Axrun's
 packaged grader; it has deny-all networking and no inference mount, process, Tunnel, or credential.
 
+A separate, explicitly composed stage-zero validation for the locked official
+`pallets__flask-5014` instance completed deterministic oracle parity and two
+real Claude candidate → fresh verifier episodes on released Axern v0.12.0.
+See the [single-instance acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md).
+It is not catalog-registered, suite support, or a leaderboard submission claim;
+the pre-inference image-secrecy gate remains part of its explicit validation tool.
+
 ## Supported harness paths
 
 The Claude Code harness fixes the mount ABI at `/__claude_code/usr/local/bin/claude`, requires a digest-pinned rootfs image, and emits canonical `trajectory.jsonl`, `harness.log`, and `usage.json` plus the outputs declared by the selected CandidateAdapter. It contains no Git base, diff, patch, or workspace-archive implementation. The candidate finalizer runs after the agent in the same inference Allocation; finalization failure is infrastructure failure, including after an agent budget terminal state. Claude's native stream-json remains Allocation-local and its adapter maps it into `axrun.trajectory@1` before sealing.
@@ -164,8 +171,8 @@ The real `xorg62__tty-clock.f2f847c` vertical locks the ProgramBench 1.2.4 insta
 denominator, ignore decisions, hidden-blob revision/digests, and official `linux/amd64` cleanroom
 platform manifest. Its benchmark-owned verifier clears and extracts the candidate, compiles
 offline, seals the complete post-compile rootfs, and starts one fresh Run per active branch.
-`axern-sdk==0.11.4` exposes the successful-Run rootfs result as an immutable derived Environment;
-live validation proves fresh Runs preserve sealed state without sharing later mutations.
+`axern-sdk==0.12.0` exposes the successful-Run rootfs result as an immutable derived Environment;
+the linked earlier live validation on v0.11.4 proved fresh Runs preserve sealed state without sharing later mutations.
 Aggregation preserves missing tests as `not_run`, ignored tests, branch errors, and ProgramBench's
 last-result-wins behavior for duplicate full test names. A workspace archive remains an invalid
 substitute for this boundary. See the
@@ -244,7 +251,7 @@ Kova endpoint and token remain in the caller environment used by `kova-client`; 
 
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.11.4`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
+Axrun pins the released `axern-sdk==0.12.0`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
 
 ```bash
 uv sync --all-groups

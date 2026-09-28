@@ -28,16 +28,16 @@ wheels = [
 
 [[package]]
 name = "axern-sdk"
-version = "0.11.4"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/12/bc7ed102a2a5468efe974612fa64b604a47f9dca8621d918173e2603f2b2/axern_sdk-0.11.4.tar.gz", hash = "sha256:65d703f3774748f9296f58b5df82a8cff4e497bd8441540161735b8ad7153f52", size = 128165, upload-time = "2026-09-24T05:05:51.116Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/64/3f5f0c73cd1c10ff19071c1b313cf2f98463acb6ee5ac62201da8fc2503d/axern_sdk-0.12.0.tar.gz", hash = "sha256:0cfdbf56a2be54c747fd1f275e1751d067a22cc382b8b95540bd1e269d9416fd", size = 130363, upload-time = "2026-09-27T14:27:56.333Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/94/c47d2a50fe1adf9395148de916d0ead6299295216238c666b3fe461f9358/axern_sdk-0.11.4-py3-none-any.whl", hash = "sha256:9cb5b68e733de2ceb536451256fa6c099fa2159bb5e33dc99be1ffc8d1490b2f", size = 161706, upload-time = "2026-09-24T05:05:50.015Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/b6/df892501de56ee5ba3140b28c2e572084690bfe00b85bea1122bb20e2e11/axern_sdk-0.12.0-py3-none-any.whl", hash = "sha256:3adab79d86bd8dec8049f2ace66852ed76b27f6dda705876488b35302e4dd100", size = 161701, upload-time = "2026-09-27T14:27:55.191Z" },
 ]
 
 [[package]]
@@ -63,7 +63,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "axern-sdk", specifier = "==0.11.4" },
+    { name = "axern-sdk", specifier = "==0.12.0" },
     { name = "kova-client", marker = "extra == 'kova'", specifier = "==0.1.0rc9" },
 ]
 provides-extras = ["kova"]

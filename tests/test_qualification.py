@@ -4,11 +4,13 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from axrun.catalog import resolve_adapters
 from axrun.errors import ContractError
 from axrun.models import (
     Artifact,
@@ -21,8 +23,9 @@ from axrun.models import (
     TaskSpec,
     VerifierSpec,
 )
-from axrun.qualification import qualify_episode
+from axrun.qualification import load_qualification_result, qualify_episode
 from axrun.store import EpisodeStore
+from axrun.tasks import GitWorktreeTaskAdapter
 
 _TASK_IMAGE = f"registry.example/task@sha256:{'a' * 64}"
 _CLAUDE_IMAGE = f"registry.example/claude@sha256:{'b' * 64}"
@@ -156,6 +159,40 @@ def test_qualification_is_model_free_deny_all_and_digest_pinned(tmp_path: Path) 
         json.loads(evidence.read_text())["targets"][0]["output_sha256"]
         == result.targets[0].output_sha256
     )
+
+
+def test_explicit_selection_qualifies_closed_task_before_catalog_registration(
+    tmp_path: Path,
+) -> None:
+    registered = _episode(tmp_path)
+    episode = replace(
+        registered,
+        task=TaskSpec("closed-official-task", "1", {"base_commit": "d" * 40}),
+    )
+    selection = replace(
+        resolve_adapters(registered),
+        task=GitWorktreeTaskAdapter(name="closed-official-task"),
+    )
+    backend = Backend()
+    store = EpisodeStore(tmp_path / "closed-state")
+
+    with pytest.raises(ContractError, match="unsupported task adapter"):
+        qualify_episode(episode, client=Client(), backend=backend, store=store)
+    assert backend.plans == []
+
+    result = qualify_episode(
+        episode, client=Client(), backend=backend, store=store, selection=selection
+    )
+    assert [target.role for target in result.targets] == ["inference", "verification"]
+    assert len(backend.plans) == 2
+    assert load_qualification_result(store, episode, selection=selection) == result
+    assert (
+        qualify_episode(episode, client=Client(), backend=backend, store=store, selection=selection)
+        == result
+    )
+    assert len(backend.plans) == 2
+    with pytest.raises(ContractError, match="unsupported task adapter"):
+        load_qualification_result(store, episode)
 
 
 def test_qualification_rejects_mutable_environment_image(tmp_path: Path) -> None:

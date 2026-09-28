@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from axrun.adapters._candidate import load_candidate
+from axrun.catalog import AdapterSelection
 from axrun.errors import ContractError
 from axrun.models import EpisodePhase
 from axrun.progress.store import ProgressStore
@@ -17,7 +18,9 @@ from axrun.trajectories.bundle import load_trajectory_bundle
 REPORT_FORMAT = "axrun.acceptance@1"
 
 
-def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
+def verify_record(
+    store: EpisodeStore, episode_id: str, *, selection: AdapterSelection | None = None
+) -> dict[str, Any]:
     record = store.load(episode_id)
     if record is None:
         raise ContractError(f"episode record does not exist: {episode_id}")
@@ -30,7 +33,7 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
     if bool(record.qualification_result) != bool(record.qualification_result_digest):
         raise ContractError("qualification evidence record is incomplete")
     if record.qualification_result:
-        qualification = load_qualification_result(store, episode)
+        qualification = load_qualification_result(store, episode, selection=selection)
 
     if bool(record.candidate_manifest) != bool(record.candidate_digest):
         raise ContractError("CandidateBundle record is incomplete")
@@ -70,6 +73,11 @@ def verify_record(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
         result = store.load_result(record.verification_result, record.verification_result_digest)
         if candidate is None or result.candidate_digest != candidate.digest:
             raise ContractError("VerificationResult CandidateBundle mismatch")
+        if (result.verifier, result.verifier_version) != (
+            episode.verifier.identity,
+            episode.verifier.version,
+        ):
+            raise ContractError("VerificationResult verifier identity mismatch")
 
     if record.inference is not None and (
         record.inference.environment_id != episode.inference_environment.environment_id

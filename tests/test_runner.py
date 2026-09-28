@@ -223,6 +223,83 @@ def test_runner_uses_fresh_runs_and_persists_content_addressed_result(tmp_path: 
     assert len(backend.executions) == 2
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("verifier", "other-verifier"), ("verifier_version", "2")],
+)
+def test_runner_rejects_single_run_verifier_identity_mismatch(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    class WrongVerifier(Verifier):
+        def parse_result(self, result):
+            return replace(super().parse_result(result), **{field: value})
+
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=FakeBackend(), store=store)
+    with pytest.raises(ContractError, match="wrong verifier"):
+        runner.run(
+            episode(tmp_path),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=WrongVerifier(),
+        )
+    record = runner.inspect("ep")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.diagnostic_code == "AXRUN_VERIFIER_MISMATCH"
+    assert record.verification is not None
+    assert record.verification_result == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("verifier", "other-verifier"), ("verifier_version", "2")],
+)
+def test_runner_rejects_multi_run_verifier_identity_mismatch(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    class WrongMultiVerifier(Verifier):
+        multi_run = True
+
+        def verify(self, episode, candidate, *, backend, state_root, on_primary_bound):
+            del backend, state_root
+            primary = ExecutionRef(
+                episode.verification_environment.environment_id,
+                "run-multi-verification",
+                "alloc-multi-verification",
+            )
+            on_primary_bound(primary)
+            now = datetime.now(UTC).isoformat()
+            result = VerificationResult(
+                1,
+                candidate.digest,
+                "fake-verifier",
+                "1",
+                "passed",
+                "",
+                0,
+                "a" * 64,
+                now,
+                now,
+                1.0,
+            )
+            return replace(result, **{field: value}), primary
+
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=FakeBackend(), store=store)
+    with pytest.raises(ContractError, match="wrong verifier"):
+        runner.run(
+            episode(tmp_path),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=WrongMultiVerifier(),
+        )
+    record = runner.inspect("ep")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.diagnostic_code == "AXRUN_VERIFIER_MISMATCH"
+    assert record.verification is not None
+    assert record.verification_result == ""
+
+
 def test_runner_rejects_harness_network_policy_override_before_run(tmp_path: Path) -> None:
     resolved = replace(
         episode(tmp_path),
