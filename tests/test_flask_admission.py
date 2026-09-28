@@ -256,6 +256,9 @@ class _Backend:
         self.execute_count += 1
         assert lifecycle is None
         assert plan.network_policy == "deny_all"
+        assert plan.resources.request_cpu == "1"
+        assert plan.resources.request_memory == "2Gi"
+        assert plan.resources.limit_cpu == plan.resources.limit_memory == ""
         assert plan.env == {} and plan.secret_env == () and not plan.image_mounts
         assert plan.labels == {"axrun.stage": "admission"}
         assert len(plan.inputs) == 2

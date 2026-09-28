@@ -370,6 +370,18 @@ def test_runtime_removes_exact_private_input_before_shared_scan(
     assert (tmp_path / "audit.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_runtime_audit_enforces_its_deadline_without_optional_node_hard_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packaged, "AUDIT_TIMEOUT_SECONDS", 1)
+    scanner = "import json, sys\nrequest = json.load(sys.stdin)\nwhile True: pass\n"
+    completed, result, request = _runtime_execute(tmp_path, monkeypatch, scanner)
+    assert completed.returncode == 1
+    assert completed.stdout == completed.stderr == b""
+    assert result == {"error": "runtime_audit_deadline_exceeded"}
+    assert not request.exists()
+
+
 @pytest.mark.parametrize("failure", ["malformed_input", "private_exception", "allowlisted_error"])
 def test_runtime_failure_is_bounded_and_never_emits_private_exception_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str

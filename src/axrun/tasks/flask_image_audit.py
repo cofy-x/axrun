@@ -688,7 +688,7 @@ def runtime_scan_script() -> bytes:
     if _CONTAINER_CODE.count(marker) != 1:
         raise SecrecyError("scanner_contract_invalid")
     scanner = _CONTAINER_CODE.replace(marker, "request = _axrun_request")
-    script = f"""import contextlib, io, json, os, pathlib, platform, stat, sys
+    script = f"""import contextlib, io, json, os, pathlib, platform, signal, stat, sys
 
 REQUEST = {REQUEST_PATH!r}
 OUTPUT = {OUTPUT_PATH!r}
@@ -696,6 +696,12 @@ MAX_REQUEST = {MAX_REQUEST_BYTES}
 MAX_OUTPUT = {MAX_AUDIT_OUTPUT}
 ERROR_CODES = frozenset({tuple(sorted(_CONTAINER_ERROR_CODES))!r})
 SCANNER = {scanner!r}
+
+class AuditDeadline(BaseException):
+    pass
+
+def deadline(signum, frame):
+    raise AuditDeadline()
 
 def no_duplicates(pairs):
     result = {{}}
@@ -745,10 +751,16 @@ def execute():
     return {{"machine": platform.machine(), "request_deleted": True,
             "audit": audit}}, 0
 
+signal.signal(signal.SIGALRM, deadline)
+signal.alarm({AUDIT_TIMEOUT_SECONDS})
 try:
     result, exit_code = execute()
+except AuditDeadline:
+    result, exit_code = {{"error": "runtime_audit_deadline_exceeded"}}, 1
 except BaseException:
     result, exit_code = {{"error": "runtime_audit_failed_closed"}}, 1
+finally:
+    signal.alarm(0)
 
 try:
     destination = pathlib.Path(OUTPUT)

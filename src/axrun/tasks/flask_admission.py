@@ -287,7 +287,12 @@ def admit_flask_image(
                 ),
             ),
             resources=ResourceSpec(
-                request_cpu="1", limit_cpu="1", request_memory="2Gi", limit_memory="2Gi"
+                # Scheduling requests are explicit. Hard-limit capabilities are
+                # deployment-specific and are not required by this trusted,
+                # finite scanner's closed byte/count/time contract. Never probe
+                # and silently fall back from a rejected enforcement policy.
+                request_cpu="1",
+                request_memory="2Gi",
             ),
             timeout_seconds=scanner.AUDIT_TIMEOUT_SECONDS,
             labels={"axrun.stage": "admission"},
