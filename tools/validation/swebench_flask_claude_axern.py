@@ -334,6 +334,18 @@ def _parity_gate(
             or any(value is not True for value in checked["checks"].values())
         ):
             raise ValidationError("deterministic_test_level_parity_missing")
+        official_digest = {
+            "gold": parity._GOLD_GRADE_SHA256,
+            "known_bad": parity._KNOWN_BAD_GRADE_SHA256,
+            "empty": parity._EMPTY_REPORT_SHA256,
+        }[expected_case]
+        expected_count = None if expected_case == "empty" else 60
+        if checked["official_sha256"] != official_digest or any(
+            checked[field] != expected_count
+            or (expected_count is not None and type(checked[field]) is not int)
+            for field in ("expected_tests", "official_observed_tests", "axrun_observed_tests")
+        ):
+            raise ValidationError("deterministic_parity_locked_oracle_mismatch")
         record = state.load(episode_id)
         if (
             record is None
@@ -355,6 +367,45 @@ def _parity_gate(
             raise ValidationError("deterministic_parity_episode_mismatch")
         candidate = load_candidate(Path(record.candidate_manifest))
         result = state.load_result(record.verification_result, record.verification_result_digest)
+        expected_verdict = "passed" if expected_case == "gold" else "failed"
+        expected_score = (
+            None if expected_case == "empty" else 1.0 if expected_case == "gold" else 0.0
+        )
+        expected_diagnostic = (
+            "SWEBENCH_EMPTY_PATCH"
+            if expected_case == "empty"
+            else ""
+            if expected_case == "gold"
+            else "SWEBENCH_TESTS_FAILED"
+        )
+        if (
+            result.verdict != expected_verdict
+            or result.score != expected_score
+            or (expected_score is not None and type(result.score) not in (int, float))
+            or result.diagnostic_code != expected_diagnostic
+        ):
+            raise ValidationError("deterministic_parity_control_result_mismatch")
+        details = result.details
+        status_map = details.get("status_map")
+        if expected_case == "empty":
+            if (
+                details.get("classification") != "empty_patch_unscored"
+                or details.get("patch_successfully_applied") is not None
+                or status_map is not None
+                or details.get("tests_status") is not None
+                or details.get("missing_expected") is not None
+                or details.get("eval_exit_code") is not None
+            ):
+                raise ValidationError("deterministic_parity_control_details_mismatch")
+        elif (
+            details.get("classification") != "scored"
+            or details.get("patch_successfully_applied") is not True
+            or not isinstance(status_map, dict)
+            or len(cast(dict[str, Any], status_map)) != expected_count
+            or details.get("missing_expected") != []
+            or type(details.get("eval_exit_code")) is not int
+        ):
+            raise ValidationError("deterministic_parity_control_details_mismatch")
         if (
             candidate.digest != record.candidate_digest
             or result.candidate_digest != candidate.digest
@@ -520,10 +571,14 @@ def _cleanup_environments(
     if state is not None and episode_id:
         record = state.load(episode_id)
         if record is not None:
-            for execution in (record.inference, record.verification):
+            for execution in (*record.qualifications, record.inference, record.verification):
                 if execution is not None:
-                    run = client.get_run(execution.run_id)
-                    if parity._status_name(run) not in {
+                    try:
+                        run = client.get_run(execution.run_id)
+                        status = parity._status_name(run)
+                    except Exception as exc:
+                        raise ValidationError("run_status_unknown_retained_for_recovery") from exc
+                    if status not in {
                         "RUN_STATUS_SUCCEEDED",
                         "RUN_STATUS_FAILED",
                         "RUN_STATUS_CANCELLED",

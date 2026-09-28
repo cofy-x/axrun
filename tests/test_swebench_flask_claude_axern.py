@@ -15,7 +15,15 @@ from axern_sdk import SandboxNotFoundError
 from flask_admission_fixtures import RUNTIME_IMAGE, receipt, write_receipt
 
 from axrun.cli import _parser
-from axrun.models import EpisodePhase, ImageMountSpec, OutputSpec, StagePlan
+from axrun.models import (
+    EpisodePhase,
+    EpisodeRecord,
+    ExecutionRef,
+    ImageMountSpec,
+    OutputSpec,
+    StagePlan,
+)
+from axrun.store import EpisodeStore
 
 PATH = Path(__file__).parents[1] / "tools/validation/swebench_flask_claude_axern.py"
 SPEC = importlib.util.spec_from_file_location("swebench_flask_claude_axern", PATH)
@@ -183,6 +191,7 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
     value["admission_receipt_sha256"] = hashlib.sha256(admission_path.read_bytes()).hexdigest()
     records: dict[str, Any] = {}
     episodes: dict[str, Any] = {}
+    result_overrides: dict[str, dict[str, Any]] = {}
     queried: list[tuple[str, str]] = []
     for index, case in enumerate(("gold", "known_bad", "empty")):
         episode_id = f"flask-5014-{case}-{'a' * 31}{index}"
@@ -243,7 +252,11 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
                 "verification_result_digest": "d" * 64,
                 "verdict": "passed" if case == "gold" else "failed",
                 "score": 1.0 if case == "gold" else 0.0 if case == "known_bad" else None,
-                "diagnostic_code": "",
+                "diagnostic_code": ""
+                if case == "gold"
+                else "SWEBENCH_EMPTY_PATCH"
+                if case == "empty"
+                else "SWEBENCH_TESTS_FAILED",
                 "completed_resume_verified": True,
                 "record_integrity_verified": True,
                 "report_sha256": "1" * 64,
@@ -258,7 +271,11 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
                             claude._EMPTY_CHECKS if case == "empty" else claude._SCORING_CHECKS
                         )
                     },
-                    "official_sha256": "f" * 64,
+                    "official_sha256": {
+                        "gold": claude.parity._GOLD_GRADE_SHA256,
+                        "known_bad": claude.parity._KNOWN_BAD_GRADE_SHA256,
+                        "empty": claude.parity._EMPTY_REPORT_SHA256,
+                    }[case],
                     "axrun_verification_sha256": result_sha,
                     "expected_tests": None if case == "empty" else 60,
                     "official_observed_tests": None if case == "empty" else 60,
@@ -280,12 +297,29 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
         def load_result(self, path: str, digest: str) -> Any:
             assert digest == "d" * 64 and Path(path).is_file()
             case = Path(path).stem
-            return SimpleNamespace(
+            result = SimpleNamespace(
                 candidate_digest="c" * 64,
                 verdict="passed" if case == "gold" else "failed",
                 score=1.0 if case == "gold" else 0.0 if case == "known_bad" else None,
-                diagnostic_code="",
+                diagnostic_code=""
+                if case == "gold"
+                else "SWEBENCH_EMPTY_PATCH"
+                if case == "empty"
+                else "SWEBENCH_TESTS_FAILED",
+                details={
+                    "classification": "empty_patch_unscored" if case == "empty" else "scored",
+                    "patch_successfully_applied": None if case == "empty" else True,
+                    "status_map": None
+                    if case == "empty"
+                    else {f"synthetic-{index}": "PASSED" for index in range(60)},
+                    "tests_status": None if case == "empty" else {},
+                    "missing_expected": None if case == "empty" else [],
+                    "eval_exit_code": None if case == "empty" else 0,
+                },
             )
+            for key, value in result_overrides.get(case, {}).items():
+                setattr(result, key, value)
+            return result
 
     monkeypatch.setattr(claude, "EpisodeStore", Store)
 
@@ -305,6 +339,58 @@ def test_parity_gate_rechecks_every_run_and_result_digest(
     path = tmp_path / "receipt.json"
     _gate(path, value, task_image)
     assert len(queried) == 13
+    for field, altered in (
+        ("official_sha256", "0" * 64),
+        ("expected_tests", 1),
+        ("official_observed_tests", 1),
+        ("axrun_observed_tests", 1),
+    ):
+        old = value["cases"][0]["parity"][field]
+        value["cases"][0]["parity"][field] = altered
+        with pytest.raises(claude.ValidationError, match="locked_oracle_mismatch"):
+            _gate(path, value, task_image)
+        value["cases"][0]["parity"][field] = old
+    value["cases"][2]["parity"]["expected_tests"] = 0
+    with pytest.raises(claude.ValidationError, match="locked_oracle_mismatch"):
+        _gate(path, value, task_image)
+    value["cases"][2]["parity"]["expected_tests"] = None
+    value["cases"][0]["verdict"] = "failed"
+    with pytest.raises(claude.ValidationError, match="result_mismatch"):
+        _gate(path, value, task_image)
+    value["cases"][0]["verdict"] = "passed"
+    result_overrides["gold"] = {
+        "verdict": "failed",
+        "score": 0.0,
+        "diagnostic_code": "SWEBENCH_TESTS_FAILED",
+    }
+    with pytest.raises(claude.ValidationError, match="control_result_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
+    result_overrides["known_bad"] = {
+        "details": {
+            "classification": "scored",
+            "patch_successfully_applied": True,
+            "status_map": {f"synthetic-{index}": "PASSED" for index in range(59)},
+            "missing_expected": [],
+            "eval_exit_code": 0,
+        }
+    }
+    with pytest.raises(claude.ValidationError, match="control_details_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
+    result_overrides["empty"] = {
+        "details": {
+            "classification": "empty_patch_unscored",
+            "patch_successfully_applied": None,
+            "status_map": {},
+            "tests_status": None,
+            "missing_expected": None,
+            "eval_exit_code": None,
+        }
+    }
+    with pytest.raises(claude.ValidationError, match="control_details_mismatch"):
+        _gate(path, value, task_image)
+    result_overrides.clear()
     value["cases"][1]["parity"]["checks"]["all_test_statuses"] = False
     with pytest.raises(claude.ValidationError, match="test_level_parity_missing"):
         _gate(path, value, task_image)
@@ -370,6 +456,50 @@ def test_credential_scan_and_environment_cleanup(tmp_path: Path) -> None:
         == "deleted_and_absent"
     )
     assert deleted == ["env-i", "env-v"]
+
+
+@pytest.mark.parametrize("status", ["RUN_STATUS_RUNNING", "RUN_STATUS_UNKNOWN", "query_error"])
+def test_cleanup_preserves_environment_for_active_or_unknown_qualification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    store = EpisodeStore(tmp_path / "state")
+    store.save(
+        EpisodeRecord(
+            1,
+            "qualification-disconnected",
+            "a" * 64,
+            qualifications=(ExecutionRef("env-i", "run-qualify", "alloc-qualify"),),
+        )
+    )
+    deleted: list[str] = []
+    queried: list[str] = []
+    monkeypatch.setattr(claude.parity, "_status_name", lambda run: run.status)
+
+    class Client:
+        def get_run(self, run_id: str) -> SimpleNamespace:
+            queried.append(run_id)
+            if status == "query_error":
+                raise RuntimeError("private transport error must not escape reason code")
+            return SimpleNamespace(status=status)
+
+        def delete_environment(self, environment_id: str) -> None:
+            deleted.append(environment_id)
+
+    expected = (
+        "run_status_unknown_retained_for_recovery"
+        if status == "query_error"
+        else "active_run_retained_for_recovery"
+    )
+    with pytest.raises(claude.ValidationError, match=expected):
+        claude._cleanup_environments(
+            cast(Any, Client()),
+            ("env-i", "env-v"),
+            state=store,
+            episode_id="qualification-disconnected",
+        )
+    assert queried == ["run-qualify"]
+    assert deleted == []
+    assert store.load("qualification-disconnected").qualifications[0].run_id == "run-qualify"
 
 
 def test_sealed_outputs_reject_ambiguous_manifest_and_changed_digest(tmp_path: Path) -> None:
