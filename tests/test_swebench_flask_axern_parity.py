@@ -98,7 +98,12 @@ def test_sealed_output_is_independently_checked_against_manifest(tmp_path: Path)
     path = _write(tmp_path / "00-result.json", data)
     client = SimpleNamespace(
         get_sealed_output_manifest=lambda _run: [
-            SimpleNamespace(path="/outputs/result.json", status="available", size_bytes=len(data))
+            SimpleNamespace(
+                path="/outputs/result.json",
+                status="available",
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
         ]
     )
     digest = hashlib.sha256(data).hexdigest()
@@ -109,10 +114,98 @@ def test_sealed_output_is_independently_checked_against_manifest(tmp_path: Path)
     with pytest.raises(parity.ValidationError, match="digest_mismatch"):
         parity._sealed_summary(client, "run-1", "/outputs/result.json", path, "0" * 64)
     client.get_sealed_output_manifest = lambda _run: [
-        SimpleNamespace(path="/outputs/result.json", status="available", size_bytes=len(data) + 1)
+        SimpleNamespace(
+            path="/outputs/result.json",
+            status="available",
+            size_bytes=len(data) + 1,
+            sha256=digest,
+        )
     ]
     with pytest.raises(parity.ValidationError, match="manifest_mismatch"):
         parity._sealed_summary(client, "run-1", "/outputs/result.json", path, digest)
+    client.get_sealed_output_manifest = lambda _run: [
+        SimpleNamespace(
+            path="/outputs/result.json", status="available", size_bytes=len(data), sha256="0" * 64
+        )
+    ]
+    with pytest.raises(parity.ValidationError, match="manifest_mismatch"):
+        parity._sealed_summary(client, "run-1", "/outputs/result.json", path, digest)
+
+
+def test_case_uses_formal_resolver_and_qualification_without_selection_escape_hatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def cli(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs["command"])
+        if kwargs["command"][0] == "qualify":
+            raise parity.ValidationError("stop_before_any_inference")
+        return {"path": "private-spec"}
+
+    monkeypatch.setattr(parity, "run_cli", cli)
+    with pytest.raises(parity.ValidationError, match="stop_before_any_inference"):
+        parity._case(
+            case="gold",
+            episode_id="new-episode",
+            patch=tmp_path / "gold.patch",
+            official=tmp_path / "official-grade.json",
+            import_receipt={"immutable_ref": "fixed-runtime-image"},
+            row_path=tmp_path / "private-row.json",
+            image_import_receipt_path=tmp_path / "image-import.json",
+            admission_receipt_path=tmp_path / "admission.json",
+            context_config=tmp_path / "context.json",
+            wheelhouse=tmp_path / "wheelhouse",
+            inference_environment_id="env-i",
+            verification_environment_id="env-v",
+            client=SimpleNamespace(),
+            store=parity.EpisodeStore(tmp_path / "state"),
+            root=tmp_path,
+            seen_runs=set(),
+            seen_allocations=set(),
+        )
+    assert [command[0] for command in calls] == ["resolve-swebench-flask-official", "qualify"]
+    resolve = calls[0]
+    assert resolve[resolve.index("--admission-receipt") + 1] == str(tmp_path / "admission.json")
+    assert resolve[resolve.index("--candidate-file") + 1] == str(tmp_path / "gold.patch")
+    assert resolve[resolve.index("--harness") + 1] == "static-candidate"
+    assert not hasattr(parity, "_selection")
+
+
+def test_cli_context_transport_is_explicit_without_custom_client_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = {
+        "current_context": "local",
+        "contexts": {
+            "local": {
+                "endpoint": "127.0.0.1:25000",
+                "proxy_mode": "direct",
+                "tls": {
+                    "ca_cert": "caller-ca",
+                    "cert": "caller-cert",
+                    "key": "caller-key-path",
+                    "server_name": "gatewayd",
+                },
+            }
+        },
+    }
+    path = _write(tmp_path / "context.json", json.dumps(context).encode())
+    calls: list[tuple[str, str]] = []
+    fake_client = SimpleNamespace()
+
+    def client(path_value: str, name: str) -> SimpleNamespace:
+        calls.append((path_value, name))
+        return fake_client
+
+    monkeypatch.setattr(parity.AxernClient, "from_context", client)
+    assert parity._client("127.0.0.1:25000", path) is fake_client
+    assert calls == [(str(path), "local")]
+    context["contexts"]["local"]["tls"].pop("server_name")
+    _write(path, json.dumps(context).encode())
+    with pytest.raises(parity.ValidationError, match="transport_contract_missing"):
+        parity._client("127.0.0.1:25000", path)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("fail_on", [None, "known_bad"])
@@ -178,6 +271,18 @@ def test_main_runs_fixed_case_order_without_key_or_retry(
         return {"case": case, "parity": {"parity": True}}
 
     monkeypatch.setattr(parity, "_case", fake_case)
+    admission_calls: list[list[str]] = []
+
+    def fake_cli(**kwargs: Any) -> dict[str, Any]:
+        command = kwargs["command"]
+        admission_calls.append(command)
+        assert command[0] == "admit-swebench-flask-image"
+        assert "DEEPSEEK_API_KEY" not in parity.os.environ
+        output = Path(command[command.index("--output") + 1])
+        output.write_bytes(b"private model-free admission")
+        return {"status": "passed"}
+
+    monkeypatch.setattr(parity, "run_cli", fake_cli)
     monkeypatch.setattr(
         sys, "argv", ["swebench_flask_axern_parity.py", "--config", str(config_path)]
     )
@@ -194,5 +299,13 @@ def test_main_runs_fixed_case_order_without_key_or_retry(
     assert calls == (["gold", "known_bad"] if fail_on else ["gold", "known_bad", "empty"])
     assert outcome == (1 if fail_on else 0)
     assert receipt["status"] == ("failed_closed" if fail_on else "complete")
+    assert receipt["schema_version"] == "axrun.swebench-flask-axern-parity@2"
+    assert len(admission_calls) == 1
+    assert receipt["admission_receipt"] == "admission.json"
+    assert (
+        receipt["admission_receipt_sha256"]
+        == hashlib.sha256(b"private model-free admission").hexdigest()
+    )
+    assert receipt["execution_path"] == "formal_cli"
     assert "SECRET-SENTINEL" not in capsys.readouterr().out
     assert "SECRET-SENTINEL" not in json.dumps(receipt)

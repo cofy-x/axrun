@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One private real-Claude acceptance after locked Flask deterministic parity.
 
-This is deliberately not a catalog entry or a suite runner. The caller supplies
+This exercises the registered single-instance CLI, not a suite runner. The caller supplies
 two fresh, task-image-backed Environments in a closed, non-secret config. Full
 test identities and sealed artifacts remain in the Git-ignored evidence root;
 stdout and the receipt contain only bounded identities, digests and counts.
@@ -18,38 +18,28 @@ import re
 import sys
 import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
-from axern_sdk import AxernClient, SandboxNotFoundError, TunnelConnector
+from axern_sdk import AxernClient, SandboxNotFoundError
 
 from axrun.adapters._candidate import load_candidate
-from axrun.adapters.swebench_flask_official import SweBenchFlaskOfficialVerifierAdapter
-from axrun.axern_backend import AxernBackend
-from axrun.candidates import GitPatchCandidateAdapter
-from axrun.catalog import AdapterSelection, resolve_model_protocol
-from axrun.datasets.swebench_flask_official import SweBenchFlaskOfficialResolver
-from axrun.harnesses import ClaudeCodeHarness
-from axrun.lifecycle.base import CompositePreStartLifecycle
-from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
-from axrun.lifecycle.stage_progress import StageProgressObserver
-from axrun.models import EpisodePhase, HarnessSpec, StageNetworkPolicy, canonical_json
-from axrun.proxy.model import ModelProxy
-from axrun.qualification import qualify_episode
-from axrun.report import verify_record
-from axrun.runner import EpisodeRunner
+from axrun.catalog import AdapterSelection, resolve_adapters
+from axrun.models import EpisodePhase, StageNetworkPolicy, canonical_json
+from axrun.progress.store import ProgressStore
 from axrun.store import EpisodeStore
-from axrun.tasks import GitWorktreeTaskAdapter
-from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
+from axrun.tasks.flask_admission import load_flask_admission
+from axrun.tasks.flask_image_audit import OUTPUT_PATH as _ADMISSION_OUTPUT
 from axrun.trajectories.bundle import load_trajectory_bundle
 
 # Reuse the companion private validator's locked inputs and public-SDK checks.
 if __package__:
     from . import swebench_flask_axern_parity as parity
-    from . import swebench_flask_image_secrecy as image_secrecy
+    from .swebench_flask_cli import CliValidationError, run_cli
 else:
     import swebench_flask_axern_parity as parity
-    import swebench_flask_image_secrecy as image_secrecy
+    from swebench_flask_cli import CliValidationError, run_cli
 
 
 _EVIDENCE_ROOT = Path(__file__).parents[2] / ".axrun/validation/swebench-flask-5014"
@@ -59,26 +49,6 @@ _ROOTFS_IMAGE = (
 )
 _UPSTREAM = "https://api.deepseek.com/anthropic"
 _CREDENTIAL_ENV = "DEEPSEEK_API_KEY"
-_GRPC_STATUS_NAMES = frozenset(
-    {
-        "CANCELLED",
-        "UNKNOWN",
-        "INVALID_ARGUMENT",
-        "DEADLINE_EXCEEDED",
-        "NOT_FOUND",
-        "ALREADY_EXISTS",
-        "PERMISSION_DENIED",
-        "RESOURCE_EXHAUSTED",
-        "FAILED_PRECONDITION",
-        "ABORTED",
-        "OUT_OF_RANGE",
-        "UNIMPLEMENTED",
-        "INTERNAL",
-        "UNAVAILABLE",
-        "DATA_LOSS",
-        "UNAUTHENTICATED",
-    }
-)
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _EPISODE_ID = re.compile(r"^flask-5014-(?:gold|known_bad|empty)-[0-9a-f]{32}$")
 _PATH_KEYS = frozenset(
@@ -88,14 +58,11 @@ _PATH_KEYS = frozenset(
         "image_import_receipt",
         "wheelhouse",
         "parity_receipt",
-        "image_safety_receipt",
     }
 )
 _CONFIG_KEYS = _PATH_KEYS | {
     "endpoint",
     "parity_receipt_sha256",
-    "image_safety_receipt_sha256",
-    "image_safety_image_id",
     "inference_environment_id",
     "verification_environment_id",
     "claude_rootfs_image",
@@ -122,6 +89,10 @@ _PARITY_KEYS = {
     "environment_cleanup",
     "cases",
     "client_cleanup",
+    "admission_receipt",
+    "admission_receipt_sha256",
+    "execution_path",
+    "cli_commands",
 }
 _CASE_KEYS = {
     "case",
@@ -137,6 +108,9 @@ _CASE_KEYS = {
     "score",
     "diagnostic_code",
     "parity",
+    "completed_resume_verified",
+    "record_integrity_verified",
+    "report_sha256",
 }
 _SCORING_CHECKS = {
     "classification",
@@ -179,53 +153,6 @@ class ValidationError(parity.ValidationError):
     """A stable, non-sensitive failure reason."""
 
 
-class _TunnelCleanupEvidence:
-    """Track only public session identity in memory, never the connector token."""
-
-    def __init__(self, client: AxernClient) -> None:
-        self.client = client
-        self.session_id = ""
-        self.revoked = False
-        self.create_error_type = ""
-        self.create_grpc_status = ""
-
-    def create_tunnel_session(self, **kwargs: Any) -> Any:
-        try:
-            response = self.client.create_tunnel_session(**kwargs)
-        except Exception as exc:
-            name = type(exc).__name__
-            self.create_error_type = (
-                name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) else "unknown"
-            )
-            status_fn = getattr(exc, "code", None)
-            if callable(status_fn):
-                try:
-                    status = status_fn()
-                    status_name = getattr(status, "name", "")
-                    if status_name in _GRPC_STATUS_NAMES:
-                        self.create_grpc_status = status_name
-                except Exception:
-                    pass
-            raise
-        self.session_id = str(response.session.session_id)
-        return response
-
-    def revoke_tunnel_session(self, session_id: str, **kwargs: Any) -> Any:
-        result = self.client.revoke_tunnel_session(session_id, **kwargs)
-        self.revoked = bool(self.session_id and session_id == self.session_id)
-        return result
-
-    def connector_factory(self, **kwargs: Any) -> TunnelConnector:
-        # Connector receives the real released-SDK client. The token remains
-        # transient caller memory and never enters this evidence object's state.
-        return TunnelConnector(
-            client=self.client,
-            session=kwargs["session"],
-            client_token=kwargs["client_token"],
-            local_target=kwargs["local_target"],
-        )
-
-
 def _config(path: Path) -> dict[str, Any]:
     raw = parity._json_object(parity._bounded_file(path, max_bytes=1 << 20))
     if set(raw) != set(_CONFIG_KEYS):
@@ -254,8 +181,6 @@ def _config(path: Path) -> dict[str, Any]:
         or config["auto_compact_window"] != 786432
         or not 1 <= config["max_turns"] <= 200
         or _DIGEST.fullmatch(config["parity_receipt_sha256"]) is None
-        or _DIGEST.fullmatch(config["image_safety_receipt_sha256"]) is None
-        or re.fullmatch(r"sha256:[0-9a-f]{64}", config["image_safety_image_id"]) is None
     ):
         raise ValidationError("claude_config_identity_mismatch")
     # Model IDs are opaque to Axrun; these exact acceptance values are a caller
@@ -272,76 +197,24 @@ def _config(path: Path) -> dict[str, Any]:
     return config
 
 
-def _image_safety_gate(
-    path: Path,
-    expected_digest: str,
-    *,
-    expected_image_id: str,
-    row: dict[str, Any],
-    task_image: str,
-    image_import: dict[str, str],
-) -> str:
-    try:
-        receipt = parity._json_object(parity._locked_file(path, expected_digest, max_bytes=1 << 20))
-    except parity.ValidationError as exc:
-        raise ValidationError("image_safety_receipt_integrity_invalid") from exc
-    expected_keys = {
-        "schema_version",
-        "instance_id",
-        "row_sha256",
-        "source_image",
-        "image_id",
-        "test_patch_sha256",
-        "gold_patch_sha256",
-        "status",
-        "reason_code",
-    } | set(image_secrecy._AUDIT_FIELDS)
-    if set(receipt) != expected_keys:
-        raise ValidationError("image_safety_receipt_shape_invalid")
+def _admission_gate(
+    path: Path, expected_digest: str, *, client: AxernClient, task_image: str
+) -> dict[str, Any]:
+    # A source-only Docker receipt is not imported-runtime admission. Core owns
+    # the closed identity, scanner-version and recomputed full-scan checks.
+    checked = load_flask_admission(path, task_image=task_image, expected_sha256=expected_digest)
+    execution = checked["execution"]
+    parity._terminal_execution(client, execution["run_id"], execution["allocation_id"])
+    manifest = client.get_sealed_output_manifest(execution["run_id"])
+    matches = [item for item in manifest if item.path == _ADMISSION_OUTPUT]
     if (
-        receipt["schema_version"] != image_secrecy.SCHEMA
-        or receipt["instance_id"] != "pallets__flask-5014"
-        or receipt["row_sha256"] != parity._ROW_SHA256
-        or receipt["source_image"] != parity._SOURCE_IMAGE
-        or receipt["source_image"] != image_import["source_ref"]
-        or receipt["image_id"] != expected_image_id
-        or task_image != image_import["immutable_ref"]
-        or receipt["image_head"] != image_secrecy.IMAGE_HEAD
-        or receipt["test_patch_sha256"]
-        != hashlib.sha256(str(row["test_patch"]).encode()).hexdigest()
-        or receipt["gold_patch_sha256"] != hashlib.sha256(str(row["patch"]).encode()).hexdigest()
+        len(matches) != 1
+        or matches[0].status != "available"
+        or int(matches[0].size_bytes) != checked["sealed_size_bytes"]
+        or str(matches[0].sha256) != checked["sealed_sha256"]
     ):
-        raise ValidationError("image_safety_identity_mismatch")
-    details = {key: receipt[key] for key in image_secrecy._AUDIT_FIELDS}
-    try:
-        checked = image_secrecy._check_audit(details, int(receipt["test_target_count"]))
-        recomputed_status, recomputed_reason = image_secrecy._status(checked)
-    except (image_secrecy.SecrecyError, TypeError, ValueError) as exc:
-        raise ValidationError("image_safety_attestation_invalid") from exc
-    if (
-        type(receipt["test_target_count"]) is not int
-        or receipt["test_target_count"] <= 0
-        or type(receipt["gold_target_count"]) is not int
-        or receipt["gold_target_count"] <= 0
-        or receipt["status"] != "passed"
-        or receipt["reason_code"] != "no_locked_patch_signatures_reachable"
-        or recomputed_status != receipt["status"]
-        or recomputed_reason != receipt["reason_code"]
-    ):
-        raise ValidationError("image_safety_not_passed")
-    return expected_digest
-
-
-def _selection() -> AdapterSelection:
-    claude = ClaudeCodeHarness()
-    return AdapterSelection(
-        task=GitWorktreeTaskAdapter(name="swebench-flask-official"),
-        inference=claude,
-        candidate=GitPatchCandidateAdapter(),
-        verifier=SweBenchFlaskOfficialVerifierAdapter(),
-        trajectory=ClaudeCodeTrajectoryAdapter(),
-        runtime=claude.runtime_requirements,
-    )
+        raise ValidationError("runtime_admission_public_seal_mismatch")
+    return checked
 
 
 def _run_identity(client: AxernClient, raw: object, seen: set[str]) -> tuple[str, str]:
@@ -375,7 +248,7 @@ def _parity_gate(
 ) -> tuple[str, set[str], set[str]]:
     receipt = parity._json_object(parity._locked_file(path, expected_digest, max_bytes=1 << 20))
     if set(receipt) != _PARITY_KEYS or (
-        receipt["schema_version"] != "axrun.swebench-flask-axern-parity@1"
+        receipt["schema_version"] != "axrun.swebench-flask-axern-parity@2"
         or receipt["status"] != "complete"
         or receipt["platform"] != "linux/amd64"
         or receipt["axern_sdk"] != parity._SDK_VERSION
@@ -384,6 +257,20 @@ def _parity_gate(
         or receipt["oracle_receipt_sha256"] != parity._ORACLE_RECEIPT_SHA256
         or receipt["environment_cleanup"] != "caller_owned_retained"
         or receipt["client_cleanup"] != "closed"
+        or receipt["admission_receipt"] != "admission.json"
+        or not isinstance(receipt["admission_receipt_sha256"], str)
+        or _DIGEST.fullmatch(receipt["admission_receipt_sha256"]) is None
+        or receipt["execution_path"] != "formal_cli"
+        or receipt["cli_commands"]
+        != [
+            "admit-swebench-flask-image",
+            "resolve-swebench-flask-official",
+            "qualify",
+            "run",
+            "resume",
+            "verify-record",
+            "report",
+        ]
     ):
         raise ValidationError("deterministic_parity_receipt_invalid")
     old_environments = (
@@ -403,14 +290,32 @@ def _parity_gate(
     cases = cast(list[Any], raw_cases)
     if len(cases) != 3:
         raise ValidationError("deterministic_parity_cases_invalid")
+    _admission_gate(
+        path.parent / "admission.json",
+        receipt["admission_receipt_sha256"],
+        client=client,
+        task_image=task_image,
+    )
     state = EpisodeStore(path.parent / "state")
-    seen_runs: set[str] = set()
-    seen_allocations: set[str] = set()
+    admitted = load_flask_admission(
+        path.parent / "admission.json",
+        task_image=task_image,
+        expected_sha256=receipt["admission_receipt_sha256"],
+    )
+    seen_runs: set[str] = {admitted["execution"]["run_id"]}
+    seen_allocations: set[str] = {admitted["execution"]["allocation_id"]}
     for expected_case, raw_item in zip(("gold", "known_bad", "empty"), cases, strict=True):
         if not isinstance(raw_item, dict):
             raise ValidationError("deterministic_parity_case_shape_invalid")
         item = cast(dict[str, Any], raw_item)
-        if set(item) != _CASE_KEYS or item["case"] != expected_case:
+        if (
+            set(item) != _CASE_KEYS
+            or item["case"] != expected_case
+            or item["completed_resume_verified"] is not True
+            or item["record_integrity_verified"] is not True
+            or not isinstance(item["report_sha256"], str)
+            or _DIGEST.fullmatch(item["report_sha256"]) is None
+        ):
             raise ValidationError("deterministic_parity_case_shape_invalid")
         episode_id = item["episode_id"]
         if not isinstance(episode_id, str) or _EPISODE_ID.fullmatch(episode_id) is None:
@@ -500,26 +405,6 @@ def _parity_gate(
                 raise ValidationError("deterministic_parity_execution_mismatch")
             seen_allocations.add(allocation_id)
     return expected_digest, seen_runs, seen_allocations
-
-
-def _model_harness(config: dict[str, Any]) -> HarnessSpec:
-    return HarnessSpec(
-        "claude-code",
-        "2.1.205",
-        config={
-            "mount_image": config["claude_rootfs_image"],
-            "model": config["model"],
-            "default_opus_model": config["default_opus_model"],
-            "default_sonnet_model": config["default_sonnet_model"],
-            "default_haiku_model": config["default_haiku_model"],
-            "subagent_model": config["subagent_model"],
-            "effort_level": config["effort_level"],
-            "auto_compact_window": config["auto_compact_window"],
-            "max_turns": config["max_turns"],
-            "working_directory": "/testbed",
-            "disallowed_tools": ["WebFetch", "WebSearch"],
-        },
-    )
 
 
 def _assert_safe_plan(episode: Any, selection: AdapterSelection, credential: str) -> None:
@@ -657,7 +542,6 @@ def _cleanup_environments(
 def _execute(
     config: dict[str, Any], root: Path, receipt: dict[str, Any], client: AxernClient
 ) -> None:
-    row = parity._official_row(config["row"])
     image_import = parity._image_import_receipt(config["image_import_receipt"])
     task_image = image_import["immutable_ref"]
     parity_digest, old_runs, old_allocations = _parity_gate(
@@ -670,47 +554,38 @@ def _execute(
             config["verification_environment_id"],
         ),
     )
+    parity_receipt = parity._json_object(
+        parity._locked_file(config["parity_receipt"], parity_digest)
+    )
+    admission_path = config["parity_receipt"].parent / parity_receipt["admission_receipt"]
+    admission = _admission_gate(
+        admission_path,
+        parity_receipt["admission_receipt_sha256"],
+        client=client,
+        task_image=task_image,
+    )
+    if admission["import_provenance"] != image_import:
+        raise ValidationError("model_runtime_import_provenance_mismatch")
     for key in ("inference_environment_id", "verification_environment_id"):
         parity._check_environment(client, config[key], task_image)
     receipt["environment_cleanup"] = "pending"
-    safety_digest = _image_safety_gate(
-        config["image_safety_receipt"],
-        config["image_safety_receipt_sha256"],
-        expected_image_id=config["image_safety_image_id"],
-        row=row,
-        task_image=task_image,
-        image_import=image_import,
-    )
-    receipt["image_safety_receipt_sha256"] = safety_digest
-    receipt["image_safety_status"] = "passed"
     credential = os.environ.get(_CREDENTIAL_ENV, "")
     if not credential:
         raise ValidationError("caller_model_credential_missing")
-    try:
-        receipt["task_image_source"] = parity._SOURCE_IMAGE
-        receipt["task_image_runtime"] = task_image
-        receipt["claude_rootfs_image"] = config["claude_rootfs_image"]
-        receipt["parity_receipt_sha256"] = parity_digest
-        parity._persist(root, receipt)
-        backend = AxernBackend(client)
-        store = EpisodeStore(root / "state")
-        episode_id = f"flask-5014-claude-{uuid.uuid4().hex}"
-        episode = SweBenchFlaskOfficialResolver().resolve(
-            row,
-            asset_dir=root / "resolved-assets",
-            episode_id=episode_id,
-            inference_environment_id=config["inference_environment_id"],
-            verification_environment_id=config["verification_environment_id"],
-            task_image=task_image,
-            image_import_receipt=image_import,
-            wheelhouse_dir=config["wheelhouse"],
-            harness=_model_harness(config),
-        )
-        selected = _selection()
-        _assert_safe_plan(episode, selected, credential)
-        receipt["episode_id"] = episode_id
-        receipt["seed_digest"] = episode.seed_digest
-        receipt["model_config"] = {
+    episode_id = f"flask-5014-claude-{uuid.uuid4().hex}"
+    episode_path = root / "episode.json"
+    state_dir = root / "state"
+    log_dir = root / "cli"
+    receipt.update(
+        episode_id=episode_id,
+        task_image_source=parity._SOURCE_IMAGE,
+        task_image_runtime=task_image,
+        claude_rootfs_image=config["claude_rootfs_image"],
+        parity_receipt_sha256=parity_digest,
+        admission_receipt_sha256=parity_receipt["admission_receipt_sha256"],
+        execution_path="formal_cli",
+        cli_commands=[],
+        model_config={
             key: config[key]
             for key in (
                 "model_upstream_url",
@@ -723,190 +598,224 @@ def _execute(
                 "auto_compact_window",
                 "max_turns",
             )
-        }
-        parity._persist(root, receipt)
-        qualification = qualify_episode(
-            episode, client=client, backend=backend, store=store, selection=selected
+        },
+    )
+    parity._persist(root, receipt)
+
+    def invoke(command: list[str], *, model_options: tuple[str, ...] = ()) -> dict[str, Any]:
+        result = run_cli(
+            state_dir=state_dir,
+            context_config=config["context_config"],
+            command=command,
+            log_dir=log_dir,
+            label=command[0],
+            model_options=model_options,
         )
-        qualifying: list[dict[str, str]] = []
-        for target in qualification.targets:
-            if target.run_id in old_runs or target.allocation_id in old_allocations:
-                raise ValidationError("claude_qualification_not_fresh")
-            parity._terminal_execution(client, target.run_id, target.allocation_id)
-            checks = target.checks
-            if target.role == "inference" and (
-                checks.get("claude", {}).get("mount_readonly") is not True
-                or checks.get("claude", {}).get("node_version") != "v22.23.2"
-                or "2.1.205 (Claude Code)" not in checks.get("claude", {}).get("version", "")
-            ):
-                raise ValidationError("claude_rootfs_qualification_failed")
-            qualifying.append(
-                {
-                    "role": target.role,
-                    "run_id": target.run_id,
-                    "allocation_id": target.allocation_id,
-                    "output_sha256": target.output_sha256,
-                }
-            )
-        receipt["qualification"] = qualifying
+        receipt["cli_commands"].append(command[0])
         parity._persist(root, receipt)
-        protocol = resolve_model_protocol(selected.runtime)
-        if protocol is None:
-            raise ValidationError("claude_model_protocol_missing")
-        proxy = ModelProxy(
-            upstream_url=config["model_upstream_url"],
-            credential=credential,
-            protocol=protocol,
-            connect_timeout_seconds=10,
-            read_timeout_seconds=300,
+        return result
+
+    invoke(
+        [
+            "resolve-swebench-flask-official",
+            str(config["row"]),
+            "--episode-id",
+            episode_id,
+            "--task-image",
+            task_image,
+            "--image-import-receipt",
+            str(config["image_import_receipt"]),
+            "--admission-receipt",
+            str(admission_path),
+            "--wheelhouse-dir",
+            str(config["wheelhouse"]),
+            "--assets-dir",
+            str(root / "resolved-assets"),
+            "--harness",
+            "claude-code",
+            "--claude-mount-image",
+            config["claude_rootfs_image"],
+            "--model",
+            config["model"],
+            "--claude-default-opus-model",
+            config["default_opus_model"],
+            "--claude-default-sonnet-model",
+            config["default_sonnet_model"],
+            "--claude-default-haiku-model",
+            config["default_haiku_model"],
+            "--claude-subagent-model",
+            config["subagent_model"],
+            "--claude-effort-level",
+            config["effort_level"],
+            "--claude-auto-compact-window",
+            str(config["auto_compact_window"]),
+            "--max-turns",
+            str(config["max_turns"]),
+            "--claude-disallowed-tools",
+            "WebFetch",
+            "WebSearch",
+            "--inference-environment",
+            config["inference_environment_id"],
+            "--verification-environment",
+            config["verification_environment_id"],
+            "--output",
+            str(episode_path),
+        ]
+    )
+    store = EpisodeStore(state_dir)
+    qualification = invoke(["qualify", str(episode_path)])
+    episode = store.load_spec(episode_id)
+    selected = resolve_adapters(episode)
+    _assert_safe_plan(episode, selected, credential)
+    receipt["seed_digest"] = episode.seed_digest
+    qualifying: list[dict[str, str]] = []
+    for target in qualification["targets"]:
+        if target["run_id"] in old_runs or target["allocation_id"] in old_allocations:
+            raise ValidationError("claude_qualification_not_fresh")
+        parity._terminal_execution(client, target["run_id"], target["allocation_id"])
+        checks = target["checks"]
+        if target["role"] == "inference" and (
+            checks.get("claude", {}).get("mount_readonly") is not True
+            or checks.get("claude", {}).get("node_version") != "v22.23.2"
+            or "2.1.205 (Claude Code)" not in checks.get("claude", {}).get("version", "")
+        ):
+            raise ValidationError("claude_rootfs_qualification_failed")
+        qualifying.append(
+            {key: target[key] for key in ("role", "run_id", "allocation_id", "output_sha256")}
         )
-        tunnel_evidence = _TunnelCleanupEvidence(client)
-        tunnel = ModelTunnelLifecycle(
-            client=tunnel_evidence,
-            proxy=proxy,
-            model=config["model"],
-            connector_factory=tunnel_evidence.connector_factory,
-        )
-        observer = StageProgressObserver(episode_id=episode_id, store=store, proxy=proxy)
-        lifecycle = CompositePreStartLifecycle(tunnel, observer)
-        try:
-            result = EpisodeRunner(backend=backend, store=store).run(
-                episode,
-                inference=selected.inference,
-                candidate=selected.candidate,
-                verifier=selected.verifier,
-                trajectory=selected.trajectory,
-                inference_lifecycle=lifecycle,
-            )
-        finally:
-            lifecycle.close()
-            tunnel.close()
-            proxy.stop()
-            receipt["model_proxy_cleanup"] = "stopped"
-            receipt["tunnel_cleanup"] = (
-                "revoked"
-                if tunnel_evidence.revoked
-                else "not_started"
-                if not tunnel_evidence.session_id
-                else "failed_or_ambiguous"
-            )
-            receipt["tunnel_setup"] = {
-                "session_created": bool(tunnel_evidence.session_id),
-                "create_error_type": tunnel_evidence.create_error_type,
-                "create_grpc_status": tunnel_evidence.create_grpc_status,
-            }
-            last_summary = proxy.last_summary
-            if last_summary is not None:
-                receipt["model_last_summary"] = last_summary.as_safe_dict()
-        if receipt["tunnel_cleanup"] != "revoked":
-            raise ValidationError("claude_tunnel_cleanup_unproven")
-        summaries = proxy.summaries
-        if (
-            not summaries
-            or summaries[0].method != "POST"
-            or summaries[0].path != "/v1/messages"
-            or summaries[0].status != 200
-            or summaries[0].reason_code != "upstream_response"
-        ):
-            raise ValidationError("claude_model_preflight_not_proven")
-        try:
-            _target = proxy.local_target
-        except Exception:
-            receipt["model_proxy_cleanup"] = "stopped"
-        else:
-            raise ValidationError("claude_model_proxy_still_running")
-        record = store.load(episode_id)
-        if (
-            record is None
-            or record.phase != EpisodePhase.COMPLETED
-            or record.inference is None
-            or record.verification is None
-            or not record.candidate_manifest
-            or not record.trajectory_manifest
-            or not record.verification_result
-        ):
-            raise ValidationError("claude_episode_not_complete")
-        inference = record.inference
-        verification = record.verification
-        if (
-            inference.run_id == verification.run_id
-            or inference.allocation_id == verification.allocation_id
-            or any(value.run_id in old_runs for value in (inference, verification))
-            or any(value.allocation_id in old_allocations for value in (inference, verification))
-            or inference.environment_id != config["inference_environment_id"]
-            or verification.environment_id != config["verification_environment_id"]
-        ):
-            raise ValidationError("claude_verification_not_fresh")
-        parity._terminal_execution(client, inference.run_id, inference.allocation_id)
-        parity._terminal_execution(client, verification.run_id, verification.allocation_id)
-        sealed = _sealed_outputs(client, inference.run_id, root)
-        candidate = load_candidate(Path(record.candidate_manifest))
-        trajectory = load_trajectory_bundle(Path(record.trajectory_manifest))
-        if (
-            candidate.digest != record.candidate_digest
-            or trajectory.digest != record.trajectory_digest
-            or result.candidate_digest != candidate.digest
-            or len(candidate.files) != 1
-            or candidate.files[0].role != "patch"
-            or candidate.files[0].sha256 != sealed["candidate.patch"]["sha256"]
-            or candidate.files[0].size_bytes != sealed["candidate.patch"]["bytes"]
-            or trajectory.trajectory.sha256 != sealed["trajectory.jsonl"]["sha256"]
-            or trajectory.usage.sha256 != sealed["usage.json"]["sha256"]
-        ):
-            raise ValidationError("claude_bundle_integrity_mismatch")
-        loaded = store.load_result(record.verification_result, record.verification_result_digest)
-        if loaded != result:
-            raise ValidationError("claude_result_digest_mismatch")
-        report = verify_record(store, episode_id, selection=selected)
-        if (
-            report["integrity_verified"] is not True
-            or report["candidate_digest"] != candidate.digest
-            or report["trajectory_digest"] != trajectory.digest
-            or report["verification_result_digest"] != record.verification_result_digest
-            or report["verdict"] != result.verdict
-            or report["score"] != result.score
-        ):
-            raise ValidationError("claude_record_integrity_mismatch")
-        verification_dir = root / "state" / "artifacts" / episode_id / "verification"
-        verification_sealed = {
-            "verification.json": parity._sealed_summary(
-                client,
-                verification.run_id,
-                "/outputs/verification.json",
-                verification_dir / "00-verification.json",
-                result.output_digest,
-            ),
-            "verifier.log": parity._sealed_summary(
-                client,
-                verification.run_id,
-                "/outputs/verifier.log",
-                verification_dir / "01-verifier.log",
-                str(result.details["test_output_sha256"]),
-            ),
-        }
-        receipt.update(
-            inference={"run_id": inference.run_id, "allocation_id": inference.allocation_id},
-            verification={
-                "run_id": verification.run_id,
-                "allocation_id": verification.allocation_id,
-            },
-            sealed_outputs=sealed,
-            verification_sealed_outputs=verification_sealed,
-            candidate_digest=candidate.digest,
-            trajectory_digest=trajectory.digest,
-            trajectory_event_count=trajectory.event_count,
-            verification_result_digest=record.verification_result_digest,
-            record_integrity_verified=True,
-            verdict=result.verdict,
-            score=result.score,
-            diagnostic_code=result.diagnostic_code,
-            test_summary=_counts(result.details),
-            model_preflight={"status": 200, "reason_code": "upstream_response"},
-            model_request_count=len(summaries),
-        )
-        parity._persist(root, receipt)
-    finally:
-        parity._persist(root, receipt)
+    if [target["role"] for target in qualifying] != ["inference", "verification"]:
+        raise ValidationError("claude_qualification_incomplete")
+    receipt["qualification"] = qualifying
+    parity._persist(root, receipt)
+    produced = invoke(
+        ["run", str(episode_path)],
+        model_options=(
+            "--model-upstream-url",
+            config["model_upstream_url"],
+            "--model-credential-env",
+            _CREDENTIAL_ENV,
+        ),
+    )
+    # A zero exit requires the production lifecycle's health/preflight and
+    # failure-propagating close. No session token/id is copied into this tool.
+    receipt.update(
+        cleanup_evidence="formal_cli_success_contract",
+        model_proxy_cleanup="caller_process_exited",
+        tunnel_cleanup="revocation_completed_by_cli_lifecycle",
+        model_preflight={
+            "status": "passed",
+            "expected_http_status": 200,
+            "evidence": "formal_cli_success_contract",
+        },
+    )
+    resumed = invoke(["resume", episode_id])
+    if produced != resumed:
+        raise ValidationError("completed_resume_result_changed")
+    report = invoke(["verify-record", episode_id])
+    reported = invoke(["report", episode_id])
+    if report != reported:
+        raise ValidationError("formal_cli_report_mismatch")
+    record = store.load(episode_id)
+    if (
+        record is None
+        or record.phase != EpisodePhase.COMPLETED
+        or record.inference is None
+        or record.verification is None
+        or not record.candidate_manifest
+        or not record.trajectory_manifest
+        or not record.verification_result
+    ):
+        raise ValidationError("claude_episode_not_complete")
+    inference, verification = record.inference, record.verification
+    if (
+        inference.run_id == verification.run_id
+        or inference.allocation_id == verification.allocation_id
+        or any(value.run_id in old_runs for value in (inference, verification))
+        or any(value.allocation_id in old_allocations for value in (inference, verification))
+        or inference.environment_id != config["inference_environment_id"]
+        or verification.environment_id != config["verification_environment_id"]
+    ):
+        raise ValidationError("claude_verification_not_fresh")
+    parity._terminal_execution(client, inference.run_id, inference.allocation_id)
+    parity._terminal_execution(client, verification.run_id, verification.allocation_id)
+    sealed = _sealed_outputs(client, inference.run_id, root)
+    candidate = load_candidate(Path(record.candidate_manifest))
+    trajectory = load_trajectory_bundle(Path(record.trajectory_manifest))
+    result = store.load_result(record.verification_result, record.verification_result_digest)
+    if canonical_json(produced) != canonical_json(asdict(result)):
+        raise ValidationError("claude_formal_cli_result_mismatch")
+    if (
+        candidate.digest != record.candidate_digest
+        or trajectory.digest != record.trajectory_digest
+        or result.candidate_digest != candidate.digest
+        or len(candidate.files) != 1
+        or candidate.files[0].role != "patch"
+        or candidate.files[0].sha256 != sealed["candidate.patch"]["sha256"]
+        or candidate.files[0].size_bytes != sealed["candidate.patch"]["bytes"]
+        or trajectory.trajectory.sha256 != sealed["trajectory.jsonl"]["sha256"]
+        or trajectory.usage.sha256 != sealed["usage.json"]["sha256"]
+    ):
+        raise ValidationError("claude_bundle_integrity_mismatch")
+    if (
+        report["integrity_verified"] is not True
+        or report["candidate_digest"] != candidate.digest
+        or report["trajectory_digest"] != trajectory.digest
+        or report["verification_result_digest"] != record.verification_result_digest
+        or report["verdict"] != result.verdict
+        or report["score"] != result.score
+    ):
+        raise ValidationError("claude_record_integrity_mismatch")
+    progress = ProgressStore(state_dir).load(episode_id)
+    if (
+        progress is None
+        or progress.run_id != inference.run_id
+        or progress.allocation_id != inference.allocation_id
+        or progress.request_count < 1
+    ):
+        raise ValidationError("claude_safe_progress_evidence_missing")
+    verification_dir = state_dir / "artifacts" / episode_id / "verification"
+    verification_sealed = {
+        "verification.json": parity._sealed_summary(
+            client,
+            verification.run_id,
+            "/outputs/verification.json",
+            verification_dir / "00-verification.json",
+            result.output_digest,
+        ),
+        "verifier.log": parity._sealed_summary(
+            client,
+            verification.run_id,
+            "/outputs/verifier.log",
+            verification_dir / "01-verifier.log",
+            str(result.details["test_output_sha256"]),
+        ),
+    }
+    receipt.update(
+        inference={"run_id": inference.run_id, "allocation_id": inference.allocation_id},
+        verification={"run_id": verification.run_id, "allocation_id": verification.allocation_id},
+        sealed_outputs=sealed,
+        verification_sealed_outputs=verification_sealed,
+        candidate_digest=candidate.digest,
+        trajectory_digest=trajectory.digest,
+        trajectory_event_count=trajectory.event_count,
+        verification_result_digest=record.verification_result_digest,
+        record_integrity_verified=True,
+        completed_resume_verified=True,
+        report_sha256=hashlib.sha256((log_dir / "report.stdout.json").read_bytes()).hexdigest(),
+        verdict=result.verdict,
+        score=result.score,
+        diagnostic_code=result.diagnostic_code,
+        test_summary=_counts(result.details),
+        model_request_count=progress.request_count,
+        model_last_summary={
+            "method": progress.last_model_method,
+            "protocol": progress.last_model_protocol,
+            "path": progress.last_model_path,
+            "status": progress.last_model_status,
+            "reason_code": progress.last_model_reason_code,
+        },
+    )
+    parity._persist(root, receipt)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -917,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     root = _private_root()
     receipt: dict[str, Any] = {
-        "schema_version": "axrun.swebench-flask-claude-axern@1",
+        "schema_version": "axrun.swebench-flask-claude-axern@2",
         "status": "started",
         "platform": "linux/amd64",
         "axern_sdk": parity._SDK_VERSION,
@@ -946,7 +855,9 @@ def main(argv: list[str] | None = None) -> int:
         receipt["status"] = "failed_closed"
         receipt["failure_type"] = type(exc).__name__
         receipt["failure_reason"] = (
-            str(exc) if isinstance(exc, (ValidationError, parity.ValidationError)) else "unexpected"
+            str(exc)
+            if isinstance(exc, (ValidationError, parity.ValidationError, CliValidationError))
+            else "unexpected"
         )
         episode_id = receipt.get("episode_id")
         if isinstance(episode_id, str):

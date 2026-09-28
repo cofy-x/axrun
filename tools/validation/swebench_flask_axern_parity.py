@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private, bounded Axern parity run for the unregistered official Flask instance.
+"""Private, bounded formal-CLI parity run for the locked official Flask instance.
 
 This is not a suite runner or a public benchmark adapter. It consumes the pinned
 native oracle's private assets, uses two pre-existing immutable Environments, and
@@ -21,28 +21,23 @@ import sys
 import sysconfig
 import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
 import axern_sdk
 from axern_sdk import AxernClient
 
-from axrun.adapters import StaticCandidateHarness
 from axrun.adapters._candidate import load_candidate
-from axrun.adapters.swebench_flask_official import SweBenchFlaskOfficialVerifierAdapter
-from axrun.axern_backend import AxernBackend, _status_name
-from axrun.candidates import GitPatchCandidateAdapter
-from axrun.catalog import AdapterSelection
-from axrun.datasets.swebench_flask_official import SweBenchFlaskOfficialResolver
-from axrun.models import EpisodePhase, HarnessSpec, canonical_digest
-from axrun.qualification import qualify_episode
-from axrun.runner import EpisodeRunner
+from axrun.axern_backend import _status_name
+from axrun.models import EpisodePhase, canonical_digest
 from axrun.store import EpisodeStore
-from axrun.tasks import GitWorktreeTaskAdapter
 
 if __package__:
+    from .swebench_flask_cli import run_cli
     from .swebench_flask_compare import ParityError, compare_empty, compare_scored
 else:
+    from swebench_flask_cli import run_cli
     from swebench_flask_compare import ParityError, compare_empty, compare_scored
 
 _SDK_VERSION = "0.12.0"
@@ -80,6 +75,15 @@ _CONFIG_KEYS = _PATH_ARGUMENTS | {
     "inference_environment_id",
     "verification_environment_id",
 }
+_CLI_COMMANDS = [
+    "admit-swebench-flask-image",
+    "resolve-swebench-flask-official",
+    "qualify",
+    "run",
+    "resume",
+    "verify-record",
+    "report",
+]
 
 
 class ValidationError(RuntimeError):
@@ -193,26 +197,9 @@ def _client(endpoint: str, context_config: Path) -> AxernClient:
     tls = cast(dict[str, Any], context["tls"])
     if any(not isinstance(tls.get(key), str) or not tls[key] for key in ("ca_cert", "cert", "key")):
         raise ValidationError("axern_context_tls_incomplete")
-    return AxernClient.from_env(
-        target=endpoint,
-        tls_ca_cert=tls["ca_cert"],
-        tls_cert=tls["cert"],
-        tls_key=tls["key"],
-        tls_server_name="gatewayd",
-        proxy_mode="direct",
-    )
-
-
-def _selection() -> AdapterSelection:
-    static = StaticCandidateHarness()
-    return AdapterSelection(
-        task=GitWorktreeTaskAdapter(name="swebench-flask-official"),
-        inference=static,
-        candidate=GitPatchCandidateAdapter(),
-        verifier=SweBenchFlaskOfficialVerifierAdapter(),
-        trajectory=None,
-        runtime=static.runtime_requirements,
-    )
+    if tls.get("server_name") != "gatewayd" or context.get("proxy_mode") != "direct":
+        raise ValidationError("axern_context_cli_transport_contract_missing")
+    return AxernClient.from_context(str(context_config), "local")
 
 
 def _image_import_receipt(path: Path) -> dict[str, str]:
@@ -273,6 +260,7 @@ def _sealed_summary(
         len(matches) != 1
         or matches[0].status != "available"
         or int(matches[0].size_bytes) != len(content)
+        or matches[0].sha256 != digest
     ):
         raise ValidationError("sealed_output_manifest_mismatch")
     return {"bytes": len(content), "sha256": digest}
@@ -307,67 +295,99 @@ def _case(
     episode_id: str,
     patch: Path,
     official: Path,
-    row: dict[str, Any],
     import_receipt: dict[str, str],
+    row_path: Path,
+    image_import_receipt_path: Path,
+    admission_receipt_path: Path,
+    context_config: Path,
     wheelhouse: Path,
     inference_environment_id: str,
     verification_environment_id: str,
     client: AxernClient,
-    backend: AxernBackend,
     store: EpisodeStore,
     root: Path,
     seen_runs: set[str],
     seen_allocations: set[str],
 ) -> dict[str, Any]:
-    episode = SweBenchFlaskOfficialResolver().resolve(
-        row,
-        asset_dir=root / "resolved-assets",
-        episode_id=episode_id,
-        inference_environment_id=inference_environment_id,
-        verification_environment_id=verification_environment_id,
-        task_image=import_receipt["immutable_ref"],
-        image_import_receipt=import_receipt,
-        wheelhouse_dir=wheelhouse,
-        harness=HarnessSpec("static-candidate", "1"),
-        static_candidate_file=patch,
+    spec_path = root / "episodes" / f"{episode_id}.json"
+    log_dir = root / "cli" / case
+
+    def cli(command: list[str], label: str) -> dict[str, Any]:
+        return run_cli(
+            state_dir=store.root,
+            context_config=context_config,
+            command=command,
+            log_dir=log_dir,
+            label=label,
+        )
+
+    cli(
+        [
+            "resolve-swebench-flask-official",
+            str(row_path),
+            "--episode-id",
+            episode_id,
+            "--harness",
+            "static-candidate",
+            "--candidate-file",
+            str(patch),
+            "--assets-dir",
+            str(root / "resolved-assets" / episode_id),
+            "--wheelhouse-dir",
+            str(wheelhouse),
+            "--task-image",
+            import_receipt["immutable_ref"],
+            "--image-import-receipt",
+            str(image_import_receipt_path),
+            "--admission-receipt",
+            str(admission_receipt_path),
+            "--inference-environment",
+            inference_environment_id,
+            "--verification-environment",
+            verification_environment_id,
+            "--output",
+            str(spec_path),
+        ],
+        "resolve",
     )
-    selected = _selection()
-    qualification = qualify_episode(
-        episode, client=client, backend=backend, store=store, selection=selected
-    )
+    qualification = cli(["qualify", str(spec_path)], "qualify")
+    episode = store.load_spec(episode_id)
     qualifications: list[dict[str, Any]] = []
-    for target in qualification.targets:
-        _check_fresh(seen_runs, target.run_id, "run")
-        _check_fresh(seen_allocations, target.allocation_id, "allocation")
-        status = _terminal_execution(client, target.run_id, target.allocation_id)
+    for target in qualification["targets"]:
+        _check_fresh(seen_runs, target["run_id"], "run")
+        _check_fresh(seen_allocations, target["allocation_id"], "allocation")
+        status = _terminal_execution(client, target["run_id"], target["allocation_id"])
         sealed = _sealed_summary(
             client,
-            target.run_id,
+            target["run_id"],
             "/outputs/qualification.json",
             root
             / "state"
             / "qualification-artifacts"
             / episode_id
-            / target.role
+            / target["role"]
             / "00-qualification.json",
-            target.output_sha256,
+            target["output_sha256"],
         )
         qualifications.append(
             {
-                "role": target.role,
-                "run_id": target.run_id,
-                "allocation_id": target.allocation_id,
+                "role": target["role"],
+                "run_id": target["run_id"],
+                "allocation_id": target["allocation_id"],
                 "terminal_status": status,
                 "sealed_output": sealed,
             }
         )
-    result = EpisodeRunner(backend=backend, store=store).run(
-        episode,
-        inference=selected.inference,
-        candidate=selected.candidate,
-        verifier=selected.verifier,
-        trajectory=selected.trajectory,
-    )
+    run_result = cli(["run", str(spec_path)], "run")
+    resumed = cli(["resume", episode_id], "resume")
+    if resumed != run_result:
+        raise ValidationError("completed_resume_result_mismatch")
+    verified = cli(["verify-record", episode_id], "verify-record")
+    report_path = root / "reports" / f"{episode_id}.json"
+    cli(["report", episode_id, "--format", "json", "--output", str(report_path)], "report")
+    report = _json_object(_bounded_file(report_path, max_bytes=4 << 20))
+    if verified != report or verified.get("integrity_verified") is not True:
+        raise ValidationError("formal_report_integrity_mismatch")
     record = store.load(episode_id)
     if (
         record is None
@@ -380,6 +400,9 @@ def _case(
         raise ValidationError("episode_not_complete_or_environment_drift")
     inference = record.inference
     verification = record.verification
+    result = store.load_result(record.verification_result, record.verification_result_digest)
+    if run_result != asdict(result):
+        raise ValidationError("formal_cli_result_record_mismatch")
     for execution in (inference, verification):
         _check_fresh(seen_runs, execution.run_id, "run")
         _check_fresh(seen_allocations, execution.allocation_id, "allocation")
@@ -454,6 +477,9 @@ def _case(
         "verdict": result.verdict,
         "score": result.score,
         "diagnostic_code": result.diagnostic_code,
+        "completed_resume_verified": True,
+        "record_integrity_verified": True,
+        "report_sha256": hashlib.sha256(_bounded_file(report_path)).hexdigest(),
         "parity": parity,
     }
 
@@ -470,7 +496,7 @@ def main() -> int:
     os.umask(0o077)
     root = _private_root()
     receipt: dict[str, Any] = {
-        "schema_version": "axrun.swebench-flask-axern-parity@1",
+        "schema_version": "axrun.swebench-flask-axern-parity@2",
         "status": "started",
         "platform": "linux/amd64",
         "axern_sdk": _SDK_VERSION,
@@ -479,6 +505,10 @@ def main() -> int:
         "inference_environment_id": args.inference_environment_id,
         "verification_environment_id": args.verification_environment_id,
         "oracle_receipt_sha256": _ORACLE_RECEIPT_SHA256,
+        "admission_receipt": "admission.json",
+        "admission_receipt_sha256": "",
+        "execution_path": "formal_cli",
+        "cli_commands": _CLI_COMMANDS,
         "environment_cleanup": "caller_owned_retained",
         "cases": [],
     }
@@ -510,8 +540,30 @@ def main() -> int:
         client = _client(args.endpoint, args.context_config)
         _check_environment(client, args.inference_environment_id, image)
         _check_environment(client, args.verification_environment_id, image)
-        backend = AxernBackend(client)
         store = EpisodeStore(root / "state")
+        admission_path = root / "admission.json"
+        run_cli(
+            state_dir=store.root,
+            context_config=args.context_config,
+            command=[
+                "admit-swebench-flask-image",
+                str(args.row),
+                "--environment",
+                args.inference_environment_id,
+                "--task-image",
+                image,
+                "--image-import-receipt",
+                str(args.image_import_receipt),
+                "--output",
+                str(admission_path),
+            ],
+            log_dir=root / "cli",
+            label="admit",
+        )
+        receipt["admission_receipt_sha256"] = hashlib.sha256(
+            _bounded_file(admission_path, max_bytes=128 << 10)
+        ).hexdigest()
+        _persist(root, receipt)
         empty_patch = root / "empty.patch"
         empty_patch.write_bytes(b"")
         seen_runs: set[str] = set()
@@ -530,13 +582,15 @@ def main() -> int:
                 episode_id=episode_id,
                 patch=patch,
                 official=official,
-                row=row,
                 import_receipt=import_receipt,
+                row_path=args.row,
+                image_import_receipt_path=args.image_import_receipt,
+                admission_receipt_path=admission_path,
+                context_config=args.context_config,
                 wheelhouse=args.wheelhouse,
                 inference_environment_id=args.inference_environment_id,
                 verification_environment_id=args.verification_environment_id,
                 client=client,
-                backend=backend,
                 store=store,
                 root=root,
                 seen_runs=seen_runs,
