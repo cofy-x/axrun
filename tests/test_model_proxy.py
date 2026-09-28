@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from axrun.errors import DiagnosedInfrastructureError, InfrastructureError
+from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
 from axrun.proxy.model import ModelProxy
 from axrun.proxy.protocols import AnthropicProtocol
 
@@ -335,3 +337,86 @@ def test_model_proxy_classifies_upstream_response_timeout() -> None:
     assert summary is not None
     assert summary.status == 504 and summary.reason_code == "proxy_upstream_timeout"
     assert "caller-secret" not in repr(summary.as_safe_dict())
+
+
+@pytest.mark.parametrize("failed_action", ["shutdown", "server_close"])
+def test_lifecycle_retries_real_model_proxy_server_cleanup(
+    monkeypatch: pytest.MonkeyPatch, failed_action: str
+) -> None:
+    secret = "private-cleanup-exception-must-not-escape"
+    proxy = ModelProxy(
+        upstream_url="http://127.0.0.1:1",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+    )
+    proxy.start()
+    server, thread = proxy._server, proxy._thread
+    assert server is not None and thread is not None
+    original = getattr(server, failed_action)
+    attempts = 0
+
+    def fail_once() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError(secret)
+        original()
+
+    monkeypatch.setattr(server, failed_action, fail_once)
+    lifecycle = ModelTunnelLifecycle(client=object(), proxy=proxy, model="test")
+    try:
+        with pytest.raises(DiagnosedInfrastructureError) as raised:
+            lifecycle.close()
+        assert raised.value.details == {"reason_code": "model_proxy_stop_failed"}
+        assert secret not in str(raised.value) and "caller-secret" not in str(raised.value)
+        assert proxy._server is server and proxy._thread is thread
+        assert proxy._credential == ""
+        proxy.start()
+        assert proxy._server is server and proxy._thread is thread
+
+        lifecycle.close()
+        assert attempts == 2
+        assert server.socket.fileno() == -1 and not thread.is_alive()
+        assert proxy._server is None and proxy._thread is None
+        lifecycle.close()
+        assert attempts == 2
+    finally:
+        proxy.stop()
+
+
+def test_model_proxy_keeps_thread_until_bounded_join_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = ModelProxy(
+        upstream_url="http://127.0.0.1:1",
+        credential="caller-secret",
+        protocol=AnthropicProtocol(),
+    )
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, daemon=True)
+    thread.start()
+    proxy._thread = thread
+    original_join = thread.join
+    joins: list[float | None] = []
+
+    def bounded_join(timeout: float | None = None) -> None:
+        joins.append(timeout)
+        original_join(timeout=0 if len(joins) == 1 else timeout)
+
+    monkeypatch.setattr(thread, "join", bounded_join)
+    try:
+        with pytest.raises(InfrastructureError, match="shutdown did not finish"):
+            proxy.stop()
+        assert proxy._thread is thread and thread.is_alive()
+        with pytest.raises(InfrastructureError, match="cleanup is still pending"):
+            proxy.start()
+        assert proxy._thread is thread and proxy._server is None
+        release.set()
+        proxy.stop()
+        assert proxy._thread is None and not thread.is_alive()
+        proxy.stop()
+        assert joins == [5.0, 5.0]
+        assert proxy._credential == ""
+    finally:
+        release.set()
+        proxy.stop()

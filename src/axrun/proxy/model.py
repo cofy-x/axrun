@@ -125,6 +125,8 @@ class ModelProxy:
     def start(self) -> None:
         if self._server is not None:
             return
+        if self._thread is not None:
+            raise InfrastructureError("model proxy cleanup is still pending")
         proxy = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -167,14 +169,18 @@ class ModelProxy:
 
     def stop(self) -> None:
         server, thread = self._server, self._thread
-        self._server = None
-        self._thread = None
+        self._credential = ""
         if server is not None:
             server.shutdown()
             server.server_close()
+            if self._server is server:
+                self._server = None
         if thread is not None:
             thread.join(timeout=5.0)
-        self._credential = ""
+            if thread.is_alive():
+                raise InfrastructureError("model proxy shutdown did not finish")
+            if self._thread is thread:
+                self._thread = None
 
     def _proxy(self, handler: BaseHTTPRequestHandler) -> None:
         raw_length = handler.headers.get("content-length")

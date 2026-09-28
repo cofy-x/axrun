@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from axrun.errors import ContractError, DiagnosedInfrastructureError
+from axrun.lifecycle.base import CompositePreStartLifecycle
 from axrun.lifecycle.stage_progress import StageProgressObserver
 from axrun.models import (
     CandidateSpec,
@@ -275,3 +277,57 @@ def test_invalid_observed_progress_is_infrastructure_diagnostic(tmp_path: Path) 
     assert captured.value.diagnostic_code == "progress_observer_failed"
     assert captured.value.details == {"reason_code": "invalid_progress_contract"}
     observer.close()
+
+
+def test_composite_retries_observer_join_until_live_thread_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(_episode(tmp_path))
+    record.phase = EpisodePhase.INFERENCE_RUNNING
+    execution = ExecutionRef("env", "run", "allocation")
+    record.inference = execution
+    store.save(record)
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingAllocation(_Allocation):
+        def read_file(self, path: str, *, rpc_timeout: float | None = None) -> bytes:
+            entered.set()
+            assert release.wait(timeout=5.0)
+            return super().read_file(path, rpc_timeout=rpc_timeout)
+
+    observer = StageProgressObserver(
+        episode_id="episode",
+        store=store,
+        proxy=_Proxy(),  # type: ignore[arg-type]
+        poll_seconds=0.01,
+    )
+    composite = CompositePreStartLifecycle(observer)
+    composite.start(execution, BlockingAllocation(canonical_progress_bytes(_runtime())))
+    thread = observer._thread
+    assert thread is not None
+    original_join = thread.join
+    joins: list[float | None] = []
+
+    def bounded_join(timeout: float | None = None) -> None:
+        joins.append(timeout)
+        original_join(timeout=0 if len(joins) == 1 else timeout)
+
+    monkeypatch.setattr(thread, "join", bounded_join)
+    try:
+        assert entered.wait(timeout=2.0)
+        with pytest.raises(DiagnosedInfrastructureError) as raised:
+            composite.close()
+        assert raised.value.details == {"reason_code": "observer_shutdown_timeout"}
+        assert observer._thread is thread and thread.is_alive() and not observer._closed
+        assert composite._started == [observer]
+
+        release.set()
+        composite.close()
+        assert not thread.is_alive() and observer._thread is None and observer._closed
+        assert composite._started == []
+        composite.close()
+        assert joins == [5.0, 5.0]
+    finally:
+        release.set()
+        observer.close()
