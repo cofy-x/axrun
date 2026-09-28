@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from axrun.tasks import flask_image_audit as packaged
+
 PATH = Path(__file__).parents[1] / "tools/validation/swebench_flask_image_secrecy.py"
 sys.path.insert(0, str(PATH.parent))
 SPEC = importlib.util.spec_from_file_location("swebench_flask_image_secrecy", PATH)
@@ -299,3 +301,154 @@ def test_git_all_object_scanner_includes_dangling_blob(tmp_path: Path) -> None:
     assert result["git_all_object_count"] == 1
     assert result["test_all_git_object_match_count"] == 1
     assert result["gold_all_git_object_match_count"] == 0
+
+
+def test_docker_and_runtime_share_one_packaged_scanner() -> None:
+    assert secrecy._CONTAINER_CODE is packaged._CONTAINER_CODE
+    assert secrecy._AUDIT_FIELDS is packaged._AUDIT_FIELDS
+    assert secrecy._patch_targets_and_hunks is packaged._patch_targets_and_hunks
+    assert secrecy._check_audit is packaged._check_audit
+    assert secrecy._status is packaged._status
+    request = packaged.build_request({"patch": _MODIFIED, "test_patch": _ADDED})
+    assert request == packaged.build_request({"patch": _MODIFIED, "test_patch": _ADDED})
+    data = json.loads(request)
+    assert set(data) == {"gold_patch", "test_patch", "gold_targets", "test_targets"}
+    assert data["gold_patch"] == _MODIFIED
+    assert data["test_patch"] == _ADDED
+    assert data["test_targets"] == secrecy._patch_targets_and_hunks(_ADDED)
+
+
+def _runtime_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scanner: str, *, request_data: bytes = b"{}"
+) -> tuple[subprocess.CompletedProcess[bytes], dict[str, object], Path]:
+    request = tmp_path / "request.json"
+    request.write_bytes(request_data)
+    output = tmp_path / "audit.json"
+    script = tmp_path / "audit.py"
+    monkeypatch.setattr(packaged, "_CONTAINER_CODE", scanner)
+    script.write_bytes(
+        packaged.runtime_scan_script()
+        .replace(
+            f"REQUEST = {packaged.REQUEST_PATH!r}".encode(), f"REQUEST = {str(request)!r}".encode()
+        )
+        .replace(
+            f"OUTPUT = {packaged.OUTPUT_PATH!r}".encode(), f"OUTPUT = {str(output)!r}".encode()
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        capture_output=True,
+        env=packaged._safe_subprocess_env(),
+        timeout=10,
+    )
+    return completed, json.loads(output.read_bytes()), request
+
+
+def test_runtime_removes_exact_private_input_before_shared_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    safe = _safe_audit()
+    scanner = (
+        "import json, os, sys\n"
+        "request = json.load(sys.stdin)\n"
+        "assert not os.path.lexists(request['input_path'])\n"
+        f"print(json.dumps({safe!r}))\n"
+    )
+    completed, result, request = _runtime_execute(
+        tmp_path,
+        monkeypatch,
+        scanner,
+        request_data=json.dumps({"input_path": str(tmp_path / "request.json")}).encode(),
+    )
+    assert completed.returncode == 0
+    assert completed.stdout == completed.stderr == b""
+    assert not request.exists()
+    assert result["request_deleted"] is True
+    assert isinstance(result["machine"], str) and result["machine"]
+    assert result["audit"] == safe
+    assert (tmp_path / "audit.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("failure", ["malformed_input", "private_exception", "allowlisted_error"])
+def test_runtime_failure_is_bounded_and_never_emits_private_exception_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    private = "caller-private-test-body-never-log"
+    scanner = "import json, sys\nrequest = json.load(sys.stdin)\n"
+    payload = b"{}"
+    expected = "runtime_audit_failed_closed"
+    if failure == "malformed_input":
+        payload = f'{{"secret":"{private}","secret":false}}'.encode()
+    elif failure == "private_exception":
+        scanner += f"raise RuntimeError({private!r})\n"
+    else:
+        expected = "filesystem_scan_unbounded"
+        scanner += f"print(json.dumps({{'error': {expected!r}}}))\nraise SystemExit(1)\n"
+    completed, result, request = _runtime_execute(
+        tmp_path, monkeypatch, scanner, request_data=payload
+    )
+    assert completed.returncode == 1
+    assert completed.stdout == completed.stderr == b""
+    assert result == {"error": expected}
+    assert private not in json.dumps(result)
+    assert not request.exists()
+
+
+def test_runtime_implementation_digest_is_stable_across_hash_seeds() -> None:
+    code = (
+        "from axrun.tasks.flask_image_audit import scanner_implementation_sha256; "
+        "print(scanner_implementation_sha256())"
+    )
+    results = []
+    for seed in ("1", "2"):
+        env = {**packaged._safe_subprocess_env(), "PYTHONHASHSEED": seed}
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            check=True,
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+        results.append(completed.stdout.strip().decode())
+    assert results == [packaged.scanner_implementation_sha256()] * 2
+    assert len(results[0]) == 64
+
+
+def test_runtime_refuses_private_input_symlink_without_touching_target(tmp_path: Path) -> None:
+    private = tmp_path / "original.json"
+    private.write_bytes(b'{"private_body":"must-not-be-scanned"}')
+    request = tmp_path / "request.json"
+    request.symlink_to(private)
+    output = tmp_path / "audit.json"
+    script = tmp_path / "audit.py"
+    script.write_bytes(
+        packaged.runtime_scan_script()
+        .replace(
+            f"REQUEST = {packaged.REQUEST_PATH!r}".encode(), f"REQUEST = {str(request)!r}".encode()
+        )
+        .replace(
+            f"OUTPUT = {packaged.OUTPUT_PATH!r}".encode(), f"OUTPUT = {str(output)!r}".encode()
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        capture_output=True,
+        env=packaged._safe_subprocess_env(),
+        timeout=10,
+    )
+    assert completed.returncode == 1
+    assert completed.stdout == completed.stderr == b""
+    assert json.loads(output.read_bytes()) == {"error": "runtime_audit_failed_closed"}
+    assert request.is_symlink()
+    assert private.read_bytes() == b'{"private_body":"must-not-be-scanned"}'
+
+
+def test_implementation_digest_covers_actual_executed_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = packaged.scanner_implementation_sha256()
+    monkeypatch.setattr(packaged, "_CONTAINER_CODE", packaged._CONTAINER_CODE + "\n")
+    assert packaged.scanner_implementation_sha256() != before
+    compile(packaged.runtime_scan_script(), "<axrun-flask-runtime-audit>", "exec")

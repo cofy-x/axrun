@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -13,6 +14,7 @@ from axrun.catalog import (
     AdapterSelection,
     QualificationRequirements,
     resolve_qualification_requirements,
+    resolve_required_admission,
 )
 from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
@@ -81,6 +83,9 @@ def qualify_episode(
     store: EpisodeStore,
     selection: AdapterSelection | None = None,
 ) -> QualificationResult:
+    task = resolve_required_admission(episode)
+    if task is not None:
+        task.validate_admission(episode)
     with store.lock(episode.episode_id):
         record = store.initialize(episode)
         if record.qualification_result:
@@ -89,27 +94,70 @@ def qualify_episode(
             raise RecoveryRequiredError("episode started without qualification evidence")
     targets: list[QualificationTargetResult] = []
     executions: list[ExecutionRef] = []
-    for role, binding in (
-        ("inference", episode.inference_environment),
-        ("verification", episode.verification_environment),
+    for index, (role, binding) in enumerate(
+        (
+            ("inference", episode.inference_environment),
+            ("verification", episode.verification_environment),
+        )
     ):
         requirements = resolve_qualification_requirements(episode, role, selection=selection)
         image = _environment_image(client, binding.environment_id)
         if image != binding.image:
             raise ContractError(f"{role} Environment image differs from the resolved episode")
-        stage = backend.execute(
-            _target_plan(episode, role, binding, requirements),
-            artifact_dir=store.root / "qualification-artifacts" / episode.episode_id / role,
-            on_bound=lambda _value: None,
-        )
+        with store.lock(episode.episode_id):
+            current = store.initialize(episode)
+            saved = current.qualifications[index] if len(current.qualifications) > index else None
+
+        def bound(
+            execution: ExecutionRef, *, binding: EnvironmentBinding = binding, index: int = index
+        ) -> None:
+            with store.lock(episode.episode_id):
+                current = store.initialize(episode)
+                if (
+                    current.phase != EpisodePhase.NEW
+                    or execution.environment_id != binding.environment_id
+                ):
+                    raise RecoveryRequiredError("qualification no longer accepts this execution")
+                values = list(current.qualifications)
+                if len(values) > index:
+                    previous = values[index]
+                    if previous.run_id != execution.run_id or (
+                        previous.allocation_id and previous.allocation_id != execution.allocation_id
+                    ):
+                        raise ContractError("qualification execution identity changed")
+                    values[index] = execution
+                elif len(values) == index:
+                    values.append(execution)
+                else:
+                    raise ContractError("qualification execution ordering is invalid")
+                current.qualifications = tuple(values)
+                store.save(current)
+
+        plan = _target_plan(episode, role, binding, requirements)
+        destination = store.root / "qualification-artifacts" / episode.episode_id / role
+        if saved is None:
+            stage = backend.execute(plan, artifact_dir=destination, on_bound=bound)
+        else:
+            stage = backend.recover(saved, plan, artifact_dir=destination)
+            if stage is None:
+                raise RecoveryRequiredError(
+                    f"{role} qualification Run is still active; query the persisted Run"
+                )
+            bound(stage.execution)
         if stage.exit_code != 0:
             raise InfrastructureError(
                 f"{role} qualification Run failed: run={stage.execution.run_id} "
                 f"allocation={stage.execution.allocation_id} diagnostic={stage.diagnostic_code}"
             )
         artifact = stage.artifact_for_path(_OUTPUT)
+        payload = Path(artifact.path).read_bytes()
+        if (
+            len(payload) != artifact.size_bytes
+            or hashlib.sha256(payload).hexdigest() != artifact.sha256
+        ):
+            raise InfrastructureError("qualification sealed output integrity mismatch")
         try:
-            raw: object = json.loads(Path(artifact.path).read_text(encoding="utf-8"))
+            raw: object = json.loads(payload)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ContractError("qualification output is not valid JSON") from exc
         checks = _validate_checks(raw, role, binding, requirements)
@@ -254,6 +302,9 @@ def _validate_checks(
         or not isinstance(checks["python"], str)
     ):
         raise ContractError("qualification output does not match the target")
+    expected_machine = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}.get(binding.platform)
+    if expected_machine is None or checks["machine"] != expected_machine:
+        raise ContractError("qualification machine differs from the resolved platform")
     if requirements.task_mode == "git":
         if (
             checks["base_commit"] != requirements.base_commit
@@ -352,6 +403,9 @@ def load_qualification_result(
     *,
     selection: AdapterSelection | None = None,
 ) -> QualificationResult:
+    task = resolve_required_admission(episode)
+    if task is not None:
+        task.validate_admission(episode)
     record = store.load(episode.episode_id)
     if record is None or len(record.qualifications) != 2:
         raise ContractError("qualification record is incomplete")
@@ -362,6 +416,12 @@ def load_qualification_result(
     if not isinstance(raw, dict):
         raise ContractError("qualification evidence must be an object")
     values = cast(dict[str, Any], raw)
+    if set(values) != {"schema_version", "episode_id", "spec_digest", "targets"} or (
+        type(values["schema_version"]) is not int
+        or not isinstance(values["episode_id"], str)
+        or not isinstance(values["spec_digest"], str)
+    ):
+        raise ContractError("qualification evidence has an invalid shape")
     if canonical_digest(values) != record.qualification_result_digest:
         raise ContractError("qualification evidence digest mismatch")
     raw_targets = values.get("targets")
@@ -399,9 +459,28 @@ def load_qualification_result(
         if (
             target.role != role
             or target.environment_id != binding.environment_id
+            or execution.environment_id != binding.environment_id
+            or target.environment_image != binding.image
+            or target.platform != binding.platform
+            or target.working_directory != binding.working_directory
             or target.run_id != execution.run_id
             or target.allocation_id != execution.allocation_id
         ):
             raise ContractError("qualification target provenance mismatch")
         _validate_checks(target.checks, role, binding, requirements)
     return result
+
+
+def require_admission(store: EpisodeStore, episode: ResolvedEpisode) -> dict[str, Any] | None:
+    """Required benchmark admission includes qualification on execution/recovery.
+
+    Resolve and the independent model-free audit precede qualification. Only
+    these pre-inference operations can work without a qualification record;
+    cancellation deliberately remains a rescue operation without this guard.
+    """
+    task = resolve_required_admission(episode)
+    if task is not None:
+        summary = task.admission_report(episode)
+        load_qualification_result(store, episode)
+        return summary
+    return None

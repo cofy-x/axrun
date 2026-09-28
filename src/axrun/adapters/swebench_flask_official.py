@@ -135,6 +135,47 @@ def _selection(config: dict[str, Any], key: str, count: int) -> list[str]:
     return result
 
 
+def validated_flask_verifier_inputs(
+    episode: ResolvedEpisode,
+) -> tuple[list[str], list[str], tuple[InputFile, ...]]:
+    config = episode.verifier.config
+    if set(config) != _CONFIG_KEYS:
+        raise ContractError("Flask verifier configuration is incomplete or unknown")
+    expected_values = {
+        "instance_id": _INSTANCE_ID,
+        "harness_commit": _HARNESS_COMMIT,
+        "eval_script_sha256": _EVAL_SCRIPT_SHA256,
+        "log_parser": "parse_log_flask",
+        "eval_timeout_seconds": 1800,
+    }
+    if any(config[key] != value for key, value in expected_values.items()):
+        raise ContractError("Flask verifier configuration differs from the official lock")
+    if episode.verifier.timeout_seconds != 1860:
+        raise ContractError("Flask verifier Run timeout differs from the locked bound")
+    fail_to_pass = _selection(config, "fail_to_pass", 1)
+    pass_to_pass = _selection(config, "pass_to_pass", 59)
+    if set(fail_to_pass) & set(pass_to_pass):
+        raise ContractError("Flask verifier expected test classes overlap")
+    verifier_file = _config_path(config, "verifier_file")
+    if verifier_file != _RUNNER:
+        raise ContractError("Flask verifier runner must be the packaged asset")
+    verifier_sha = _digest(verifier_file)
+    eval_script = _config_path(config, "eval_script_file")
+    _digest(eval_script, expected_sha256=_EVAL_SCRIPT_SHA256)
+    inputs = [
+        InputFile(str(verifier_file), "/opt/axrun-flask/run_verifier.py", verifier_sha),
+        InputFile(str(eval_script), "/opt/axrun-flask/eval.sh", _EVAL_SCRIPT_SHA256),
+    ]
+    for key, (name, size, sha256) in _WHEELS.items():
+        path = _config_path(config, key)
+        if path.name != name:
+            raise ContractError("Flask verifier wheel filename differs from lock")
+        _digest(path, size=size, expected_sha256=sha256)
+        inputs.append(InputFile(str(path), f"/opt/axrun-wheelhouse/{name}", sha256))
+
+    return fail_to_pass, pass_to_pass, tuple(inputs)
+
+
 @dataclass(frozen=True, slots=True)
 class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
     """One immutable image, dataset row, parser and offline asset contract."""
@@ -147,7 +188,7 @@ class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
             episode.task_id != _INSTANCE_ID
             or episode.task.identity != self.name
             or episode.task.version != self.version
-            or episode.task.config != {"base_commit": _IMAGE_HEAD}
+            or episode.task.config.get("base_commit") != _IMAGE_HEAD
             or episode.verifier.identity != self.name
             or episode.verifier.version != self.version
         ):
@@ -178,41 +219,8 @@ class SweBenchFlaskOfficialVerifierAdapter(CommandVerifierAdapter):
         patch_path = Path(candidate.root) / patch.bundle_path
         _digest(patch_path, size=patch.size_bytes, expected_sha256=patch.sha256)
 
-        config = episode.verifier.config
-        if set(config) != _CONFIG_KEYS:
-            raise ContractError("Flask verifier configuration is incomplete or unknown")
-        expected_values = {
-            "instance_id": _INSTANCE_ID,
-            "harness_commit": _HARNESS_COMMIT,
-            "eval_script_sha256": _EVAL_SCRIPT_SHA256,
-            "log_parser": "parse_log_flask",
-            "eval_timeout_seconds": 1800,
-        }
-        if any(config[key] != value for key, value in expected_values.items()):
-            raise ContractError("Flask verifier configuration differs from the official lock")
-        if episode.verifier.timeout_seconds != 1860:
-            raise ContractError("Flask verifier Run timeout differs from the locked bound")
-        fail_to_pass = _selection(config, "fail_to_pass", 1)
-        pass_to_pass = _selection(config, "pass_to_pass", 59)
-        if set(fail_to_pass) & set(pass_to_pass):
-            raise ContractError("Flask verifier expected test classes overlap")
-        verifier_file = _config_path(config, "verifier_file")
-        if verifier_file != _RUNNER:
-            raise ContractError("Flask verifier runner must be the packaged asset")
-        verifier_sha = _digest(verifier_file)
-        eval_script = _config_path(config, "eval_script_file")
-        _digest(eval_script, expected_sha256=_EVAL_SCRIPT_SHA256)
-        inputs = [
-            InputFile(str(patch_path), "/inputs/candidate.patch", patch.sha256),
-            InputFile(str(verifier_file), "/opt/axrun-flask/run_verifier.py", verifier_sha),
-            InputFile(str(eval_script), "/opt/axrun-flask/eval.sh", _EVAL_SCRIPT_SHA256),
-        ]
-        for key, (name, size, sha256) in _WHEELS.items():
-            path = _config_path(config, key)
-            if path.name != name:
-                raise ContractError("Flask verifier wheel filename differs from lock")
-            _digest(path, size=size, expected_sha256=sha256)
-            inputs.append(InputFile(str(path), f"/opt/axrun-wheelhouse/{name}", sha256))
+        fail_to_pass, pass_to_pass, assets = validated_flask_verifier_inputs(episode)
+        inputs = (InputFile(str(patch_path), "/inputs/candidate.patch", patch.sha256), *assets)
 
         return StagePlan(
             environment_id=binding.environment_id,

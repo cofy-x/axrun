@@ -33,6 +33,8 @@ from axrun.models import (
     StageResult,
     VerificationResult,
 )
+from axrun.provenance import validate_candidate_provenance, validate_result_provenance
+from axrun.qualification import require_admission
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import TrajectoryBundle
 from axrun.trajectories.schema import load_trajectory_jsonl
@@ -75,6 +77,7 @@ class EpisodeRunner:
         trajectory: TrajectoryAdapter | None = None,
         inference_lifecycle: PreStartLifecycle | None = None,
     ) -> VerificationResult:
+        require_admission(self.store, episode)
         with self.store.lock(episode.episode_id):
             record = self.store.initialize(episode)
             if record.phase == EpisodePhase.COMPLETED:
@@ -116,6 +119,7 @@ class EpisodeRunner:
         with self.store.lock(episode_id):
             record = self._required_record(episode_id)
             episode = self.store.load_spec(episode_id)
+            require_admission(self.store, episode)
             phase = record.phase
             execution = (
                 record.inference if phase == EpisodePhase.INFERENCE_RUNNING else record.verification
@@ -175,6 +179,7 @@ class EpisodeRunner:
         trajectory: TrajectoryAdapter | None = None,
         timeout: float | None = None,
     ) -> VerificationResult:
+        require_admission(self.store, self.store.load_spec(episode_id))
         record = self._required_record(episode_id)
         execution = (
             record.inference
@@ -491,17 +496,37 @@ class EpisodeRunner:
         persisted = (
             record.inference if phase == EpisodePhase.INFERENCE_RUNNING else record.verification
         )
-        if persisted is not None and persisted.run_id != execution.run_id:
-            raise InfrastructureError("stage result does not match the persisted Axern Run")
+        if persisted is None or (
+            persisted.run_id != execution.run_id
+            or persisted.environment_id != execution.environment_id
+            or (persisted.allocation_id and persisted.allocation_id != execution.allocation_id)
+        ):
+            raise InfrastructureError("stage result does not match the persisted Axern execution")
 
     def _load_candidate(self, record: EpisodeRecord) -> CandidateBundle:
         candidate = load_candidate(Path(record.candidate_manifest))
         if candidate.digest != record.candidate_digest:
-            raise InfrastructureError("CandidateBundle record digest mismatch")
+            raise ContractError("CandidateBundle record digest mismatch")
+        validate_candidate_provenance(
+            candidate, self.store.load_spec(record.episode_id), record.inference
+        )
         return candidate
 
     def _load_verification(self, record: EpisodeRecord) -> VerificationResult:
-        return self.store.load_result(record.verification_result, record.verification_result_digest)
+        candidate = self._load_candidate(record)
+        result = self.store.load_result(
+            record.verification_result, record.verification_result_digest
+        )
+        episode = self.store.load_spec(record.episode_id)
+        validate_result_provenance(result, episode, candidate)
+        if (
+            record.verification is None
+            or record.verification.environment_id != episode.verification_environment.environment_id
+            or record.inference is None
+            or record.verification.run_id == record.inference.run_id
+        ):
+            raise ContractError("VerificationResult execution provenance mismatch")
+        return result
 
     def _required_record(self, episode_id: str) -> EpisodeRecord:
         record = self.store.load(episode_id)

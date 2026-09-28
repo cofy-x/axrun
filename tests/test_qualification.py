@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from axrun.catalog import resolve_adapters
-from axrun.errors import ContractError
+from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     Artifact,
     CandidateSpec,
@@ -159,6 +159,78 @@ def test_qualification_is_model_free_deny_all_and_digest_pinned(tmp_path: Path) 
         json.loads(evidence.read_text())["targets"][0]["output_sha256"]
         == result.targets[0].output_sha256
     )
+
+
+class DisconnectedBackend(Backend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.original = None
+        self.recovered = []
+        self.active = False
+
+    def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+        stage = super().execute(plan, artifact_dir=artifact_dir, on_bound=on_bound)
+        if self.original is None:
+            self.original = stage
+            raise ConnectionError("caller disconnected after Run binding")
+        return stage
+
+    def recover(self, execution, plan, *, artifact_dir):
+        self.recovered.append(execution)
+        assert self.original is not None
+        assert execution == self.original.execution
+        return None if self.active else self.original
+
+
+def test_qualification_disconnect_recovers_original_run_without_resubmission(tmp_path: Path):
+    episode, backend, store = (
+        _episode(tmp_path),
+        DisconnectedBackend(),
+        EpisodeStore(tmp_path / "state"),
+    )
+    with pytest.raises(ConnectionError):
+        qualify_episode(episode, client=Client(), backend=backend, store=store)
+    record = store.load(episode.episode_id)
+    assert record is not None
+    assert record.qualifications == (backend.original.execution,)
+    backend.active = True
+    with pytest.raises(RecoveryRequiredError, match="still active"):
+        qualify_episode(episode, client=Client(), backend=backend, store=store)
+    assert len(backend.plans) == 1
+    backend.active = False
+    result = qualify_episode(episode, client=Client(), backend=backend, store=store)
+    assert result.targets[0].run_id == backend.original.execution.run_id
+    assert len(backend.plans) == 2  # Only the not-yet-submitted verification qualification is new.
+    assert backend.recovered == [backend.original.execution] * 2
+
+
+def test_qualification_recovery_independently_rechecks_sealed_output(tmp_path: Path):
+    episode, backend, store = (
+        _episode(tmp_path),
+        DisconnectedBackend(),
+        EpisodeStore(tmp_path / "state"),
+    )
+    with pytest.raises(ConnectionError):
+        qualify_episode(episode, client=Client(), backend=backend, store=store)
+    assert backend.original is not None
+    Path(backend.original.artifacts[0].path).write_bytes(b"tampered")
+    with pytest.raises(InfrastructureError, match="sealed output integrity"):
+        qualify_episode(episode, client=Client(), backend=backend, store=store)
+    assert len(backend.plans) == 1
+
+
+def test_qualification_rejects_execution_environment_drift(tmp_path: Path):
+    episode, store = _episode(tmp_path), EpisodeStore(tmp_path / "state")
+    qualify_episode(episode, client=Client(), backend=Backend(), store=store)
+    record = store.load(episode.episode_id)
+    assert record is not None
+    record.qualifications = (
+        replace(record.qualifications[0], environment_id="env-foreign"),
+        record.qualifications[1],
+    )
+    store.save(record)
+    with pytest.raises(ContractError, match="provenance mismatch"):
+        load_qualification_result(store, episode)
 
 
 def test_explicit_selection_qualifies_closed_task_before_catalog_registration(

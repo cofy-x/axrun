@@ -1,4 +1,4 @@
-"""Unregistered, closed resolver for the official Verified Flask-5014 stage zero.
+"""Closed resolver for the admitted official Verified Flask-5014 vertical.
 
 The official enriched row is checked against its complete canonical digest once.
 Only the problem statement and evaluation script are materialized; the gold patch,
@@ -31,6 +31,11 @@ _DATASET_COMMIT = "78f471bf655a3137b2e8a75af1501690ec009ec3"
 _SCHEMA = "enriched-v1"
 _HARNESS_COMMIT = "f7bbbb2ccdf479001d6467c9e34af59e44a840f9"
 _ROW_SHA256 = "36d5506b22ede57cf679dd50b44232dc640663dc9fa94f3dad5f9a06760a9c2e"
+_SEED_DIGEST = "077cf80a3e58c24d38ab8124db646a70b4f0a5d3ad389685d0f52d1b466835eb"
+_PROMPT_SHA256 = "f77d8eab7dd608172aa78b3b50dfa7e0e9b3a6a1c52d14a1cb02417eb5a0ab00"
+_TEST_SELECTION_DIGEST = "392faac305a1d73591353568a1b2004c177f0a6fdc2f26339634717fd1444c4d"
+_GOLD_PATCH_SHA256 = "087d51d66413bfa35111ac0eca31f1db1636572702cfd967c428049b453f451d"
+_TEST_PATCH_SHA256 = "e16f06b260b5169a49397e9d571b5af70317cd23792e1437232fabf718fe8871"
 _EVAL_SCRIPT_SHA256 = "a752d2d3520db71513c263dd476e8da457395a447a346f6b5c18782dc0faf034"
 _INSTANCE = "pallets__flask-5014"
 _SOURCE_IMAGE = (
@@ -80,8 +85,37 @@ _LOCKED_WHEELS = (
 )
 
 
+def admission_contract() -> dict[str, str]:
+    """Non-sensitive locked identities shared with the benchmark-owned gate."""
+    return {
+        "ROW_SHA256": _ROW_SHA256,
+        "SEED_DIGEST": _SEED_DIGEST,
+        "PROMPT_SHA256": _PROMPT_SHA256,
+        "TEST_SELECTION_DIGEST": _TEST_SELECTION_DIGEST,
+        "GOLD_PATCH_SHA256": _GOLD_PATCH_SHA256,
+        "TEST_PATCH_SHA256": _TEST_PATCH_SHA256,
+        "EVAL_SCRIPT_SHA256": _EVAL_SCRIPT_SHA256,
+        "SOURCE_IMAGE": _SOURCE_IMAGE,
+        "PLATFORM": _PLATFORM,
+        "IMAGE_HEAD": _IMAGE_HEAD,
+        "INSTANCE": _INSTANCE,
+        "DATASET": _DATASET,
+        "DATASET_COMMIT": _DATASET_COMMIT,
+        "SCHEMA": _SCHEMA,
+        "ROW_BASE_COMMIT": _ROW_BASE_COMMIT,
+    }
+
+
+def check_flask_row(row: dict[str, Any]) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...]]:
+    return _checked_row(row)
+
+
+def check_flask_import_receipt(receipt: dict[str, str], task_image: str) -> None:
+    _check_import_receipt(receipt, task_image)
+
+
 class SweBenchFlaskOfficialResolver:
-    """Resolve only the pinned official Flask instance; not catalog-registered."""
+    """Resolve the pinned instance only after actual-runtime image admission."""
 
     identity = _DATASET
     version = _SCHEMA
@@ -97,6 +131,7 @@ class SweBenchFlaskOfficialResolver:
         task_image: str,
         image_import_receipt: dict[str, str],
         wheelhouse_dir: Path,
+        admission_receipt_file: Path,
         harness: HarnessSpec,
         static_candidate_file: Path | None = None,
     ) -> ResolvedEpisode:
@@ -116,7 +151,16 @@ class SweBenchFlaskOfficialResolver:
                 "row": row,
             }
         )
+        from axrun.tasks.flask_admission import load_flask_admission
+
+        admission = load_flask_admission(admission_receipt_file, task_image=task_image)
+        if (
+            admission["seed_digest"] != seed_digest
+            or admission["import_provenance"] != image_import_receipt
+        ):
+            raise ContractError("Flask admission differs from the resolved row/import provenance")
         assets = asset_dir / seed_digest
+        admission_file = _materialize(assets, "admission", admission_receipt_file.read_bytes())
         prompt = _materialize(assets, "problem", strings["problem_statement"].encode())
         eval_script = _materialize(assets, "eval", strings["eval_script"].encode())
         verifier = (
@@ -135,7 +179,13 @@ class SweBenchFlaskOfficialResolver:
             task=TaskSpec(
                 identity="swebench-flask-official",
                 version="1",
-                config={"base_commit": _IMAGE_HEAD},
+                config={
+                    "base_commit": _IMAGE_HEAD,
+                    "admission_receipt_file": str(admission_file),
+                    "admission_receipt_sha256": hashlib.sha256(
+                        admission_file.read_bytes()
+                    ).hexdigest(),
+                },
             ),
             inference_environment=EnvironmentBinding(
                 inference_environment_id, task_image, _PLATFORM, "/testbed"
@@ -175,7 +225,7 @@ class SweBenchFlaskOfficialResolver:
                 "official_source_image": _SOURCE_IMAGE,
                 "task_image": task_image,
                 "task_platform": _PLATFORM,
-                "official_instance_scope": "single-instance-stage-zero",
+                "official_instance_scope": "locked-single-instance",
             },
         )
 

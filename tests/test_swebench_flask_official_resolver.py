@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from flask_admission_fixtures import pin_synthetic_row, write_receipt
 
 from axrun.datasets import swebench_flask_official as flask
 from axrun.errors import ContractError
@@ -52,12 +53,7 @@ def _receipt() -> dict[str, str]:
 @pytest.fixture
 def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     row = _row()
-    monkeypatch.setattr(flask, "_ROW_SHA256", canonical_digest(row))
-    monkeypatch.setattr(
-        flask,
-        "_EVAL_SCRIPT_SHA256",
-        hashlib.sha256(row["eval_script"].encode()).hexdigest(),
-    )
+    pin_synthetic_row(row, monkeypatch)
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
     fake_wheels = (
@@ -84,6 +80,7 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "verification_environment_id": "env-verification",
         "task_image": _IMPORTED,
         "image_import_receipt": _receipt(),
+        "admission_receipt_file": write_receipt(tmp_path / "admission.json"),
         "wheelhouse_dir": wheelhouse,
         "harness": HarnessSpec("static-candidate", "1"),
         "static_candidate_file": candidate,
@@ -123,7 +120,18 @@ def test_resolver_commits_complete_row_and_leaks_no_reference_content(
     assert episode.inference_network_policy == StageNetworkPolicy.DENY_ALL
     assert episode.verification_network_policy == StageNetworkPolicy.DENY_ALL
     assert episode.task.identity == "swebench-flask-official"
-    assert episode.task.config == {"base_commit": flask._IMAGE_HEAD}
+    assert episode.task.config["base_commit"] == flask._IMAGE_HEAD
+    assert set(episode.task.config) == {
+        "base_commit",
+        "admission_receipt_file",
+        "admission_receipt_sha256",
+    }
+    admission = Path(episode.task.config["admission_receipt_file"])
+    assert admission.read_bytes() == inputs["admission_receipt_file"].read_bytes()
+    assert (
+        hashlib.sha256(admission.read_bytes()).hexdigest()
+        == episode.task.config["admission_receipt_sha256"]
+    )
     assert episode.metadata["official_row_base_commit"] == row["base_commit"]
     assert episode.metadata["official_image_head"] == flask._IMAGE_HEAD
     assert episode.inference_environment.image == _IMPORTED
