@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
+from axrun._atomic_file import atomic_write as _atomic_write
 from axrun.errors import ContractError, RecoveryRequiredError
 from axrun.preparation.models import (
     EnvironmentPreparationReceipt,
@@ -159,21 +158,3 @@ def _object(value: object) -> dict[str, Any]:
 
 def _json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, indent=2).encode() + b"\n"
-
-
-def _atomic_write(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import replace
 
 import pytest
@@ -18,7 +20,7 @@ from axrun.models import (
     VerifierSpec,
     canonical_json,
 )
-from axrun.store import EpisodeStore
+from axrun.store import EpisodeStore, atomic_write
 
 
 def _episode(tmp_path) -> ResolvedEpisode:
@@ -153,3 +155,36 @@ def test_v2_stage_policies_are_persisted_and_recovered(tmp_path) -> None:
         replace(episode, inference_network_policy="default")  # type: ignore[arg-type]
     with pytest.raises(ContractError, match="implicit deny-all"):
         replace(episode, schema_version=1)
+
+
+def test_atomic_write_preserves_exact_bytes_and_syncs_file_and_directory(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "nested" / "record.json"
+    synced_directory: list[bool] = []
+    real_fsync = os.fsync
+
+    def track_fsync(descriptor: int) -> None:
+        synced_directory.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", track_fsync)
+    atomic_write(path, b'{"test":true}\n')
+    assert path.read_bytes() == b'{"test":true}\n'
+    assert synced_directory == [False, True]
+
+
+def test_atomic_write_failed_replace_leaves_old_file_and_no_temporary(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "record.json"
+    path.write_bytes(b"old\n")
+
+    def fail_replace(_source: str, _destination: os.PathLike[str] | str) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        atomic_write(path, b"new\n")
+    assert path.read_bytes() == b"old\n"
+    assert not list(tmp_path.glob(".record.json.*"))

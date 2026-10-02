@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -13,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from axrun._atomic_file import atomic_write as _atomic_write
 from axrun.adapters.base import VerifierQualificationRequirements
 from axrun.backend import ExecutionBackend
 from axrun.datasets.programbench_official import official_case
@@ -938,21 +937,3 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
-
-
-def _atomic_write(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(temporary).unlink(missing_ok=True)

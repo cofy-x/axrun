@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict, fields
@@ -12,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from axrun._atomic_file import atomic_write
 from axrun.errors import ContractError, RecoveryRequiredError
 from axrun.models import (
     EpisodePhase,
@@ -183,24 +182,6 @@ def _validate_record(raw: object, episode_id: str) -> None:
     phase = record.get("phase")
     if not isinstance(phase, str) or phase not in {value.value for value in EpisodePhase}:
         raise ContractError("persisted episode phase is invalid")
-
-
-def atomic_write(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
 
 
 def _now() -> str:
