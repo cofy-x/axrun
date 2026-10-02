@@ -23,6 +23,9 @@ OUTPUT_PATH = "/outputs/django-image-audit.json"
 MAX_AUDIT_OUTPUT = shared.MAX_AUDIT_OUTPUT
 MAX_REQUEST_BYTES = shared.MAX_REQUEST_BYTES
 AUDIT_TIMEOUT_SECONDS = shared.AUDIT_TIMEOUT_SECONDS
+# The pinned Django seed contains 339,152 Git objects. Keep the full-object
+# scan mandatory while bounding this task's larger, measured history.
+MAX_GIT_OBJECTS = 400_000
 SecrecyError = shared.SecrecyError
 
 
@@ -59,6 +62,7 @@ def runtime_scan_script() -> bytes:
         (shared.REQUEST_PATH.encode(), REQUEST_PATH.encode()),
         (shared.OUTPUT_PATH.encode(), OUTPUT_PATH.encode()),
         (b"<axrun-flask-image-audit>", b"<axrun-django-image-audit>"),
+        (b"MAX_GIT_OBJECTS = 250000", f"MAX_GIT_OBJECTS = {MAX_GIT_OBJECTS}".encode()),
     )
     for previous, current in replacements:
         if previous == current or script.count(previous) != 1:

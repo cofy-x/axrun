@@ -43,6 +43,8 @@ def test_django_runtime_script_changes_only_locked_scanner_identity() -> None:
     assert django.REQUEST_PATH.encode() in script
     assert django.OUTPUT_PATH.encode() in script
     assert b"<axrun-django-image-audit>" in script
+    assert b"MAX_GIT_OBJECTS = 400000" in script
+    assert b"MAX_GIT_OBJECTS = 250000" not in script
     assert len(django.scanner_implementation_sha256()) == 64
 
 
