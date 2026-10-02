@@ -26,6 +26,7 @@ from axrun.adapters.base import (
     VerifierAdapter,
     WorkspaceFileRequirement,
 )
+from axrun.adapters.swebench_django_official import SweBenchDjangoOfficialVerifierAdapter
 from axrun.adapters.swebench_flask_official import SweBenchFlaskOfficialVerifierAdapter
 from axrun.candidates import GitPatchCandidateAdapter, WorkspaceArchiveCandidateAdapter
 from axrun.errors import ContractError
@@ -39,6 +40,7 @@ from axrun.tasks import (
     ProgramBenchOfficialTaskAdapter,
     ProgramBenchTaskAdapter,
 )
+from axrun.tasks.swebench_django_official import SweBenchDjangoOfficialTaskAdapter
 from axrun.tasks.swebench_flask_official import SweBenchFlaskOfficialTaskAdapter
 from axrun.trajectories.adapters import ClaudeCodeTrajectoryAdapter
 
@@ -109,6 +111,10 @@ def resolve_task(episode: ResolvedEpisode) -> TaskAdapter:
         flask = SweBenchFlaskOfficialTaskAdapter()
         flask.validate_admission(episode)
         return flask
+    if key == ("swebench-django-official", "1"):
+        django = SweBenchDjangoOfficialTaskAdapter()
+        django.validate_admission(episode)
+        return django
     if key in {
         ("git-worktree", "1"),
         ("axrun.synthetic.code-task", "1"),
@@ -152,6 +158,10 @@ def resolve_verifier(episode: ResolvedEpisode) -> VerifierAdapter:
         return SweBenchFlaskOfficialVerifierAdapter(
             timeout_seconds=episode.verifier.timeout_seconds
         )
+    if key == ("swebench-django-official", "1"):
+        return SweBenchDjangoOfficialVerifierAdapter(
+            timeout_seconds=episode.verifier.timeout_seconds
+        )
     if key == ("synthetic-code-task", "1"):
         return SyntheticVerifierAdapter(timeout_seconds=episode.verifier.timeout_seconds)
     if key == ("swebench-verified", "1"):
@@ -177,12 +187,14 @@ def resolve_verifier(episode: ResolvedEpisode) -> VerifierAdapter:
     raise ContractError(f"unsupported verifier adapter: {key[0]}@{key[1]}")
 
 
-def resolve_required_admission(episode: ResolvedEpisode) -> SweBenchFlaskOfficialTaskAdapter | None:
+def resolve_required_admission(
+    episode: ResolvedEpisode,
+) -> SweBenchFlaskOfficialTaskAdapter | SweBenchDjangoOfficialTaskAdapter | None:
     """Curated mandatory task gate, independent of caller adapter overrides.
 
-    This is one benchmark-owned gate, not an extensible policy engine. A generic
-    workspace task has no such admission requirement. Unknown Flask versions
-    cannot evade the gate by restoring an older private validation record.
+    These are two closed, benchmark-owned gates, not an extensible policy
+    engine. A generic workspace task has no such requirement. Unknown locked
+    task versions cannot evade admission by restoring older private state.
     """
     if (
         episode.task.identity == "swebench-flask-official"
@@ -191,6 +203,13 @@ def resolve_required_admission(episode: ResolvedEpisode) -> SweBenchFlaskOfficia
         if episode.task.version != "1":
             raise ContractError("unsupported Flask admission contract version")
         return SweBenchFlaskOfficialTaskAdapter()
+    if (
+        episode.task.identity == "swebench-django-official"
+        or episode.task_id == "django__django-12419"
+    ):
+        if episode.task.version != "1":
+            raise ContractError("unsupported Django admission contract version")
+        return SweBenchDjangoOfficialTaskAdapter()
     return None
 
 

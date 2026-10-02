@@ -363,6 +363,20 @@ def _parser() -> argparse.ArgumentParser:
     flask.add_argument("--verification-environment", required=True)
     _add_claude_arguments(flask)
     flask.add_argument("--output", type=Path, required=True)
+    django = commands.add_parser(
+        "resolve-swebench-django-official",
+        help="resolve only the locked official django__django-12419 static control",
+    )
+    django.add_argument("row", type=Path)
+    django.add_argument("--episode-id", required=True)
+    django.add_argument("--candidate-file", type=Path, required=True)
+    django.add_argument("--assets-dir", type=Path, required=True)
+    django.add_argument("--task-image", required=True)
+    django.add_argument("--image-import-receipt", type=Path, required=True)
+    django.add_argument("--admission-receipt", type=Path, required=True)
+    django.add_argument("--inference-environment", required=True)
+    django.add_argument("--verification-environment", required=True)
+    django.add_argument("--output", type=Path, required=True)
     admission = commands.add_parser(
         "admit-swebench-flask-image",
         help="perform the locked model-free Flask image admission audit",

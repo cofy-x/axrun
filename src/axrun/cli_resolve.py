@@ -7,12 +7,17 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+from axrun._atomic_file import atomic_write
 from axrun.datasets import (
     ProgramBenchCompatibilityResolver,
     ProgramBenchOfficialSingleResolver,
     SweBenchVerifiedResolver,
     SyntheticCodeTaskResolver,
     SyntheticGreenfieldResolver,
+)
+from axrun.datasets.swebench_django_official import (
+    SweBenchDjangoOfficialResolver,
+    checked_private_directory,
 )
 from axrun.datasets.swebench_flask_official import SweBenchFlaskOfficialResolver
 from axrun.errors import ContractError
@@ -26,6 +31,7 @@ RESOLVE_COMMANDS = frozenset(
         "resolve-programbench-official",
         "resolve-swebench-verified",
         "resolve-swebench-flask-official",
+        "resolve-swebench-django-official",
     }
 )
 
@@ -70,9 +76,14 @@ def _claude_harness(args: argparse.Namespace, *, working_directory: str) -> Harn
     return HarnessSpec(identity="claude-code", version="2.1.205", config=config)
 
 
-def _write_episode(episode: ResolvedEpisode, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(canonical_json(episode.as_dict()) + b"\n")
+def _write_episode(episode: ResolvedEpisode, output: Path, *, private: bool = False) -> None:
+    payload = canonical_json(episode.as_dict()) + b"\n"
+    if private:
+        checked_private_directory(output.parent)
+        atomic_write(output, payload)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(payload)
     print(
         json.dumps(
             {
@@ -224,5 +235,22 @@ def resolve_command(args: argparse.Namespace) -> None:
             static_candidate_file=args.candidate_file,
         )
         _write_episode(episode, args.output)
+        return
+    if args.command == "resolve-swebench-django-official":
+        raw_value = json.loads(args.row.read_text(encoding="utf-8"))
+        if not isinstance(raw_value, dict):
+            raise ContractError("official Django enriched row must be a JSON object")
+        episode = SweBenchDjangoOfficialResolver().resolve(
+            cast(dict[str, Any], raw_value),
+            asset_dir=args.assets_dir,
+            episode_id=args.episode_id,
+            inference_environment_id=args.inference_environment,
+            verification_environment_id=args.verification_environment,
+            task_image=args.task_image,
+            image_import_receipt_file=args.image_import_receipt,
+            admission_receipt_file=args.admission_receipt,
+            static_candidate_file=args.candidate_file,
+        )
+        _write_episode(episode, args.output, private=True)
         return
     raise AssertionError(f"unhandled resolver command: {args.command}")

@@ -84,9 +84,12 @@ The [locked asset preparer](tools/validation/swebench_django_assets.py) and
 gates for that one instance. The [native Django stage-zero receipt](docs/validation/2026-10-02-swebench-django-12419-native-stage-zero.md)
 records official gold, known-bad, and empty classifications on a derived clean-base amd64 seed;
 the prior incomplete attempts remain separate. The same record includes one successful, model-free
-admission Run against Axern's actual imported runtime. Normal CLI deterministic parity is still
-outstanding. A formal Django task/verifier identity and
-normal CLI path remain unregistered; this does not add generic SWE-bench or leaderboard support.
+admission Run against Axern's actual imported runtime. A separate, closed
+`swebench-django-official@1` static-candidate task/verifier and
+`resolve-swebench-django-official` CLI route are now implemented against that receipt. They
+materialize verifier-only assets in a private directory and keep the expected test name out of
+the resolved episode. Normal CLI fresh-verifier gold/known-bad/empty parity remains outstanding;
+this does not add real-Claude, generic SWE-bench, or leaderboard support.
 
 ### Locked Flask CLI vertical
 
