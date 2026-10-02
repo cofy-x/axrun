@@ -107,6 +107,13 @@ episode state; it does not enable other SWE-bench instances or a suite.
 | Registered | Normal CLI uses the same reviewed catalog and mandatory admission checks, without caller-built adapter selection |
 | Not implied | Generic SWE-bench support, suite support, full official environment equivalence, or leaderboard submission eligibility |
 
+A separate [v0.12.1 independent-wheel cold-start acceptance](docs/validation/2026-10-02-flask-wheel-cold-start-v0.12.1.md)
+completed the fixed static-gold CLI path on a fresh released local stack: five new
+Runs, exact 60/60 oracle parity, and verified cleanup. The earlier
+[v0.12.0 cold-start failure](docs/validation/2026-09-28-flask-wheel-cold-start.md)
+remains historical platform evidence; this does not add a new Claude episode or
+broaden the registered benchmark scope.
+
 The model-free admission command scans the **actual imported runtime image** in a
 separate fresh SDK Run, not a source image assumed to be equivalent. The receipt
 binds source and runtime digests separately, platform, complete row/asset digests,
