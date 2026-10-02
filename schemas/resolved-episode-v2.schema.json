@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cofy-x/axrun/schemas/resolved-episode-v2.schema.json",
+  "title": "ResolvedEpisode v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "episode_id",
+    "task_id",
+    "seed_digest",
+    "prompt_file",
+    "task",
+    "inference_environment",
+    "verification_environment",
+    "harness",
+    "candidate",
+    "verifier",
+    "inference_resources",
+    "verification_resources",
+    "metadata",
+    "inference_network_policy",
+    "verification_network_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "episode_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seed_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prompt_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "task": {
+      "$ref": "#/$defs/adapter"
+    },
+    "inference_environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "verification_environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "harness": {
+      "$ref": "#/$defs/timed_adapter"
+    },
+    "candidate": {
+      "$ref": "#/$defs/adapter"
+    },
+    "verifier": {
+      "$ref": "#/$defs/timed_adapter"
+    },
+    "inference_resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "verification_resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "inference_network_policy": {
+      "enum": [
+        "deny_all",
+        "unrestricted"
+      ]
+    },
+    "verification_network_policy": {
+      "enum": [
+        "deny_all",
+        "unrestricted"
+      ]
+    }
+  },
+  "$defs": {
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "version",
+        "config"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config": {
+          "type": "object"
+        }
+      }
+    },
+    "timed_adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "version",
+        "timeout_seconds",
+        "config"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "config": {
+          "type": "object"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_id",
+        "image",
+        "platform",
+        "working_directory"
+      ],
+      "properties": {
+        "environment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^.+@sha256:[0-9a-f]{64}$"
+        },
+        "platform": {
+          "enum": [
+            "linux/amd64",
+            "linux/arm64"
+          ]
+        },
+        "working_directory": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_cpu",
+        "request_memory",
+        "request_ephemeral_storage",
+        "limit_cpu",
+        "limit_memory",
+        "limit_ephemeral_storage"
+      ],
+      "properties": {
+        "request_cpu": {
+          "type": "string"
+        },
+        "request_memory": {
+          "type": "string"
+        },
+        "request_ephemeral_storage": {
+          "type": "string"
+        },
+        "limit_cpu": {
+          "type": "string"
+        },
+        "limit_memory": {
+          "type": "string"
+        },
+        "limit_ephemeral_storage": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

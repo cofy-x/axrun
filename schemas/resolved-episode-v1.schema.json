@@ -4,47 +4,56 @@
   "title": "ResolvedEpisode v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "episode_id", "task_id", "seed_digest", "base_commit", "prompt_file", "inference_environment_id", "verification_environment_id", "harness", "verifier"],
+  "required": ["schema_version", "episode_id", "task_id", "seed_digest", "prompt_file", "task", "inference_environment", "verification_environment", "harness", "candidate", "verifier", "inference_resources", "verification_resources", "metadata"],
   "properties": {
     "schema_version": { "const": 1 },
     "episode_id": { "type": "string", "minLength": 1 },
     "task_id": { "type": "string", "minLength": 1 },
     "seed_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "base_commit": { "type": "string", "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$" },
-    "prompt_file": { "type": "string", "minLength": 1 },
-    "inference_environment_id": { "type": "string", "minLength": 1 },
-    "verification_environment_id": { "type": "string", "minLength": 1 },
-    "harness": { "$ref": "#/$defs/harness" },
-    "verifier": { "$ref": "#/$defs/verifier" },
+    "prompt_file": { "type": "string", "pattern": "^/" },
+    "task": { "$ref": "#/$defs/adapter" },
+    "inference_environment": { "$ref": "#/$defs/environment" },
+    "verification_environment": { "$ref": "#/$defs/environment" },
+    "harness": { "$ref": "#/$defs/timed_adapter" },
+    "candidate": { "$ref": "#/$defs/adapter" },
+    "verifier": { "$ref": "#/$defs/timed_adapter" },
     "inference_resources": { "$ref": "#/$defs/resources" },
     "verification_resources": { "$ref": "#/$defs/resources" },
-    "metadata": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} }
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
   },
   "$defs": {
-    "harness": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["identity", "version"],
+    "adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "version", "config"],
       "properties": {
         "identity": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
-        "timeout_seconds": { "type": "integer", "minimum": 1 },
-        "config": { "type": "object", "default": {} }
+        "config": { "type": "object" }
       }
     },
-    "verifier": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["identity", "version"],
+    "timed_adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "version", "timeout_seconds", "config"],
       "properties": {
         "identity": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
         "timeout_seconds": { "type": "integer", "minimum": 1 },
-        "config": { "type": "object", "default": {} }
+        "config": { "type": "object" }
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["environment_id", "image", "platform", "working_directory"],
+      "properties": {
+        "environment_id": { "type": "string", "minLength": 1 },
+        "image": { "type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$" },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+        "working_directory": { "type": "string", "pattern": "^/" }
       }
     },
     "resources": {
       "type": "object", "additionalProperties": false,
+      "required": ["request_cpu", "request_memory", "request_ephemeral_storage", "limit_cpu", "limit_memory", "limit_ephemeral_storage"],
       "properties": {
         "request_cpu": { "type": "string" }, "request_memory": { "type": "string" }, "request_ephemeral_storage": { "type": "string" },
         "limit_cpu": { "type": "string" }, "limit_memory": { "type": "string" }, "limit_ephemeral_storage": { "type": "string" }
