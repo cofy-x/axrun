@@ -249,7 +249,7 @@ The real `xorg62__tty-clock.f2f847c` vertical locks the ProgramBench 1.2.4 insta
 denominator, ignore decisions, hidden-blob revision/digests, and official `linux/amd64` cleanroom
 platform manifest. Its benchmark-owned verifier clears and extracts the candidate, compiles
 offline, seals the complete post-compile rootfs, and starts one fresh Run per active branch.
-`axern-sdk==0.12.0` exposes the successful-Run rootfs result as an immutable derived Environment;
+`axern-sdk==0.12.1` exposes the successful-Run rootfs result as an immutable derived Environment;
 the linked earlier live validation on v0.11.4 proved fresh Runs preserve sealed state without sharing later mutations.
 Aggregation preserves missing tests as `not_run`, ignored tests, branch errors, and ProgramBench's
 last-result-wins behavior for duplicate full test names. A workspace archive remains an invalid
@@ -333,7 +333,7 @@ Kova endpoint and token remain in the caller environment used by `kova-client`; 
 
 ## Install and CLI
 
-Axrun pins the released `axern-sdk==0.12.0`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
+Axrun pins the released `axern-sdk==0.12.1`; it does not use an Axern source checkout or private generated modules. Optional Kova preparation pins the released `kova-client==0.1.0rc9` extra.
 
 ```bash
 uv sync --all-groups
