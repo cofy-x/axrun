@@ -91,6 +91,8 @@ class _ExecutionStore:
         branches: tuple[str, ...],
     ) -> _ExecutionRecord:
         with self.lock(execution_id):
+            if self.cancelled(execution_id):
+                raise RecoveryRequiredError("ProgramBench verification was cancelled")
             existing = self.load(execution_id)
             if existing is not None:
                 if (
@@ -143,6 +145,35 @@ class _ExecutionStore:
     def save(self, record: _ExecutionRecord) -> None:
         _atomic_write(self.path(record.execution_id), canonical_json(record.as_dict()) + b"\n")
 
+    def save_live(self, record: _ExecutionRecord) -> None:
+        """Publish verifier progress only while cancellation has not won the race."""
+
+        with self.lock(record.execution_id):
+            current = self.load(record.execution_id)
+            if (
+                current is None
+                or self.cancelled(record.execution_id)
+                or current.state in {"cancelling", "cancelled"}
+            ):
+                raise RecoveryRequiredError("ProgramBench verification was cancelled")
+            self.save(record)
+
+    def require_live(self, execution_id: str) -> None:
+        with self.lock(execution_id):
+            current = self.load(execution_id)
+            if (
+                current is None
+                or self.cancelled(execution_id)
+                or current.state in {"cancelling", "cancelled"}
+            ):
+                raise RecoveryRequiredError("ProgramBench verification was cancelled")
+
+    def cancelled(self, execution_id: str) -> bool:
+        return (self.root / "verifications" / execution_id / "cancelled").exists()
+
+    def mark_cancelled(self, execution_id: str) -> None:
+        _atomic_write(self.root / "verifications" / execution_id / "cancelled", b"\n")
+
     def publish_details(self, value: dict[str, Any]) -> tuple[Path, str]:
         digest = canonical_digest(value)
         path = self.root / "verification-details" / "sha256" / digest / "programbench.json"
@@ -152,6 +183,10 @@ class _ExecutionStore:
     def claim_compile(self, execution_id: str) -> _ExecutionRecord:
         with self.lock(execution_id):
             record = self.load(execution_id)
+            if self.cancelled(execution_id) or (
+                record is not None and record.state in {"cancelling", "cancelled"}
+            ):
+                raise RecoveryRequiredError("ProgramBench verification was cancelled")
             if record is None:
                 raise RecoveryRequiredError("ProgramBench execution record disappeared")
             if record.compile.state == "running" and record.compile.execution is None:
@@ -167,6 +202,10 @@ class _ExecutionStore:
     def claim_branch(self, execution_id: str, branch: str) -> _ExecutionRecord:
         with self.lock(execution_id):
             record = self.load(execution_id)
+            if self.cancelled(execution_id) or (
+                record is not None and record.state in {"cancelling", "cancelled"}
+            ):
+                raise RecoveryRequiredError("ProgramBench verification was cancelled")
             if record is None or branch not in record.branches:
                 raise RecoveryRequiredError("ProgramBench branch execution record disappeared")
             step = record.branches[branch]
@@ -229,7 +268,10 @@ class ProgramBenchOfficialVerifierAdapter:
         store = _ExecutionStore(state_root)
         with store.lock(execution_id):
             record = store.load(execution_id)
-            if record is None or record.state == "cancelled":
+            if record is None:
+                store.mark_cancelled(execution_id)
+                return
+            if record.state == "cancelled":
                 return
             executions = [
                 step.execution
@@ -280,7 +322,7 @@ class ProgramBenchOfficialVerifierAdapter:
             if record.cleanup_state != "completed" and record.derived_environment_id:
                 coordinator.delete_environment(record.derived_environment_id)
                 record.cleanup_state = "completed"
-                store.save(record)
+                store.save_live(record)
             raise InfrastructureError(
                 "ProgramBench verification previously failed; use a new episode"
             )
@@ -291,11 +333,13 @@ class ProgramBenchOfficialVerifierAdapter:
 
             def bind_compile(execution: ExecutionRef) -> None:
                 record.compile.execution = execution
-                store.save(record)
+                store.save_live(record)
                 on_primary_bound(execution)
 
+            compile_plan = self._compile_plan(episode, candidate, workspace)
+            store.require_live(execution_id)
             compile_result, environment_id = coordinator.run_with_rootfs(
-                self._compile_plan(episode, candidate, workspace),
+                compile_plan,
                 artifact_dir=(
                     state_root / "artifacts" / episode.episode_id / "verification" / "compile"
                 ),
@@ -306,7 +350,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 record.compile.state = "business_failed"
                 record.compile.reason_code = _COMPILE_BUSINESS_EXIT_CODES[compile_result.exit_code]
                 record.state = "aggregating"
-                store.save(record)
+                store.save_live(record)
                 return self._finish_compile_failure(
                     episode,
                     candidate,
@@ -329,7 +373,11 @@ class ProgramBenchOfficialVerifierAdapter:
                 raise InfrastructureError("successful compile has no derived Environment")
             record.compile.execution = compile_result.execution
             record.derived_environment_id = environment_id
-            store.save(record)
+            try:
+                store.save_live(record)
+            except RecoveryRequiredError:
+                coordinator.delete_environment(environment_id)
+                raise
             try:
                 compile_value, compile_artifact = _load_artifact_json(
                     compile_result, _COMPILE_RESULT
@@ -355,7 +403,7 @@ class ProgramBenchOfficialVerifierAdapter:
             record.compile.result_digest = compile_artifact.sha256
             record.executable_digest = executable_digest
             record.state = "branches_running"
-            store.save(record)
+            store.save_live(record)
 
         if not record.derived_environment_id or not record.executable_digest:
             raise RecoveryRequiredError("completed compile record is incomplete")
@@ -367,6 +415,7 @@ class ProgramBenchOfficialVerifierAdapter:
             step = record.branches[branch]
             asset = self._branch_asset(episode, branch)
             plan = self._branch_plan(episode, branch, asset, record)
+            store.require_live(execution_id)
 
             def bind_branch(
                 execution: ExecutionRef,
@@ -375,7 +424,7 @@ class ProgramBenchOfficialVerifierAdapter:
                 current_record: _ExecutionRecord = record,
             ) -> None:
                 current.execution = execution
-                store.save(current_record)
+                store.save_live(current_record)
 
             try:
                 result = coordinator.run(
@@ -396,11 +445,11 @@ class ProgramBenchOfficialVerifierAdapter:
                 raise InfrastructureError("ProgramBench branch result is unavailable") from exc
             if result.exit_code != 0:
                 record.cleanup_state = "running"
-                store.save(record)
+                store.save_live(record)
                 coordinator.delete_environment(record.derived_environment_id)
                 record.cleanup_state = "completed"
                 record.state = "infrastructure_failed"
-                store.save(record)
+                store.save_live(record)
                 raise InfrastructureError(
                     f"ProgramBench branch Run failed: {result.diagnostic_code}"
                 )
@@ -418,32 +467,32 @@ class ProgramBenchOfficialVerifierAdapter:
                 step.state = "infrastructure_failed"
                 record.state = "infrastructure_failed"
                 record.cleanup_state = "running"
-                store.save(record)
+                store.save_live(record)
                 coordinator.delete_environment(record.derived_environment_id)
                 record.cleanup_state = "completed"
-                store.save(record)
+                store.save_live(record)
                 raise InfrastructureError(f"ProgramBench evaluator failed: {step.reason_code}")
             step.execution = result.execution
             step.state = "completed"
             step.result_path = artifact.path
             step.result_digest = artifact.sha256
             step.reason_code = str(value["reason_code"])
-            store.save(record)
+            store.save_live(record)
 
         record.state = "aggregating"
         record.aggregation_state = "running"
-        store.save(record)
+        store.save_live(record)
         details = _aggregate(record, tests, episode)
         path, digest = store.publish_details(details)
         record.details_path = str(path)
         record.details_digest = digest
         record.aggregation_state = "completed"
         record.cleanup_state = "running"
-        store.save(record)
+        store.save_live(record)
         coordinator.delete_environment(record.derived_environment_id)
         record.cleanup_state = "completed"
         record.state = "completed"
-        store.save(record)
+        store.save_live(record)
         primary = record.compile.execution
         if primary is None:
             raise RecoveryRequiredError("ProgramBench compile execution identity is missing")
@@ -516,7 +565,7 @@ class ProgramBenchOfficialVerifierAdapter:
         record.aggregation_state = "completed"
         record.cleanup_state = "not_created"
         record.state = "completed"
-        store.save(record)
+        store.save_live(record)
         completed_at = datetime.now(UTC).isoformat()
         return (
             VerificationResult(
@@ -728,11 +777,11 @@ def _mark_infrastructure_failed(
 ) -> None:
     record.state = "infrastructure_failed"
     record.cleanup_state = "running"
-    store.save(record)
+    store.save_live(record)
     if record.derived_environment_id:
         coordinator.delete_environment(record.derived_environment_id)
     record.cleanup_state = "completed"
-    store.save(record)
+    store.save_live(record)
 
 
 def _step(raw: dict[str, Any]) -> _Step:

@@ -3,15 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from typing import Any, cast
 
 import pytest
 
+from axrun.adapters.programbench_official import (
+    ProgramBenchOfficialVerifierAdapter,
+    _ExecutionStore,
+)
 from axrun.catalog import resolve_adapters
 from axrun.datasets import ProgramBenchOfficialSingleResolver
-from axrun.errors import InfrastructureError
+from axrun.errors import InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     Artifact,
     ExecutionRef,
@@ -378,6 +384,229 @@ def test_official_multirun_cancel_cleans_owned_branch_and_environment(tmp_path: 
     )
     assert record["state"] == "cancelled"
     assert record["cleanup_state"] == "completed"
+
+
+@pytest.mark.parametrize("pause_at", ("before_branch_bind", "after_branch_result"))
+def test_cancel_during_branch_creation_or_completion_keeps_terminal_state(
+    tmp_path: Path, pause_at: str
+) -> None:
+    class PausedBackend(OfficialBackend):
+        def __init__(self) -> None:
+            super().__init__(variant="gold")
+            self.entered = Event()
+            self.resume = Event()
+
+        def _new(self, plan: StagePlan, on_bound: Callable[[ExecutionRef], None]) -> ExecutionRef:
+            if (
+                pause_at == "before_branch_bind"
+                and plan.labels.get("axrun.stage") == "verification-branch"
+            ):
+                execution = ExecutionRef(
+                    plan.environment_id,
+                    f"run-{len(self.created) + 1}",
+                    f"allocation-{len(self.created) + 1}",
+                )
+                self.created.append(execution)
+                self.plans[execution.run_id] = plan
+                self.entered.set()
+                assert self.resume.wait(10)
+                try:
+                    on_bound(execution)
+                except BaseException:
+                    # The real backend cancels a Run if its bound callback rejects it.
+                    self.cancel(execution)
+                    raise
+                return execution
+            return super()._new(plan, on_bound)
+
+        def execute(
+            self,
+            plan: StagePlan,
+            *,
+            artifact_dir: Path,
+            on_bound: Callable[[ExecutionRef], None],
+            lifecycle=None,
+        ) -> StageResult:
+            result = super().execute(
+                plan, artifact_dir=artifact_dir, on_bound=on_bound, lifecycle=lifecycle
+            )
+            if (
+                pause_at == "after_branch_result"
+                and plan.labels.get("axrun.stage") == "verification-branch"
+            ):
+                self.entered.set()
+                assert self.resume.wait(10)
+            return result
+
+    episode = _episode(tmp_path, f"gold-{pause_at}")
+    selection = resolve_adapters(episode)
+    backend = PausedBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runner.run,
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+        try:
+            assert backend.entered.wait(10)
+            cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
+        finally:
+            backend.resume.set()
+        with pytest.raises(RecoveryRequiredError, match="cancelled"):
+            future.result(timeout=10)
+
+    assert cancelled.phase.value == "cancelled"
+    assert len(backend.created) == 3
+    assert set(backend.cancelled) == {"run-2", "run-3"}
+    assert backend.deleted_environments == ["derived-gold"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "cancelled"
+    assert record["cleanup_state"] == "completed"
+
+
+def test_cancel_before_derived_environment_publication_cleans_late_result(
+    tmp_path: Path,
+) -> None:
+    class PausedRootfsBackend(OfficialBackend):
+        def __init__(self) -> None:
+            super().__init__(variant="gold")
+            self.entered = Event()
+            self.resume = Event()
+
+        def execute_rootfs(
+            self,
+            plan: StagePlan,
+            *,
+            artifact_dir: Path,
+            on_bound: Callable[[ExecutionRef], None],
+        ) -> tuple[StageResult, str]:
+            result = super().execute_rootfs(plan, artifact_dir=artifact_dir, on_bound=on_bound)
+            self.entered.set()
+            assert self.resume.wait(10)
+            return result
+
+    episode = _episode(tmp_path, "gold-late-environment")
+    selection = resolve_adapters(episode)
+    backend = PausedRootfsBackend()
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runner.run,
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+        try:
+            assert backend.entered.wait(10)
+            cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
+        finally:
+            backend.resume.set()
+        with pytest.raises(RecoveryRequiredError, match="cancelled"):
+            future.result(timeout=10)
+
+    assert cancelled.phase.value == "cancelled"
+    assert len(backend.created) == 2
+    assert backend.deleted_environments == ["derived-gold"]
+    record = json.loads(
+        (
+            store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+        ).read_text()
+    )
+    assert record["state"] == "cancelled"
+    assert record["derived_environment_id"] == ""
+
+
+def test_cancel_before_verifier_record_initialization_prevents_first_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = Event()
+    resume = Event()
+    initialize = _ExecutionStore.initialize
+
+    def paused_initialize(self: _ExecutionStore, **kwargs: Any):
+        entered.set()
+        assert resume.wait(10)
+        return initialize(self, **kwargs)
+
+    monkeypatch.setattr(_ExecutionStore, "initialize", paused_initialize)
+    episode = _episode(tmp_path, "gold-before-initialize")
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant="gold")
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runner.run,
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+        try:
+            assert entered.wait(10)
+            cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
+        finally:
+            resume.set()
+        with pytest.raises(RecoveryRequiredError, match="cancelled"):
+            future.result(timeout=10)
+
+    assert cancelled.phase.value == "cancelled"
+    assert [item.run_id for item in backend.created] == ["run-1"]
+    assert not (
+        store.root / "verifications" / f"{episode.episode_id}-programbench" / "execution.json"
+    ).exists()
+
+
+def test_cancel_during_branch_planning_prevents_new_branch_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = Event()
+    resume = Event()
+    branch_asset = ProgramBenchOfficialVerifierAdapter._branch_asset
+
+    def paused_branch_asset(
+        self: ProgramBenchOfficialVerifierAdapter, episode: Any, branch: str
+    ) -> Path:
+        if not entered.is_set():
+            entered.set()
+            assert resume.wait(10)
+        return branch_asset(self, episode, branch)
+
+    monkeypatch.setattr(ProgramBenchOfficialVerifierAdapter, "_branch_asset", paused_branch_asset)
+    episode = _episode(tmp_path, "gold-branch-planning")
+    selection = resolve_adapters(episode)
+    backend = OfficialBackend(variant="gold")
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=backend, store=store)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runner.run,
+            episode,
+            inference=selection.inference,
+            candidate=selection.candidate,
+            verifier=selection.verifier,
+        )
+        try:
+            assert entered.wait(10)
+            cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
+        finally:
+            resume.set()
+        with pytest.raises(RecoveryRequiredError, match="cancelled"):
+            future.result(timeout=10)
+
+    assert cancelled.phase.value == "cancelled"
+    assert [item.run_id for item in backend.created] == ["run-1", "run-2"]
+    assert backend.deleted_environments == ["derived-gold"]
 
 
 def test_official_terminal_branch_infrastructure_failure_cleans_derived_environment(
