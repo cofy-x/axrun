@@ -313,6 +313,55 @@ def test_partial_kova_results_fail_closed(tmp_path: Path) -> None:
     assert record.diagnostic_code == "invalid_kova_results"
 
 
+@pytest.mark.parametrize(
+    ("failure_point", "diagnostic_code", "summary"),
+    [
+        (
+            "create_build",
+            "build_identity_mismatch",
+            "Kova build identity does not match the preparation request",
+        ),
+        (
+            "get_results",
+            "invalid_kova_results",
+            "Kova build results do not satisfy the preparation contract",
+        ),
+        (
+            "validate_environment",
+            "environment_mismatch",
+            "Axern Environment does not match the preparation receipt",
+        ),
+    ],
+)
+def test_contract_failure_does_not_persist_exception_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+    diagnostic_code: str,
+    summary: str,
+) -> None:
+    runner, store, kova, _axern, request = service(tmp_path)
+    secret = "sentinel-secret-in-contract-error"
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise ContractError(secret)
+
+    if failure_point == "validate_environment":
+        monkeypatch.setattr("axrun.preparation.service._validate_environment", fail)
+    else:
+        monkeypatch.setattr(kova, failure_point, fail)
+
+    with pytest.raises(ContractError, match=secret):
+        runner.prepare(request, wait_timeout=1)
+
+    record = store.load_record(request.preparation_id)
+    assert record is not None
+    assert record.state == PreparationState.FAILED
+    assert record.diagnostic_code == diagnostic_code
+    assert record.diagnostic_summary == summary
+    assert secret not in store.record_path(request.preparation_id).read_text(encoding="utf-8")
+
+
 def test_credential_bearing_immutable_reference_fails_closed(tmp_path: Path) -> None:
     runner, store, kova, _axern, request = service(tmp_path)
     kova.result = results(
@@ -420,7 +469,11 @@ def test_environment_identity_mismatches_fail_closed(
     assert record.diagnostic_code == "environment_mismatch"
 
 
-def test_typed_kova_error_message_is_not_persistable() -> None:
+@pytest.mark.parametrize(
+    ("code", "expected_code"),
+    [("unauthenticated", "unauthenticated"), ("super-secret-canary", "kova_api_error")],
+)
+def test_typed_kova_error_message_is_not_persistable(code: str, expected_code: str) -> None:
     from kova_client import KovaAPIError
 
     canary = "super-secret-canary"
@@ -429,7 +482,7 @@ def test_typed_kova_error_message_is_not_persistable() -> None:
         def version(self):
             raise KovaAPIError(
                 status_code=401,
-                code="unauthorized",
+                code=code,
                 message=canary,
                 retryable=False,
             )
@@ -438,6 +491,7 @@ def test_typed_kova_error_message_is_not_persistable() -> None:
         KovaSdkPreparationClient(RawClient()).version()
     assert canary not in raised.value.summary
     assert canary not in str(raised.value)
+    assert raised.value.code == expected_code
     assert raised.value.status == 401
 
 

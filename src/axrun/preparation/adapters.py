@@ -8,6 +8,20 @@ from typing import Any, Protocol
 from axrun.errors import InfrastructureError, SdkCapabilityError
 from axrun.preparation.models import SeedBuildSpec
 
+_KOVA_API_ERROR_CODES = frozenset(
+    {
+        "invalid_request",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "queue_capacity_exceeded",
+        "queue_admission_pending",
+        "logs_unavailable",
+        "internal",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class KovaVersion:
@@ -280,7 +294,7 @@ def _kova_error(operation: str, exc: Exception, *, ambiguous: bool) -> Preparati
     if isinstance(exc, KovaAPIError):
         return PreparationRemoteError(
             operation=operation,
-            code=exc.code,
+            code=exc.code if exc.code in _KOVA_API_ERROR_CODES else "kova_api_error",
             summary="Kova Service returned a typed API error",
             status=exc.status_code,
             retryable=exc.retryable,

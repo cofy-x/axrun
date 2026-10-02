@@ -25,6 +25,11 @@ from axrun.preparation.store import PreparationStore
 _TERMINAL = {"succeeded", "failed", "cancelled"}
 _PREPARATION_LABEL = "axrun.preparation-digest"
 _PLATFORM_LABEL = "axrun.preparation-platform"
+_CONTRACT_FAILURE_SUMMARIES = {
+    "build_identity_mismatch": "Kova build identity does not match the preparation request",
+    "invalid_kova_results": "Kova build results do not satisfy the preparation contract",
+    "environment_mismatch": "Axern Environment does not match the preparation receipt",
+}
 
 
 class EnvironmentPreparationService:
@@ -91,8 +96,8 @@ class EnvironmentPreparationService:
         except PreparationRemoteError as exc:
             self._remote_failure(record, exc)
             raise
-        except ContractError as exc:
-            self._contract_failure(record, "build_identity_mismatch", str(exc))
+        except ContractError:
+            self._contract_failure(record, "build_identity_mismatch")
             raise
         with self.store.lock(spec.preparation_id):
             current = self._record(spec.preparation_id)
@@ -125,8 +130,8 @@ class EnvironmentPreparationService:
             else:
                 self._remote_failure(record, exc)
             raise
-        except ContractError as exc:
-            self._contract_failure(record, "build_identity_mismatch", str(exc))
+        except ContractError:
+            self._contract_failure(record, "build_identity_mismatch")
             raise
         if build.status != "succeeded":
             receipt = _failed_build_receipt(spec, record, build)
@@ -151,8 +156,8 @@ class EnvironmentPreparationService:
         except PreparationRemoteError as exc:
             self._remote_failure(record, exc)
             raise
-        except ContractError as exc:
-            self._contract_failure(record, "invalid_kova_results", str(exc))
+        except ContractError:
+            self._contract_failure(record, "invalid_kova_results")
             raise
         receipt = SeedBuildReceipt(
             schema_version=1,
@@ -219,8 +224,8 @@ class EnvironmentPreparationService:
                 raise
         try:
             _validate_environment(spec, receipt, facts)
-        except ContractError as exc:
-            self._contract_failure(record, "environment_mismatch", str(exc))
+        except ContractError:
+            self._contract_failure(record, "environment_mismatch")
             raise
         with self.store.lock(spec.preparation_id):
             current = self._record(spec.preparation_id)
@@ -243,8 +248,8 @@ class EnvironmentPreparationService:
             raise
         try:
             _validate_environment(spec, seed, facts)
-        except ContractError as exc:
-            self._contract_failure(record, "environment_mismatch", str(exc))
+        except ContractError:
+            self._contract_failure(record, "environment_mismatch")
             raise
         now = _now()
         receipt = EnvironmentPreparationReceipt(
@@ -290,13 +295,13 @@ class EnvironmentPreparationService:
             current.updated_at = _now()
             self.store.save_record(current)
 
-    def _contract_failure(self, record: PreparationRecord, code: str, summary: str) -> None:
+    def _contract_failure(self, record: PreparationRecord, code: str) -> None:
         with self.store.lock(record.preparation_id):
             current = self._record(record.preparation_id)
             current.state = PreparationState.FAILED
             current.ambiguous_operation = ""
             current.diagnostic_code = code
-            current.diagnostic_summary = summary[:512]
+            current.diagnostic_summary = _CONTRACT_FAILURE_SUMMARIES[code]
             current.updated_at = _now()
             self.store.save_record(current)
 
