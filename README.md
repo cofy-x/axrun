@@ -105,16 +105,11 @@ episode state; it does not enable other SWE-bench instances or a suite.
 | Status | Flask scope |
 | --- | --- |
 | Implemented | Locked resolver, runtime image admission, qualification, execution/recovery, sealed outputs, and record/report verification |
-| Accepted | Deterministic gold/known-bad/empty oracle parity and a new real Claude episode through the normal CLI on released Axern v0.12.0; see [CLI admission acceptance](docs/validation/2026-09-28-flask-cli-admission.md). The [earlier dedicated-tool acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md) remains historical evidence |
+| Accepted | Deterministic gold/known-bad/empty oracle parity and a real Claude CLI episode on released Axern v0.12.0; see [CLI admission acceptance](docs/validation/2026-09-28-flask-cli-admission.md). Independent-wheel static-gold and real Claude CLI episodes also passed on released v0.12.1; see the acceptances below. The [earlier dedicated-tool acceptance](docs/validation/2026-09-28-swebench-flask-5014-axern-v0.12.0.md) remains historical evidence |
 | Registered | Normal CLI uses the same reviewed catalog and mandatory admission checks, without caller-built adapter selection |
 | Not implied | Generic SWE-bench support, suite support, full official environment equivalence, or leaderboard submission eligibility |
 
-A separate [v0.12.1 independent-wheel cold-start acceptance](docs/validation/2026-10-02-flask-wheel-cold-start-v0.12.1.md)
-completed the fixed static-gold CLI path on a fresh released local stack: five new
-Runs, exact 60/60 oracle parity, and verified cleanup. The earlier
-[v0.12.0 cold-start failure](docs/validation/2026-09-28-flask-wheel-cold-start.md)
-remains historical platform evidence; this does not add a new Claude episode or
-broaden the registered benchmark scope.
+The [v0.12.1 independent-wheel static-gold cold start](docs/validation/2026-10-02-flask-wheel-cold-start-v0.12.1.md) completed five fresh Runs, exact 60/60 oracle parity, and verified cleanup on a released local stack. A separate [v0.12.1 real Claude independent-wheel acceptance](docs/validation/2026-10-02-flask-claude-wheel-v0.12.1.md) completed five fresh Runs, 20 caller-side model requests, a fresh verifier, exact 60/60 gold-map parity, and verified cleanup. The earlier [v0.12.0 cold-start failure](docs/validation/2026-09-28-flask-wheel-cold-start.md) remains historical platform evidence; neither v0.12.1 acceptance broadens the registered benchmark scope.
 
 The model-free admission command scans the **actual imported runtime image** in a
 separate fresh SDK Run, not a source image assumed to be equivalent. The receipt
