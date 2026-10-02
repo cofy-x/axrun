@@ -6,7 +6,8 @@
 manifest digest. The upstream image contains the required commit but starts `/testbed` at an
 environment snapshot commit. The thin Axrun seed checks out the row's exact base commit, removes
 workspace-local state, and verifies system Python and Git without changing the official test
-environment. Build it with:
+environment. It inherits the upstream `/testbed` working directory so the derived image adds
+exactly one filesystem layer. Build it with:
 
 ```bash
 docker build --platform linux/amd64 \

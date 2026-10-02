@@ -20,6 +20,9 @@ def test_amd64_task_seed_is_pinned_clean_and_registry_neutral() -> None:
     assert "git -C /testbed clean -ffdx" in dockerfile
     assert "git -C /testbed status --porcelain --untracked-files=all" in dockerfile
     assert 'io.axrun.platform-role="benchmark"' in dockerfile
+    # The upstream image already sets /testbed; a second WORKDIR adds an extra
+    # filesystem layer and breaks the exact one-layer seed ancestry contract.
+    assert "WORKDIR /testbed" not in dockerfile
     forbidden = ("cr.aliyuncs.com", "AKIA", "token=", "password=", "_authToken")
     assert all(value not in dockerfile for value in forbidden)
 

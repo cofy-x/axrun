@@ -12,8 +12,6 @@ RUN test "$(uname -m)" = x86_64 \
     && test "$(git -C /testbed rev-parse HEAD)" = "${DJANGO_BASE_COMMIT}" \
     && test -z "$(git -C /testbed status --porcelain --untracked-files=all)"
 
-WORKDIR /testbed
-
 LABEL org.opencontainers.image.title="Axrun SWE-bench Verified django__django-12419 amd64 seed" \
       org.opencontainers.image.description="Canonical amd64 seed derived from the pinned official SWE-bench image" \
       io.axrun.dataset="SWE-bench/SWE-bench_Verified" \
