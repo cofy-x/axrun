@@ -83,8 +83,9 @@ The [locked asset preparer](tools/validation/swebench_django_assets.py) and
 [native amd64 model-free oracle](tools/validation/swebench_django_native_oracle.py) are stage-zero
 gates for that one instance. The [native Django stage-zero receipt](docs/validation/2026-10-02-swebench-django-12419-native-stage-zero.md)
 records official gold, known-bad, and empty classifications on a derived clean-base amd64 seed;
-the prior incomplete attempts remain separate. Admission of Axern's actual imported runtime and
-normal CLI deterministic parity are still outstanding. A formal Django task/verifier identity and
+the prior incomplete attempts remain separate. The same record includes one successful, model-free
+admission Run against Axern's actual imported runtime. Normal CLI deterministic parity is still
+outstanding. A formal Django task/verifier identity and
 normal CLI path remain unregistered; this does not add generic SWE-bench or leaderboard support.
 
 ### Locked Flask CLI vertical

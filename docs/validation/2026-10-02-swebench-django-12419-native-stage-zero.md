@@ -1,6 +1,6 @@
 # SWE-bench Verified Django 12419 native stage-zero oracle — 2026-10-02
 
-The fixed `django__django-12419` gold, unrelated known-bad, and empty controls completed on native `linux/amd64` at `wayne-hk-dev`. The pinned upstream TestSpec, evaluation script, and scorer classified gold as resolved, known-bad as unresolved, and empty as unscored. This is a model-free native oracle, **not** an Axern imported-runtime admission, Axrun fresh-verifier parity, normal CLI acceptance, a Claude result, or general SWE-bench support. The oracle uses upstream patch-apply semantics and scorer but does not call upstream `run_instance`.
+The fixed `django__django-12419` gold, unrelated known-bad, and empty controls completed on native `linux/amd64` at `wayne-hk-dev`. The pinned upstream TestSpec, evaluation script, and scorer classified gold as resolved, known-bad as unresolved, and empty as unscored. A subsequent model-free Axern Run admitted the actual imported runtime image. Neither stage is Axrun fresh-verifier parity, normal CLI acceptance, a Claude result, or general SWE-bench support. The native oracle uses upstream patch-apply semantics and scorer but does not call upstream `run_instance`.
 
 ## Locked inputs and image
 
@@ -27,4 +27,18 @@ The known-bad log contains two parsed statuses, but the fixed official scoring d
 
 The completed private `axrun.swebench-django-native-oracle@1` receipt SHA-256 is `c6836ffddff8ed673e38073980614fd0a23e00eb046b8dbbce14b5773292eb8e`. An independent read-only audit revalidated the asset manifest, scorer source/freeze, both Docker image IDs, exact 10+1 layer ancestry and labels, the receipt's three official summaries against stored official reports, and each case's stored log and patch hashes. The private files remain mode `0600` in `0700` directories; raw rows, patches, test logs, and per-test reports are not reproduced here. All `axrun-django-audit-*` and `axrun-django-oracle-*` containers were absent afterward; the seven existing Axern, two AKernel, and one BKS running containers remained running.
 
-The accepted seed was subsequently loaded with the released Axern v0.12.1 local image command. Its private import receipt has SHA-256 `fd6ac363b9c0d0f8cc9cb5f092d3dec90b7990cb54d37d3daba696a56ab7a8ab` and records the **distinct immutable runtime reference** `index.docker.io/library/axrun-django-seed-0121@sha256:3912793ab27162e63adec6835a9267b150341b9b5cba1532e6d7ac8933c8cbb6` (`linux/amd64`). Image load did not create an Axern Environment or Run. Model-free admission of the actual imported runtime, normal CLI deterministic parity, and a formal Django task/verifier identity remain outstanding; neither the oracle nor image load authorizes real-Claude acceptance.
+## Axern imported-runtime admission
+
+The accepted seed was loaded with the released Axern v0.12.1 local image command. Its private import receipt has SHA-256 `fd6ac363b9c0d0f8cc9cb5f092d3dec90b7990cb54d37d3daba696a56ab7a8ab` and records the **distinct immutable runtime reference** `index.docker.io/library/axrun-django-seed-0121@sha256:3912793ab27162e63adec6835a9267b150341b9b5cba1532e6d7ac8933c8cbb6` (`linux/amd64`). Image load itself created no Environment or Run.
+
+The [locked one-shot probe](../../tools/validation/swebench_django_axern_runtime_probe.py), from clean Axrun `b9f1e2478abb88124b26e1ec4cb23e5b4825d35d` with installed public `axern-sdk==0.12.1`, then executed **exactly one** fresh, model-free Run against that imported digest. Its approved inputs were the native oracle receipt SHA-256 `c6836ffddff8ed673e38073980614fd0a23e00eb046b8dbbce14b5773292eb8e` and image-import receipt above. The Run used deny-all networking, a 600-second scanner alarm, and 1 CPU/2 GiB scheduler requests; this deployment does not enforce those CPU/memory values as hard limits.
+
+| Public identity | Value |
+| --- | --- |
+| Environment | `env-90e1900f-e4f6-40d6-a917-4f491feca71b` |
+| Run | `run-56f60e5f-47ea-4e57-b054-c897fdf2c9d5` |
+| Allocation | `alloc-5eb23a89-0281-4f25-b079-2c92320a6318` |
+
+The Run reached `SUCCEEDED` with exit code 0. Its single public sealed output `/outputs/django-image-audit.json` was available as `application/json`, 1,428 bytes, SHA-256 `a1dc99b2aa846f4fa42f59a75681007e899539614c8c560e67c9b26e3d0003bc`. An independent SDK re-download matched its manifest and the local artifact byte-for-byte. The audit confirmed `x86_64`, deletion of its private request before scanning, a clean expected Git HEAD, complete traversal of 76,818 filesystem entries and all 339,152 Git objects, and no reachable locked gold/test-patch signatures. Its status was `passed` with reason `no_locked_patch_signatures_reachable`; this is a bounded signature check, not a general proof that no secret of any kind exists.
+
+The private probe receipt SHA-256 is `4048174c34249a072649c1bf887a9f710243ad67212b8486e765040e65be7c6e` (`0600` in a `0700` directory). It records `cleanup=deleted_verified`: the target Environment subsequently returned NotFound, the Allocation was inactive, and there were no active Runs. Axern had 10 successful Runs before and 11 after this one attempt, with no extra Run; all three non-Axern container IDs were unchanged. No retry was made. Normal CLI deterministic fresh-verifier parity and a formal Django task/verifier identity remain outstanding; the admission result does not authorize or claim real-Claude acceptance.
