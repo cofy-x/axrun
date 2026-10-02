@@ -14,6 +14,7 @@ from axrun.adapters.base import (
     VerifierAdapter,
 )
 from axrun.backend import ExecutionBackend
+from axrun.catalog import resolve_verifier
 from axrun.errors import (
     ContractError,
     DiagnosedInfrastructureError,
@@ -186,6 +187,18 @@ class EpisodeRunner:
                 EpisodePhase.CANCELLED,
             }:
                 return record
+            if record.phase == EpisodePhase.VERIFICATION_RUNNING and verifier is None:
+                episode = self.store.load_spec(episode_id)
+                try:
+                    registered_verifier = resolve_verifier(episode)
+                except ContractError as exc:
+                    raise ContractError(
+                        "verifier adapter is required to cancel unregistered verification"
+                    ) from exc
+                if _multi_run_enabled(registered_verifier):
+                    raise ContractError(
+                        "verifier adapter is required to cancel multi-Run verification"
+                    )
             execution = (
                 record.verification
                 if record.phase == EpisodePhase.VERIFICATION_RUNNING

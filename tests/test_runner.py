@@ -812,6 +812,45 @@ def test_cancel_rejects_incomplete_multi_run_verifier_before_remote_mutation(
     assert runner.inspect(value.episode_id).phase == EpisodePhase.VERIFICATION_RUNNING
 
 
+def test_cancel_registered_single_run_verification_without_verifier(tmp_path: Path) -> None:
+    value = replace(
+        episode(tmp_path, "cancel-single-run"),
+        verifier=VerifierSpec("synthetic-code-task", "1"),
+    )
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(value)
+    record.phase = EpisodePhase.VERIFICATION_RUNNING
+    record.inference = ExecutionRef("env-i", "run-i", "alloc-i")
+    record.verification = ExecutionRef("env-v", "run-v", "alloc-v")
+    store.save(record)
+    backend = FakeBackend()
+
+    cancelled = EpisodeRunner(backend=backend, store=store).cancel(value.episode_id)
+
+    assert cancelled.phase == EpisodePhase.CANCELLED
+    assert backend.cancelled == ["run-v"]
+
+
+def test_cancel_unregistered_verification_requires_adapter_before_remote_mutation(
+    tmp_path: Path,
+) -> None:
+    value = episode(tmp_path, "cancel-unregistered")
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(value)
+    record.phase = EpisodePhase.VERIFICATION_RUNNING
+    record.inference = ExecutionRef("env-i", "run-i", "alloc-i")
+    record.verification = ExecutionRef("env-v", "run-v", "alloc-v")
+    store.save(record)
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=store)
+
+    with pytest.raises(ContractError, match="required to cancel unregistered verification"):
+        runner.cancel(value.episode_id)
+
+    assert backend.cancelled == []
+    assert runner.inspect(value.episode_id).phase == EpisodePhase.VERIFICATION_RUNNING
+
+
 def test_terminal_inference_failure_is_not_recoverable(tmp_path: Path) -> None:
     class FailedBackend(FakeBackend):
         def _result(self, plan, artifact_dir, ref):

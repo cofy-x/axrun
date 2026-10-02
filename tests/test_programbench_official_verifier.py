@@ -17,7 +17,7 @@ from axrun.adapters.programbench_official import (
 )
 from axrun.catalog import resolve_adapters
 from axrun.datasets import ProgramBenchOfficialSingleResolver
-from axrun.errors import InfrastructureError, RecoveryRequiredError
+from axrun.errors import ContractError, InfrastructureError, RecoveryRequiredError
 from axrun.models import (
     Artifact,
     ExecutionRef,
@@ -371,6 +371,12 @@ def test_official_multirun_cancel_cleans_owned_branch_and_environment(tmp_path: 
             candidate=selection.candidate,
             verifier=selection.verifier,
         )
+
+    with pytest.raises(ContractError, match="required to cancel multi-Run verification"):
+        runner.cancel(episode.episode_id)
+    assert runner.inspect(episode.episode_id).phase.value == "verification_running"
+    assert backend.cancelled == []
+    assert backend.deleted_environments == []
 
     cancelled = runner.cancel(episode.episode_id, verifier=selection.verifier)
 
