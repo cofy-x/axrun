@@ -24,7 +24,14 @@ from axrun.datasets import (
     SyntheticGreenfieldResolver,
 )
 from axrun.datasets.swebench_flask_official import SweBenchFlaskOfficialResolver
-from axrun.errors import AxrunError, ContractError
+from axrun.errors import (
+    AxrunError,
+    ContractError,
+    DiagnosedInfrastructureError,
+    InfrastructureError,
+    RecoveryRequiredError,
+    SdkCapabilityError,
+)
 from axrun.lifecycle.base import CompositePreStartLifecycle, PreStartLifecycle
 from axrun.lifecycle.model_tunnel import ModelTunnelLifecycle
 from axrun.lifecycle.stage_progress import StageProgressObserver
@@ -130,6 +137,52 @@ def _model_lifecycle(
 
 def _print(value: Any) -> None:
     print(json.dumps(value, sort_keys=True, indent=2))
+
+
+_SAFE_DIAGNOSTIC_CODES = frozenset(
+    {
+        "lifecycle_cleanup_failed",
+        "model_tunnel_cleanup_failed",
+        "prestart_cleanup_failed",
+        "progress_observer_failed",
+        "tunnel_health_failed",
+        "tunnel_model_preflight_failed",
+    }
+)
+_SAFE_SDK_CAPABILITY_MESSAGES = frozenset(
+    {
+        "Kova preparation requires the 'kova' extra: uv sync --extra kova",
+        "axern-sdk is not installed",
+    }
+)
+
+
+def _safe_cli_error(exc: Exception) -> str:
+    """Render only fixed codes; SDK, filesystem and adapter errors may contain secrets."""
+    if isinstance(exc, DiagnosedInfrastructureError):
+        if exc.diagnostic_code in _SAFE_DIAGNOSTIC_CODES:
+            return exc.diagnostic_code
+        return "AXRUN_INFRASTRUCTURE_ERROR"
+    if isinstance(exc, RecoveryRequiredError):
+        return "AXRUN_RECOVERY_REQUIRED"
+    if isinstance(exc, ContractError):
+        return "AXRUN_CONTRACT_ERROR"
+    if isinstance(exc, InfrastructureError):
+        return "AXRUN_INFRASTRUCTURE_ERROR"
+    if isinstance(exc, SdkCapabilityError):
+        message = str(exc)
+        if message in _SAFE_SDK_CAPABILITY_MESSAGES:
+            return message
+        return "AXRUN_SDK_CAPABILITY_ERROR"
+    if isinstance(exc, AxrunError):
+        return "AXRUN_ERROR"
+    if isinstance(exc, AxernError):
+        return "AXRUN_AXERN_ERROR"
+    if isinstance(exc, OSError):
+        return "AXRUN_IO_ERROR"
+    if isinstance(exc, ValueError):
+        return "AXRUN_INVALID_VALUE"
+    return "AXRUN_UNEXPECTED_ERROR"
 
 
 def _status(store: EpisodeStore, episode_id: str) -> dict[str, Any]:
@@ -768,8 +821,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         finally:
             client.close()
-    except (AxrunError, AxernError, OSError, ValueError) as exc:
-        print(f"axrun: {exc}", file=__import__("sys").stderr)
+    except Exception as exc:
+        print(f"axrun: {_safe_cli_error(exc)}", file=__import__("sys").stderr)
         return 1
 
 

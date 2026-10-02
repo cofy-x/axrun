@@ -597,6 +597,56 @@ def test_trajectory_contract_failure_is_infrastructure_failure_without_verificat
     assert len(backend.executions) == 1
 
 
+@pytest.mark.parametrize("bound", [False, True])
+def test_unknown_backend_exception_never_enters_durable_record(tmp_path: Path, bound: bool) -> None:
+    secret = "sentinel-secret-from-backend"
+
+    class ExplodingBackend(FakeBackend):
+        def execute(self, plan, *, artifact_dir, on_bound, lifecycle=None):
+            if bound:
+                on_bound(ExecutionRef(plan.environment_id, "run-saved", "alloc-saved"))
+            raise RuntimeError(secret)
+
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=ExplodingBackend(), store=store)
+    with pytest.raises(RuntimeError, match=secret):
+        runner.run(
+            episode(tmp_path, "backend-secret"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=Verifier(),
+        )
+
+    record = runner.inspect("backend-secret")
+    assert record.phase == (EpisodePhase.INFERENCE_RUNNING if bound else EpisodePhase.FAILED)
+    assert (record.inference is not None) is bound
+    assert secret not in store.path_for("backend-secret").read_text(encoding="utf-8")
+
+
+def test_verifier_parse_exception_never_enters_durable_record(tmp_path: Path) -> None:
+    secret = "sentinel-secret-from-verifier"
+
+    class ExplodingVerifier(Verifier):
+        def parse_result(self, result):
+            raise ValueError(secret)
+
+    store = EpisodeStore(tmp_path / "state")
+    runner = EpisodeRunner(backend=FakeBackend(), store=store)
+    with pytest.raises(ValueError, match=secret):
+        runner.run(
+            episode(tmp_path, "verifier-secret"),
+            inference=Inference(),
+            candidate=Inference(),
+            verifier=ExplodingVerifier(),
+        )
+
+    record = runner.inspect("verifier-secret")
+    assert record.phase == EpisodePhase.FAILED
+    assert record.verification is not None
+    assert record.message == "verifier result could not be parsed"
+    assert secret not in store.path_for("verifier-secret").read_text(encoding="utf-8")
+
+
 def test_recover_does_not_duplicate_inference_run(tmp_path: Path) -> None:
     value = episode(tmp_path, "recover")
     store = EpisodeStore(tmp_path / "state")

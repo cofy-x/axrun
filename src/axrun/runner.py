@@ -432,14 +432,14 @@ class EpisodeRunner:
             )
         try:
             verification = adapter.parse_result(stage)
-        except Exception as exc:
+        except Exception:
             with self.store.lock(episode_id):
                 record = self._required_record(episode_id)
                 self._require_execution(record, EpisodePhase.VERIFICATION_RUNNING, stage.execution)
                 record.verification = stage.execution
                 record.phase = EpisodePhase.FAILED
                 record.diagnostic_code = stage.diagnostic_code or "AXRUN_VERIFICATION_FAILED"
-                record.message = f"{type(exc).__name__}: {exc}"
+                record.message = "verifier result could not be parsed"
                 record.completed_at = _now()
                 self.store.save(record)
             raise
@@ -488,16 +488,18 @@ class EpisodeRunner:
                 return
             if isinstance(exc, DiagnosedInfrastructureError):
                 record.diagnostic_code = exc.diagnostic_code
-                record.message = _safe_failure_message(exc.details, fallback=str(exc))
+                record.message = _safe_failure_message(
+                    exc.details, fallback="diagnosed infrastructure failure"
+                )
                 if exc.diagnostic_code == "progress_observer_failed":
                     record.phase = EpisodePhase.FAILED
                     record.completed_at = _now()
             elif isinstance(exc, ContractError) or not self._has_recoverable_identity(record):
                 record.phase = EpisodePhase.FAILED
                 record.diagnostic_code = "AXRUN_STAGE_FAILED"
-                record.message = f"{type(exc).__name__}: {exc}"
+                record.message = "stage failed before a recoverable result was recorded"
             else:
-                record.message = f"{type(exc).__name__}: {exc}"
+                record.message = "stage interrupted; inspect or resume the persisted Axern Run"
             self.store.save(record)
 
     def _require_execution(

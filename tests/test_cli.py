@@ -10,7 +10,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from axrun import cli
-from axrun.errors import ContractError
+from axrun.errors import ContractError, DiagnosedInfrastructureError, SdkCapabilityError
 from axrun.models import HarnessRuntimeRequirements, HarnessSpec
 from axrun.store import EpisodeStore
 
@@ -47,6 +47,35 @@ def test_model_credential_is_read_from_selected_caller_environment(
     tunnel = vars(lifecycle)["_lifecycles"][0]
     proxy = vars(tunnel)["_proxy"]
     assert vars(proxy)["_credential"] == "caller-only-secret"
+
+
+@pytest.mark.parametrize(
+    "error", [ContractError, OSError, SdkCapabilityError, ValueError, RuntimeError]
+)
+def test_cli_does_not_print_untrusted_exception_text(
+    error: type[Exception], monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    secret = "sentinel-secret-in-exception"
+
+    def fail(_path: Path) -> Any:
+        raise error(secret)
+
+    monkeypatch.setattr(cli, "_episode", fail)
+    assert cli.main(["validate", "episode.json"]) == 1
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+    assert "axrun: AXRUN_" in captured.err
+
+
+def test_cli_preserves_explicit_safe_diagnosis_code(
+    monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(_path: Path) -> Any:
+        raise DiagnosedInfrastructureError("tunnel_model_preflight_failed", {"status": 401})
+
+    monkeypatch.setattr(cli, "_episode", fail)
+    assert cli.main(["validate", "episode.json"]) == 1
+    assert capsys.readouterr().err.strip() == "axrun: tunnel_model_preflight_failed"
 
 
 def test_missing_selected_model_credential_names_variable_not_value(
@@ -405,7 +434,7 @@ def test_cli_recovery_checks_admission_before_waiting_original_run(
     )
     assert cli.main(["--state-dir", str(tmp_path), command, "flask-resume"]) == 1
     assert events == ["admission_checked", "client_closed"]
-    assert "admission evidence is damaged" in capsys.readouterr().err
+    assert "AXRUN_CONTRACT_ERROR" in capsys.readouterr().err
 
 
 def test_cli_run_checks_admission_after_qualification_before_model_start(
