@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 from pytest import MonkeyPatch
 
-from axrun import cli
+from axrun import cli, cli_resolve
 from axrun.errors import ContractError, DiagnosedInfrastructureError, SdkCapabilityError
 from axrun.models import HarnessRuntimeRequirements, HarnessSpec
 from axrun.store import EpisodeStore
@@ -311,8 +311,8 @@ def test_flask_resolver_cli_delegates_only_to_closed_resolver(
             calls.append({"row": row, **kwargs})
             return object()
 
-    monkeypatch.setattr(cli, "SweBenchFlaskOfficialResolver", Resolver)
-    monkeypatch.setattr(cli, "_write_episode", lambda _episode, _output: None)
+    monkeypatch.setattr(cli_resolve, "SweBenchFlaskOfficialResolver", Resolver)
+    monkeypatch.setattr(cli_resolve, "_write_episode", lambda _episode, _output: None)
     monkeypatch.setattr(cli, "_client", lambda _args: pytest.fail("resolve must be caller-local"))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "caller-secret-must-not-be-read-for-resolve")
     arguments = [*_flask_resolve_arguments(tmp_path), "--harness", harness]
