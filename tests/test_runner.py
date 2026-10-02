@@ -261,6 +261,9 @@ def test_runner_rejects_multi_run_verifier_identity_mismatch(
     class WrongMultiVerifier(Verifier):
         multi_run = True
 
+        def cancel(self, episode, *, backend, state_root):
+            del episode, backend, state_root
+
         def verify(self, episode, candidate, *, backend, state_root, on_primary_bound):
             del backend, state_root
             primary = ExecutionRef(
@@ -472,6 +475,31 @@ def test_multi_run_verifier_cannot_silently_ignore_public_policy(tmp_path: Path)
     with pytest.raises(ContractError, match="multi-Run verifier"):
         runner.run(resolved, inference=Inference(), candidate=Inference(), verifier=MultiVerifier())
     assert len(backend.executions) == 1
+
+
+@pytest.mark.parametrize("missing", ("verify", "cancel"))
+def test_multi_run_verifier_requires_both_lifecycle_methods(tmp_path: Path, missing: str) -> None:
+    class MissingVerify(Verifier):
+        multi_run = True
+
+        def cancel(self, episode, *, backend, state_root):
+            del episode, backend, state_root
+
+    class MissingCancel(Verifier):
+        multi_run = True
+
+        def verify(self, episode, candidate, *, backend, state_root, on_primary_bound):
+            pytest.fail("incomplete multi-Run verifier should not execute")
+
+    adapter = MissingVerify() if missing == "verify" else MissingCancel()
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=EpisodeStore(tmp_path / "state"))
+    with pytest.raises(ContractError, match="must implement verify and cancel"):
+        runner.run(
+            episode(tmp_path), inference=Inference(), candidate=Inference(), verifier=adapter
+        )
+    assert len(backend.executions) == 1
+    assert runner.inspect("ep").phase == EpisodePhase.FAILED
 
 
 def test_runner_persists_separate_trajectory_bundle_and_verifier_only_gets_patch(
@@ -757,6 +785,31 @@ def test_cancel_is_not_blocked_by_remote_execution(tmp_path: Path) -> None:
     assert cancelled.phase == EpisodePhase.CANCELLED
     assert backend.cancelled == ["run-blocked"]
     assert errors and runner.inspect("cancel").phase == EpisodePhase.CANCELLED
+
+
+def test_cancel_rejects_incomplete_multi_run_verifier_before_remote_mutation(
+    tmp_path: Path,
+) -> None:
+    class MissingCancel(Verifier):
+        multi_run = True
+
+        def verify(self, episode, candidate, *, backend, state_root, on_primary_bound):
+            pytest.fail("incomplete multi-Run verifier should not execute")
+
+    value = episode(tmp_path, "cancel-incomplete")
+    store = EpisodeStore(tmp_path / "state")
+    record = store.initialize(value)
+    record.phase = EpisodePhase.VERIFICATION_RUNNING
+    record.inference = ExecutionRef("env-i", "run-i", "alloc-i")
+    record.verification = ExecutionRef("env-v", "run-v", "alloc-v")
+    store.save(record)
+    backend = FakeBackend()
+    runner = EpisodeRunner(backend=backend, store=store)
+
+    with pytest.raises(ContractError, match="must implement verify and cancel"):
+        runner.cancel(value.episode_id, verifier=MissingCancel())
+    assert backend.cancelled == []
+    assert runner.inspect(value.episode_id).phase == EpisodePhase.VERIFICATION_RUNNING
 
 
 def test_terminal_inference_failure_is_not_recoverable(tmp_path: Path) -> None:

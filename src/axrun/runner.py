@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol, cast
 
 from axrun.adapters._candidate import load_candidate
 from axrun.adapters.base import (
     CandidateAdapter,
     InferenceAdapter,
+    MultiRunVerifierAdapter,
     TrajectoryAdapter,
     VerifierAdapter,
 )
@@ -39,26 +38,6 @@ from axrun.qualification import require_admission
 from axrun.store import EpisodeStore
 from axrun.trajectories.bundle import TrajectoryBundle
 from axrun.trajectories.schema import load_trajectory_jsonl
-
-
-class _MultiRunVerifier(Protocol):
-    def verify(
-        self,
-        episode: ResolvedEpisode,
-        candidate: CandidateBundle,
-        *,
-        backend: ExecutionBackend,
-        state_root: Path,
-        on_primary_bound: Callable[[ExecutionRef], None],
-    ) -> tuple[VerificationResult, ExecutionRef]: ...
-
-    def cancel(
-        self,
-        episode: ResolvedEpisode,
-        *,
-        backend: ExecutionBackend,
-        state_root: Path,
-    ) -> None: ...
 
 
 class EpisodeRunner:
@@ -147,7 +126,7 @@ class EpisodeRunner:
             except ContractError as exc:
                 self._record_failure(episode_id, exc)
                 raise
-            if bool(getattr(verifier, "multi_run", False)):
+            if _multi_run_enabled(verifier):
                 return self._run_multi_verification(episode, bundle, verifier)
             plan = verifier.plan(episode, bundle)
             self._require_plan(episode, phase, plan)
@@ -214,19 +193,24 @@ class EpisodeRunner:
                 if record.phase == EpisodePhase.INFERENCE_RUNNING
                 else None
             )
+            multi_verifier = (
+                _require_multi_run_verifier(verifier)
+                if record.phase == EpisodePhase.VERIFICATION_RUNNING
+                and verifier is not None
+                and _multi_run_enabled(verifier)
+                else None
+            )
             # Serialize the accepted cancellation with terminal publication. The
             # lock covers only the bounded control RPC, never the Run lifetime.
             if execution is not None:
                 self.backend.cancel(execution)
-            if record.phase == EpisodePhase.VERIFICATION_RUNNING and verifier is not None:
-                raw_cancel = getattr(verifier, "cancel", None)
-                if bool(getattr(verifier, "multi_run", False)) and callable(raw_cancel):
-                    episode = self.store.load_spec(episode_id)
-                    cast(_MultiRunVerifier, verifier).cancel(
-                        episode,
-                        backend=self.backend,
-                        state_root=self.store.root,
-                    )
+            if multi_verifier is not None:
+                episode = self.store.load_spec(episode_id)
+                multi_verifier.cancel(
+                    episode,
+                    backend=self.backend,
+                    state_root=self.store.root,
+                )
             record.phase = EpisodePhase.CANCELLED
             record.diagnostic_code = "AXRUN_CANCELLED"
             record.completed_at = _now()
@@ -332,7 +316,7 @@ class EpisodeRunner:
             record.phase = EpisodePhase.VERIFICATION_RUNNING
             self.store.save(record)
         try:
-            if bool(getattr(adapter, "multi_run", False)):
+            if _multi_run_enabled(adapter):
                 return self._run_multi_verification(episode, candidate, adapter)
             plan = adapter.plan(episode, candidate)
             self._require_plan(episode, EpisodePhase.VERIFICATION_RUNNING, plan)
@@ -360,10 +344,7 @@ class EpisodeRunner:
             raise ContractError(
                 "multi-Run verifier must explicitly implement unrestricted branch policy"
             )
-        raw_verify = getattr(adapter, "verify", None)
-        if not callable(raw_verify):
-            raise ContractError("multi-Run verifier does not implement verify")
-        multi = cast(_MultiRunVerifier, adapter)
+        multi = _require_multi_run_verifier(adapter)
         try:
             verification, primary = multi.verify(
                 episode,
@@ -589,6 +570,20 @@ def _merge_execution(current: ExecutionRef | None, update: ExecutionRef) -> Exec
     ):
         raise InfrastructureError("Axern execution identity changed during stage execution")
     return update
+
+
+def _multi_run_enabled(adapter: VerifierAdapter) -> bool:
+    return bool(getattr(adapter, "multi_run", False))
+
+
+def _require_multi_run_verifier(adapter: VerifierAdapter) -> MultiRunVerifierAdapter:
+    if (
+        not isinstance(adapter, MultiRunVerifierAdapter)
+        or not callable(getattr(adapter, "verify", None))
+        or not callable(getattr(adapter, "cancel", None))
+    ):
+        raise ContractError("multi-Run verifier must implement verify and cancel")
+    return adapter
 
 
 def _now() -> str:

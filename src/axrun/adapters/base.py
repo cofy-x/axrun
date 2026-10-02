@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from axrun.backend import ExecutionBackend
 from axrun.errors import ContractError
 from axrun.models import (
     CandidateBundle,
     CandidateCapturePlan,
+    ExecutionRef,
     HarnessRuntimeRequirements,
     ResolvedEpisode,
     StagePlan,
@@ -119,6 +122,32 @@ class VerifierAdapter(Protocol):
     ) -> VerifierQualificationRequirements: ...
 
     def parse_result(self, result: StageResult) -> VerificationResult: ...
+
+
+@runtime_checkable
+class MultiRunVerifierAdapter(Protocol):
+    """Finite verifier-owned Runs coordinated beside the ordinary verifier path."""
+
+    @property
+    def multi_run(self) -> bool: ...
+
+    def verify(
+        self,
+        episode: ResolvedEpisode,
+        candidate: CandidateBundle,
+        *,
+        backend: ExecutionBackend,
+        state_root: Path,
+        on_primary_bound: Callable[[ExecutionRef], None],
+    ) -> tuple[VerificationResult, ExecutionRef]: ...
+
+    def cancel(
+        self,
+        episode: ResolvedEpisode,
+        *,
+        backend: ExecutionBackend,
+        state_root: Path,
+    ) -> None: ...
 
 
 class TrajectoryAdapter(Protocol):
