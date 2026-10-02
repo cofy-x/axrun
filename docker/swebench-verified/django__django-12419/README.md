@@ -20,12 +20,12 @@ The derived tag deliberately retains the official repository identity required b
 resolver contract. Axern's returned canonical digest, never this mutable local tag, is the runtime
 identity.
 
-This build definition is not a native acceptance result. The fixed-row
-[`swebench_django_assets.py`](../../../tools/validation/swebench_django_assets.py) preparer and
-[`swebench_django_native_oracle.py`](../../../tools/validation/swebench_django_native_oracle.py)
-require a separate native amd64, offline gold/known-bad/empty receipt. The actual image imported
-by Axern then needs its own model-free runtime admission before any formal Django CLI episode can
-be registered. Neither gate is established by the historical arm64 results below.
+The fixed-row [`swebench_django_assets.py`](../../../tools/validation/swebench_django_assets.py)
+preparer and [`swebench_django_native_oracle.py`](../../../tools/validation/swebench_django_native_oracle.py)
+produced a [native amd64, offline gold/known-bad/empty receipt](../../../docs/validation/2026-10-02-swebench-django-12419-native-stage-zero.md)
+for the derived clean-base seed. The actual image imported by Axern still needs its own model-free
+runtime admission before any formal Django CLI episode can be registered. The historical arm64
+results below establish neither gate.
 
 ## Local-development arm64 seed
 
