@@ -70,30 +70,21 @@ uv run axrun resolve-greenfield fixtures/synthetic/greenfield-task-v1/row.json \
   --output /tmp/greenfield-gold.json
 ```
 
-Axrun also contains one deliberately closed SWE-bench Verified vertical for
-`django__django-12419`. `SweBenchVerifiedResolver` accepts exactly the official enriched-v1
-row shape, commits the entire row to the seed digest, then discards the native row after
-materializing only the prompt and official offline evaluation script. The current adapter rejects
-other instances and log parsers; this is one qualified path, not a dataset platform or a claim of
-general leaderboard support. Resolve it with the amd64 platform manifest digest, never the mutable
-official tag or the multi-platform index digest:
+Axrun retains a single-instance `django__django-12419` development path under
+`swebench-verified@1`. It checks the enriched-v1 row shape and materializes the prompt and
+offline evaluation script, but it does **not** enforce an actual-runtime image admission or
+official per-test parity in the normal CLI. The [arm64 source-Compose run](docs/validation/2026-09-19-swebench-django-12419-arm64-e2e.md)
+is development evidence only. The pinned official amd64 image is the **source** for the
+[derived clean-base seed](docker/swebench-verified/django__django-12419/README.md), not itself a
+qualified clean-base task image; passing its digest to the legacy resolver does not make the
+episode canonical.
 
-```bash
-uv run axrun resolve-swebench-verified /path/to/django__django-12419.json \
-  --episode-id swebench-django-12419 \
-  --task-image docker.io/swebench/sweb.eval.x86_64.django_1776_django-12419@sha256:6c6b1fec0a323b9225564620cd34f2d39828cef8f32496ad4a6c9ca0f7256768 \
-  --assets-dir /tmp/axrun-swebench-assets \
-  --claude-mount-image REGISTRY/claude-code@sha256:AMD64_DIGEST \
-  --model MODEL_ID \
-  --inference-environment AMD64_ENVIRONMENT_ID \
-  --verification-environment AMD64_ENVIRONMENT_ID \
-  --output /tmp/swebench-django-12419.json
-```
-
-The official image owns `/testbed`, its repository, dependencies, and base commit. Claude's
-working directory is explicit in the resolved harness configuration. The fresh verifier receives
-only the CandidateBundle patch, the content-addressed official evaluation script, and Axrun's
-packaged grader; it has deny-all networking and no inference mount, process, Tunnel, or credential.
+The [locked asset preparer](tools/validation/swebench_django_assets.py) and
+[native amd64 model-free oracle](tools/validation/swebench_django_native_oracle.py) are stage-zero
+gates for that one instance. Their local tests do not constitute a native oracle receipt or
+admission of Axern's actual imported runtime. A formal Django task/verifier identity and normal
+CLI path remain unregistered until those gates pass; this does not add generic SWE-bench or
+leaderboard support.
 
 ### Locked Flask CLI vertical
 

@@ -19,6 +19,13 @@ The derived tag deliberately retains the official repository identity required b
 resolver contract. Axern's returned canonical digest, never this mutable local tag, is the runtime
 identity.
 
+This build definition is not a native acceptance result. The fixed-row
+[`swebench_django_assets.py`](../../../tools/validation/swebench_django_assets.py) preparer and
+[`swebench_django_native_oracle.py`](../../../tools/validation/swebench_django_native_oracle.py)
+require a separate native amd64, offline gold/known-bad/empty receipt. The actual image imported
+by Axern then needs its own model-free runtime admission before any formal Django CLI episode can
+be registered. Neither gate is established by the historical arm64 results below.
+
 ## Local-development arm64 seed
 
 This directory owns Axrun's self-contained `linux/arm64` local-development seed image for the
