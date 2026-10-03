@@ -70,26 +70,9 @@ uv run axrun resolve-greenfield fixtures/synthetic/greenfield-task-v1/row.json \
   --output /tmp/greenfield-gold.json
 ```
 
-Axrun retains a single-instance `django__django-12419` development path under
-`swebench-verified@1`. It checks the enriched-v1 row shape and materializes the prompt and
-offline evaluation script, but it does **not** enforce an actual-runtime image admission or
-official per-test parity in the normal CLI. The [arm64 source-Compose run](docs/validation/2026-09-19-swebench-django-12419-arm64-e2e.md)
-is development evidence only. The pinned official amd64 image is the **source** for the
-[derived clean-base seed](docker/swebench-verified/django__django-12419/README.md), not itself a
-qualified clean-base task image; passing its digest to the legacy resolver does not make the
-episode canonical.
+Axrun retains a single-instance `django__django-12419` development path under `swebench-verified@1`. It checks the enriched-v1 row shape and materializes the prompt and offline evaluation script, but that legacy path does **not** enforce an actual-runtime image admission or official per-test parity. The [arm64 source-Compose run](docs/validation/2026-09-19-swebench-django-12419-arm64-e2e.md) is development evidence only. The pinned official amd64 image is the **source** for the [derived clean-base seed](docker/swebench-verified/django__django-12419/README.md), not itself a qualified clean-base task image; passing its digest to the legacy resolver does not make the episode canonical.
 
-The [locked asset preparer](tools/validation/swebench_django_assets.py) and
-[native amd64 model-free oracle](tools/validation/swebench_django_native_oracle.py) are stage-zero
-gates for that one instance. The [native Django stage-zero receipt](docs/validation/2026-10-02-swebench-django-12419-native-stage-zero.md)
-records official gold, known-bad, and empty classifications on a derived clean-base amd64 seed;
-the prior incomplete attempts remain separate. The same record includes one successful, model-free
-admission Run against Axern's actual imported runtime. A separate, closed
-`swebench-django-official@1` static-candidate task/verifier and
-`resolve-swebench-django-official` CLI route are now implemented against that receipt. They
-materialize verifier-only assets in a private directory and keep the expected test name out of
-the resolved episode. Normal CLI fresh-verifier gold/known-bad/empty parity remains outstanding;
-this does not add real-Claude, generic SWE-bench, or leaderboard support.
+The [locked asset preparer](tools/validation/swebench_django_assets.py) and [native amd64 model-free oracle](tools/validation/swebench_django_native_oracle.py) are stage-zero gates for that one instance. The [native Django stage-zero receipt](docs/validation/2026-10-02-swebench-django-12419-native-stage-zero.md) records official gold, known-bad, and empty classifications on a derived clean-base amd64 seed; the prior incomplete attempts remain separate. The same record includes one successful, model-free admission Run against Axern's actual imported runtime. A separate, closed `swebench-django-official@1` static-candidate task/verifier and `resolve-swebench-django-official` CLI route are implemented against that receipt. They materialize verifier-only assets in a private directory and keep the expected test name out of the resolved episode. The [v0.12.1 static-wheel CLI acceptance](docs/validation/2026-10-03-swebench-django-wheel-cli-v0.12.1.md) completed fresh-verifier gold, known-bad, and empty controls on the imported amd64 runtime: gold passed, known-bad failed, and empty remained unscored, matching the pinned official classifications. This is one locked instance and static-candidate lane; it does not add real-Claude, generic SWE-bench, or leaderboard support.
 
 ### Locked Flask CLI vertical
 
